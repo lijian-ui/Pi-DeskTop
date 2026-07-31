@@ -49,7 +49,6 @@ const piAPI = {
 
   getState: (cwd?: string) => ipcRenderer.invoke("pi:getState", { cwd }),
 
-  getProviders: () => ipcRenderer.invoke("pi:getProviders"),
   setApiKey: (providerId: string, apiKey: string) =>
     ipcRenderer.invoke("pi:setApiKey", { providerId, apiKey }),
   removeApiKey: (providerId: string) =>
@@ -144,6 +143,11 @@ const piAPI = {
     ipcRenderer.on("pi:showAbout", listener);
     return () => ipcRenderer.removeListener("pi:showAbout", listener);
   },
+
+  // Active tools (assistant settings)
+  getActiveTools: () => ipcRenderer.invoke("pi:getActiveTools"),
+  saveActiveTools: (tools: string[]) =>
+    ipcRenderer.invoke("pi:saveActiveTools", tools),
 
   // Auto-update (electron-updater, generic provider -> Gitee Releases)
   checkForUpdates: () => ipcRenderer.invoke("pi:checkForUpdates"),

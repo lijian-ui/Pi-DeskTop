@@ -307,11 +307,8 @@ export default function ChatComposer() {
   // idle) so they read instantly during streaming.
   useEffect(() => {
     if (!cwd) return;
-    let cancelled = false;
+    // preloadDir manages its own inflight dedup; no cancellation needed here.
     preloadDir(cwd).catch(() => {});
-    return () => {
-      cancelled = true;
-    };
   }, [cwd]);
 
   useEffect(() => {

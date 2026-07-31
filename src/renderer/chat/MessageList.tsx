@@ -232,6 +232,11 @@ export default function MessageList() {
         highlights.delete("search-mark-active");
       }
     };
+    // searchQuery is deliberately NOT a dependency: the highlights only need to
+    // be (re)built when a new search is SUBMITTED (searchTrigger bumps on
+    // Enter/debounce). Depending on it would re-run the full TreeWalker scan on
+    // every keystroke while typing in the search box.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchOpen, searchTrigger, searchIndex, searchMatchIds, visibleCount]);
 
   // Only render the most recent `visibleCount` messages; older ones are

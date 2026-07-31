@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, autoUpdater } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
+import { autoUpdater } from "electron-updater";
 import log from "electron-log/main";
 
 // electron-updater 的 autoUpdater 需要 log 实例（否则打日志到 console 并警告）
@@ -24,7 +25,6 @@ export interface UpdateState {
 }
 
 let currentState: UpdateState = { status: "idle" };
-let mainWindow: BrowserWindow | null = null;
 let updateCheckTimer: NodeJS.Timeout | null = null;
 
 /** Whether the current executable supports auto-update. In dev (electron .)
@@ -35,8 +35,13 @@ function canAutoUpdate(): boolean {
 
 function emitState(state: UpdateState): void {
   currentState = state;
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("pi:updateState", state);
+  // Prefer the LIVE window: the one captured at setup time may have been
+  // destroyed and rebuilt (app "activate" edge path), in which case sending
+  // to it would be silently dropped. Same dynamic-resolution model as the
+  // tray and IPC dialog parents.
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win && !win.isDestroyed()) {
+    win.webContents.send("pi:updateState", state);
   }
 }
 
@@ -100,9 +105,7 @@ export function quitAndInstall(): void {
   autoUpdater.quitAndInstall();
 }
 
-export function setupAutoUpdater(win: BrowserWindow): void {
-  mainWindow = win;
-
+export function setupAutoUpdater(): void {
   setAutoUpdaterEventHandlers();
 
   // IPC: renderer -> main

@@ -210,11 +210,16 @@ export default function AddProviderPicker({
 
         let models: any[];
         if (editProviderId && editConfig) {
-          // Edit: rewrite the model being edited (match by its old id), keep
-          // fields the form doesn't expose (reasoning, input, cost, maxTokens,
-          // compat, headers) and preserve all sibling models untouched.
-          const oldId = String(editConfig.models?.[0]?.id ?? "");
-          const edited = existingModels.find((m) => String(m?.id) === oldId) ?? {};
+          // Edit: rewrite the model being edited (the FIRST model — that's what
+          // the form shows), keep fields the form doesn't expose (reasoning,
+          // input, cost, maxTokens, compat, headers) and preserve all sibling
+          // models untouched. The old id + edited model are read from the
+          // FRESH disk config (existingModels), NOT from the `editConfig`
+          // snapshot taken when the dialog opened — a snapshot would drift if
+          // the file changed in between, and `find` would miss → edited={}
+          // and silently drop the model's extra fields.
+          const oldId = existingModels[0] ? String(existingModels[0].id) : "";
+          const edited = existingModels[0] ?? {};
           const rest = existingModels.filter(
             (m) => String(m?.id) !== oldId && String(m?.id) !== modelId
           );

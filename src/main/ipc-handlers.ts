@@ -1,8 +1,16 @@
-import { ipcMain, dialog, type BrowserWindow } from "electron";
+import { ipcMain, dialog, BrowserWindow } from "electron";
 import { basename, extname, join } from "node:path";
 import { readFile, readdir, stat } from "node:fs/promises";
 import type { PiDeskSessionManager } from "./pi/session-manager";
 import type { TerminalManager } from "./pi/terminal-manager";
+
+/** Parent window for native dialogs. Prefers the live window — the window
+ *  captured at registration time may have been destroyed and rebuilt (app
+ *  "activate" edge path), and dialog.* silently fails on a destroyed parent. */
+function dialogParent(mainWindow: BrowserWindow): BrowserWindow | undefined {
+  if (!mainWindow.isDestroyed()) return mainWindow;
+  return BrowserWindow.getAllWindows()[0];
+}
 
 export function registerIpcHandlers(
   mainWindow: BrowserWindow,
@@ -70,6 +78,17 @@ export function registerIpcHandlers(
     await piManager.saveSoul(text);
   });
 
+  // ── Active tools (assistant settings) ──
+  ipcMain.handle("pi:getActiveTools", async () => {
+    if (!piManager) throw new Error("Pi SDK not initialized");
+    return piManager.getActiveTools();
+  });
+
+  ipcMain.handle("pi:saveActiveTools", async (_, tools: string[]) => {
+    if (!piManager) throw new Error("Pi SDK not initialized");
+    await piManager.saveActiveTools(tools);
+  });
+
   ipcMain.handle("pi:setModel", async (_, { provider, modelId }) => {
     if (!piManager) throw new Error("Pi SDK not initialized");
     await piManager.setModel(provider, modelId);
@@ -108,23 +127,6 @@ export function registerIpcHandlers(
   ipcMain.handle("pi:getState", async (_, { cwd }) => {
     if (!piManager) return null;
     return piManager.getState(cwd);
-  });
-
-  ipcMain.handle("pi:getProviders", async () => {
-    if (!piManager) return [];
-    const mr = piManager.getModelRuntime();
-    if (!mr) return [];
-    const authStatus = mr.getProviderAuthStatus("openai");
-    const result = [
-      {
-        id: "openai",
-        name: "OpenAI Compatible",
-        auth: "api_key",
-        configured: !!authStatus?.configured,
-        authSource: authStatus?.source ?? null,
-      },
-    ];
-    return JSON.parse(JSON.stringify(result));
   });
 
   ipcMain.handle("pi:setApiKey", async (_, { providerId, apiKey }) => {
@@ -228,7 +230,7 @@ export function registerIpcHandlers(
   ipcMain.handle("pi:exportSession", async (_, { sessionPath }) => {
     if (!piManager) throw new Error("Pi SDK not initialized");
     const defaultName = `${basename(String(sessionPath)).replace(/\.jsonl$/i, "")}.html`;
-    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    const { canceled, filePath } = await dialog.showSaveDialog(dialogParent(mainWindow)!, {
       title: "Export session as HTML",
       defaultPath: defaultName,
       filters: [{ name: "HTML", extensions: ["html"] }],
@@ -255,7 +257,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle("pi:importSkill", async () => {
     if (!piManager) throw new Error("Pi SDK not initialized");
-    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    const { canceled, filePaths } = await dialog.showOpenDialog(dialogParent(mainWindow)!, {
       title: "Import skill (.zip)",
       properties: ["openFile"],
       filters: [{ name: "Skill Zip", extensions: ["zip"] }],
@@ -364,13 +366,18 @@ export function registerIpcHandlers(
 
   // Bounded recursive search rooted at cwd. Depth + result caps keep it from
   // walking the whole filesystem or hanging on heavy dirs (which we skip).
+  // Also guarded by a time budget and the sender's lifetime, so a huge
+  // workspace can't pin the main process event loop forever, and replies
+  // aren't computed for a renderer that already navigated away.
   ipcMain.handle(
     "pi:searchWorkspace",
-    async (_, { query, maxResults }: { query: string; maxResults?: number }) => {
+    async (event, { query, maxResults }: { query: string; maxResults?: number }) => {
       const root = piManager ? piManager.getCwd() : process.cwd();
       const q = (query || "").toLowerCase().trim();
       const MAX = Math.min(Math.max(maxResults || 200, 1), 500);
       const MAX_DEPTH = 8;
+      const TIME_BUDGET_MS = 3000;
+      const start = Date.now();
       const SKIP = new Set([
         "node_modules", ".git", "dist", "build", "out",
         "target", ".next", ".nuxt", "vendor", ".cache", ".turbo",
@@ -379,6 +386,8 @@ export function registerIpcHandlers(
       if (!q) return { results };
       const stack: { dir: string; depth: number }[] = [{ dir: root, depth: 0 }];
       while (stack.length && results.length < MAX) {
+        // Give up early if the requesting renderer is gone or the budget is up.
+        if (event.sender.isDestroyed() || Date.now() - start > TIME_BUDGET_MS) break;
         const { dir, depth } = stack.pop()!;
         let dirents;
         try {
@@ -436,8 +445,9 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle("pi:pickWorkspace", async () => {
-    if (!mainWindow) return null;
-    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    const parent = dialogParent(mainWindow);
+    if (!parent) return null;
+    const { canceled, filePaths } = await dialog.showOpenDialog(parent, {
       title: "Select workspace",
       properties: ["openDirectory"],
     });

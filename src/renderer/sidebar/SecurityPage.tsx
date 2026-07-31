@@ -1,11 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import styles from "./SecurityPage.module.css";
-
-interface BashGuardConfig {
-  blacklist: string[];
-  whitelist: string[];
-}
 
 const DEFAULT_BLACKLIST = [
   // ── Unix / Linux / macOS: destructive delete & wipe ──
@@ -44,6 +39,7 @@ const DEFAULT_BLACKLIST = [
   "git\\s+push\\s+--force\\b.*",
   "crontab\\s+-r\\b.*",
   // ── Windows: recursive delete & format ──
+  "rm\\s+(?:-[a-zA-Z]+\\s+)*\"?[A-Za-z]:\\\\[^&|;]*",
   "rmdir\\s+/s\\s+/q\\b.*",
   "rd\\s+/s\\s+/q\\b.*",
   "del\\s+/f\\s+/s\\s+/q\\b.*",
@@ -94,26 +90,31 @@ export default function SecurityPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    loadConfig();
-  }, []);
-
-  async function loadConfig() {
+  // Stable identity (mount-time fetch) so the effect below runs exactly once
+  // and exhaustive-deps stays satisfied.
+  const loadConfig = useCallback(async () => {
     try {
       const cfg = await window.piDesk.getBashGuardConfig();
       setBlacklistText((cfg.blacklist ?? DEFAULT_BLACKLIST).join("\n"));
       setWhitelistText((cfg.whitelist ?? []).join("\n"));
-    } catch {
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("security.saveFailed"));
       setBlacklistText(DEFAULT_BLACKLIST.join("\n"));
       setWhitelistText("");
     }
     setLoading(false);
-  }
+  }, [t]);
+
+  useEffect(() => {
+    loadConfig();
+  }, [loadConfig]);
 
   async function handleSave() {
     setSaving(true);
     setSaved(false);
+    setError("");
     try {
       const blacklist = blacklistText
         .split("\n")
@@ -126,6 +127,8 @@ export default function SecurityPage() {
       await window.piDesk.saveBashGuardConfig({ blacklist, whitelist });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("security.saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -163,6 +166,7 @@ export default function SecurityPage() {
       </section>
 
       {/* ── Save button ── */}
+      {error && <p className={styles.error}>{error}</p>}
       <div className={styles.actions}>
         <button
           className={`${styles.saveBtn} ${saved ? styles.saveBtnSuccess : ""}`}

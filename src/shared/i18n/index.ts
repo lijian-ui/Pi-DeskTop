@@ -5,12 +5,18 @@ function loadLang(): string {
   try {
     const stored = localStorage.getItem("pi-desk-lang");
     if (stored === "zh" || stored === "en") return stored;
-  } catch {}
+  } catch {
+    /* localStorage unavailable — fall through to navigator */
+  }
   return navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en";
 }
 
 export function saveLang(lang: string) {
-  try { localStorage.setItem("pi-desk-lang", lang); } catch {}
+  try {
+    localStorage.setItem("pi-desk-lang", lang);
+  } catch {
+    /* localStorage unavailable — language won't persist across reloads */
+  }
 }
 
 const zhMessages = {
@@ -33,6 +39,21 @@ const zhMessages = {
   "update.failed": "更新检查失败",
   "update.retry": "重试",
 
+  "tools.title": "可用工具",
+  "tools.desc": "勾选模型可调用的内置工具。Pi 默认只启用 read/bash/edit/write；启用更多工具会让模型能力更全，但工具描述会占用更多上下文 token，低配模型请酌情。",
+  "tools.read": "读取文件内容",
+  "tools.bash": "执行 shell 命令",
+  "tools.edit": "精确编辑文件",
+  "tools.write": "写入 / 创建文件",
+  "tools.grep": "按正则搜索文件内容",
+  "tools.find": "按文件名 / 路径查找",
+  "tools.ls": "列出目录内容",
+  "tools.hint": "保存后对当前会话在下一次对话时生效，新会话立即生效。",
+  "tools.save": "保存",
+  "tools.saving": "保存中…",
+  "tools.saved": "已保存",
+  "tools.loading": "加载中…",
+
   "settings.system": "系统设置",
   "settings.account": "账户",
   "settings.agent": "代理设置",
@@ -40,6 +61,7 @@ const zhMessages = {
   "settings.memory": "记忆",
   "settings.models": "模型",
   "settings.assistant": "助手设置",
+  "settings.tools": "工具",
   "settings.data": "数据管理",
   "settings.shortcuts": "快捷键",
   "settings.security": "安全中心",
@@ -53,6 +75,7 @@ const zhMessages = {
   "context.loading": "加载中…",
   "context.saving": "保存中…",
   "context.saved": "已保存",
+  "context.saveFailed": "保存失败",
   "context.restartHint": "提示：保存后当前会话会在下一次压缩时立即套用新值；若需对所有会话立即生效，重启应用即可。",
   "security.blacklistTitle": "危险命令黑名单",
   "security.blacklistDesc": "包含以下关键词的命令将被阻止执行。每行一个关键词（例如 rm -rf、shutdown、sudo），不区分大小写。留空则不阻止任何命令。",
@@ -63,6 +86,7 @@ const zhMessages = {
   "security.loading": "加载中…",
   "security.saving": "保存中…",
   "security.saved": "已保存",
+  "security.saveFailed": "保存失败",
   "soul.editorTitle": "人格设定（Soul）",
   "soul.desc": "为助手设定人格与行为风格。内容会注入到每次对话的系统提示词（追加在 Pi 默认指令之后），对当前会话立即生效，并全局应用于所有新会话。",
   "soul.placeholder": "例如：你是一个冷静、简洁、略带幽默的技术搭档。回答优先给结论与可执行代码，避免空话。",
@@ -70,6 +94,7 @@ const zhMessages = {
   "soul.loading": "加载中…",
   "soul.saving": "保存中…",
   "soul.saved": "已保存",
+  "soul.saveFailed": "保存失败",
   "soul.clear": "清空",
   "settings.help": "帮助与反馈",
   "settings.notImplemented": "此功能尚未实现。",
@@ -320,6 +345,21 @@ const enMessages: Record<string, string> = {
   "update.failed": "Update check failed",
   "update.retry": "Retry",
 
+  "tools.title": "Available Tools",
+  "tools.desc": "Check the built-in tools the model can call. Pi enables only read/bash/edit/write by default; enabling more tools gives the model more capability, but tool descriptions consume extra context tokens — be mindful on low-end models.",
+  "tools.read": "Read file contents",
+  "tools.bash": "Execute shell commands",
+  "tools.edit": "Edit files precisely",
+  "tools.write": "Write / create files",
+  "tools.grep": "Search file contents by regex",
+  "tools.find": "Find by file name / path",
+  "tools.ls": "List directory contents",
+  "tools.hint": "Takes effect on the next turn of the current session; new sessions apply immediately.",
+  "tools.save": "Save",
+  "tools.saving": "Saving…",
+  "tools.saved": "Saved",
+  "tools.loading": "Loading…",
+
   "settings.system": "System Settings",
   "settings.account": "Account",
   "settings.agent": "Agent Settings",
@@ -327,6 +367,7 @@ const enMessages: Record<string, string> = {
   "settings.memory": "Memory",
   "settings.models": "Models",
   "settings.assistant": "Assistant Settings",
+  "settings.tools": "Tools",
   "settings.data": "Data Management",
   "settings.shortcuts": "Shortcuts",
   "settings.security": "Security Center",
@@ -340,6 +381,7 @@ const enMessages: Record<string, string> = {
   "context.loading": "Loading…",
   "context.saving": "Saving…",
   "context.saved": "Saved",
+  "context.saveFailed": "Failed to save",
   "context.restartHint": "Note: after saving, the current session applies the new value on the next compaction; restart the app to apply it to all sessions immediately.",
   "security.blacklistTitle": "Dangerous Command Blacklist",
   "security.blacklistDesc": "Commands containing any of these keywords will be blocked. One keyword per line (e.g. rm -rf, shutdown, sudo), case-insensitive. Leave empty to block nothing.",
@@ -350,6 +392,7 @@ const enMessages: Record<string, string> = {
   "security.loading": "Loading…",
   "security.saving": "Saving…",
   "security.saved": "Saved",
+  "security.saveFailed": "Failed to save",
   "soul.editorTitle": "Persona (Soul)",
   "soul.desc": "Define the assistant's persona and behavioral style. The content is injected into the system prompt of every conversation (appended after Pi's default instructions). It takes effect immediately for the current session and applies globally to all new sessions.",
   "soul.placeholder": "e.g. You are a calm, concise, slightly witty technical partner. Lead with conclusions and runnable code; avoid filler.",
@@ -357,6 +400,7 @@ const enMessages: Record<string, string> = {
   "soul.loading": "Loading…",
   "soul.saving": "Saving…",
   "soul.saved": "Saved",
+  "soul.saveFailed": "Failed to save",
   "soul.clear": "Clear",
   "settings.help": "Help & Feedback",
   "settings.notImplemented": "This section is not implemented yet.",

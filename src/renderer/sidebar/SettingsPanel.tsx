@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Plus, X, Globe, Key, Tag, Check, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import ConfirmDialog from "./ConfirmDialog";
 import styles from "./SettingsPanel.module.css";
 
 interface ProviderInfo {
@@ -74,6 +75,8 @@ export default function SettingsPanel() {
   const [formApiKey, setFormApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  /** Provider awaiting delete confirmation (two-step removal). */
+  const [pendingRemove, setPendingRemove] = useState<ProviderInfo | null>(null);
 
   const loadConfigured = useCallback(async () => {
     try {
@@ -101,14 +104,17 @@ export default function SettingsPanel() {
     setSaving(true); setError("");
     try {
       if (selectedProvider === "__custom__") {
+        // Validate BEFORE deriving the provider id / model id — the old order
+        // computed them from an (possibly empty) name first, which would write
+        // into a "" key if the guard below were ever moved or deleted.
+        if (!formName.trim()) { setError(t("models.nameRequired")); return; }
+        let baseUrl = formBaseUrl.trim().replace(/\/+$/, "");
+        if (!baseUrl) { setError(t("models.urlRequired")); return; }
+        if (!/\/v1$/i.test(baseUrl)) baseUrl += "/v1";
         const providerId = formName.trim().toLowerCase().replace(/\s+/g, "-");
         // Model id must be the server-side identifier verbatim (see
         // AddProviderPicker): it is sent as the `model` field in requests.
         const modelId = formName.trim();
-        let baseUrl = formBaseUrl.trim().replace(/\/+$/, "");
-        if (!/\/v1$/i.test(baseUrl)) baseUrl += "/v1";
-        if (!formName.trim()) { setError(t("models.nameRequired")); setSaving(false); return; }
-        if (!baseUrl) { setError(t("models.urlRequired")); setSaving(false); return; }
         // Merge with any existing models under this provider instead of
         // replacing them (upsert by model id).
         const allCfg = await window.piDesk.getCustomModelsJson().catch(() => ({}));
@@ -136,10 +142,23 @@ export default function SettingsPanel() {
     } finally { setSaving(false); }
   };
 
-  const handleRemove = async (p: ProviderInfo) => {
+  const handleRemove = (p: ProviderInfo) => {
+    // Two-step delete: ask for confirmation first (removing a custom provider
+    // also removes EVERY model under it — irreversible).
+    setPendingRemove(p);
+  };
+
+  const confirmRemove = async () => {
+    const p = pendingRemove;
+    setPendingRemove(null);
+    if (!p) return;
     try {
-      const customIds = await window.piDesk.getRegisteredProviderIds();
-      if (customIds.includes(p.id)) {
+      // Decide custom-vs-builtin by looking at custom-models.json keys rather
+      // than the runtime registration table: the registry ALSO contains
+      // built-in providers, so a custom provider whose name collided with a
+      // built-in id would be misrouted to deleteApiKey (and silently fail).
+      const cfg = await window.piDesk.getCustomModelsJson().catch(() => ({}));
+      if (cfg && Object.prototype.hasOwnProperty.call(cfg, p.id)) {
         await window.piDesk.deleteCustomProvider(p.id);
       } else {
         await window.piDesk.deleteApiKey(p.id);
@@ -209,6 +228,18 @@ export default function SettingsPanel() {
           onClose={() => setShowDialog(false)}
         />
       )}
+
+      {/* ── Delete confirmation (custom providers own every model under them) ── */}
+      <ConfirmDialog
+        open={pendingRemove !== null}
+        title={t("models.confirmDeleteTitle")}
+        message={t("models.confirmDelete", { name: pendingRemove?.name ?? "" })}
+        confirmLabel={t("models.delete")}
+        cancelLabel={t("cancel")}
+        danger
+        onConfirm={confirmRemove}
+        onCancel={() => setPendingRemove(null)}
+      />
     </div>
   );
 }

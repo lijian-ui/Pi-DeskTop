@@ -23,7 +23,22 @@
 .toolName {
   font-weight: var(--font-weight-medium);
   color: var(--text-default);
+  flex-shrink: 0;
+}
+
+/* 参数摘要：工具名右侧直接显示关键参数，超长省略 */
+.argsSummary {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--code-terminal-font-size);
+  color: var(--text-secondary);
+  padding: 1px var(--spacer-4);
+  background: var(--bg-base-secondary);
+  border-radius: var(--radius-4);
 }
 
 .statusTag {

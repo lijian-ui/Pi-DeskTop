@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { memo, useState, useEffect } from "react";
 import { ChevronDown, ChevronRight, Brain, Copy, Check } from "lucide-react";
 import type { Message } from "../store/agent-store";
 import Markdown from "./Markdown";
@@ -6,13 +6,12 @@ import ToolExecution from "./ToolExecution";
 import { useTranslation } from "react-i18next";
 import styles from "./AssistantMessage.module.css";
 
-export default function AssistantMessage({
-  message,
-  highlight,
-}: {
+interface Props {
   message: Message;
   highlight?: boolean;
-}) {
+}
+
+function AssistantMessage({ message, highlight }: Props) {
   const { t } = useTranslation();
   // Streaming: auto-expand thinking; once finished, collapse it.
   const [thinkingExpanded, setThinkingExpanded] = useState(!!message.isStreaming);
@@ -107,3 +106,26 @@ export default function AssistantMessage({
     </div>
   );
 }
+
+/**
+ * Only re-render when a field this component actually renders changes. During
+ * streaming, `reduceMessageEvent` rebuilds the message array on every token but
+ * leaves the unchanged messages' content/thinking/toolExecutions references
+ * intact — this comparator lets `memo` skip every message except the one that
+ * is actively streaming (plus tool-call updates and search highlight changes).
+ */
+function areEqual(prev: Props, next: Props): boolean {
+  const a = prev.message;
+  const b = next.message;
+  return (
+    a.content === b.content &&
+    a.thinking === b.thinking &&
+    a.isStreaming === b.isStreaming &&
+    a.stoppedByUser === b.stoppedByUser &&
+    a.timestamp === b.timestamp &&
+    a.toolExecutions === b.toolExecutions &&
+    prev.highlight === next.highlight
+  );
+}
+
+export default memo(AssistantMessage, areEqual);

@@ -23,6 +23,13 @@ function showWindow(win: BrowserWindow): void {
   win.focus();
 }
 
+/** Resolve the window the tray should operate on. Prefers the live window —
+ *  the fallback passed at creation may have been destroyed if the window was
+ *  ever rebuilt (app "activate" path). */
+function currentWindow(fallback: BrowserWindow): BrowserWindow {
+  return BrowserWindow.getAllWindows()[0] ?? fallback;
+}
+
 /**
  * Create the system tray icon. Clicking X on the window only hides it (see
  * window.ts), so the tray is the way back in — click to restore, right-click
@@ -45,7 +52,7 @@ export function createTray(win: BrowserWindow): void {
   tray.setToolTip("Pi Desktop");
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "显示主窗口", click: () => showWindow(win) },
+      { label: "显示主窗口", click: () => showWindow(currentWindow(win)) },
       { type: "separator" },
       {
         label: "退出",
@@ -58,10 +65,11 @@ export function createTray(win: BrowserWindow): void {
 
   // Windows: single left-click toggles the main window.
   tray.on("click", () => {
-    if (win.isVisible() && !win.isMinimized()) {
-      win.hide();
+    const w = currentWindow(win);
+    if (w.isVisible() && !w.isMinimized()) {
+      w.hide();
     } else {
-      showWindow(win);
+      showWindow(w);
     }
   });
 }

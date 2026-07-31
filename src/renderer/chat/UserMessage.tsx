@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { Message } from "../store/agent-store";
 import type { CodeAttachment } from "../store/ui-store";
 import SkillInvocation from "./SkillInvocation";
@@ -79,13 +80,12 @@ function parseSkillBlock(text: string): ParsedSkill | null {
   };
 }
 
-export default function UserMessage({
-  message,
-  highlight,
-}: {
+interface Props {
   message: Message;
   highlight?: boolean;
-}) {
+}
+
+function UserMessage({ message, highlight }: Props) {
   const parsed = parseSkillBlock(message.content);
   const attachments = message.attachments;
 
@@ -94,7 +94,7 @@ export default function UserMessage({
       id={`msg-${message.id}`}
       className={`${styles.userMessage} ${highlight ? styles.highlight : ""}`}
     >
-      <div className={styles.bubbleWrap}>
+        <div className={styles.bubbleWrap}>
         <div className={styles.bubble}>
           {parsed ? (
             <SkillInvocation
@@ -119,3 +119,21 @@ export default function UserMessage({
     </div>
   );
 }
+
+/**
+ * User messages never change during an assistant's streaming reply, so skip
+ * re-render entirely unless the content, attachments or search highlight
+ * actually changed.
+ */
+function areEqual(prev: Props, next: Props): boolean {
+  const a = prev.message;
+  const b = next.message;
+  return (
+    a.content === b.content &&
+    a.attachments === b.attachments &&
+    a.timestamp === b.timestamp &&
+    prev.highlight === next.highlight
+  );
+}
+
+export default memo(UserMessage, areEqual);

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import styles from "./SoulSettings.module.css";
 
@@ -16,28 +16,34 @@ export default function SoulSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    loadSoul();
-  }, []);
-
-  async function loadSoul() {
+  // Stable identity (mount-time fetch) so the effect below runs exactly once
+  // and exhaustive-deps stays satisfied.
+  const loadSoul = useCallback(async () => {
     try {
       const soul = await window.piDesk.getSoul();
       setText(soul);
-    } catch {
-      setText("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("soul.saveFailed"));
     }
     setLoading(false);
-  }
+  }, [t]);
+
+  useEffect(() => {
+    loadSoul();
+  }, [loadSoul]);
 
   async function handleSave() {
     setSaving(true);
     setSaved(false);
+    setError("");
     try {
       await window.piDesk.saveSoul(text);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("soul.saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -45,6 +51,7 @@ export default function SoulSettings() {
 
   function handleClear() {
     setText("");
+    setError("");
   }
 
   if (loading) return <div className={styles.loading}>{t("soul.loading")}</div>;
@@ -63,6 +70,7 @@ export default function SoulSettings() {
           spellCheck={false}
         />
         <p className={styles.hint}>{t("soul.hint")}</p>
+        {error && <p className={styles.error}>{error}</p>}
       </section>
 
       <div className={styles.actions}>

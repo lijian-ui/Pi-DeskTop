@@ -2,6 +2,7 @@ import { spawn, type IPty } from "node-pty";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import type { WebContents } from "electron";
 
 export type TerminalShell = "gitbash" | "powershell" | "cmd";
@@ -17,6 +18,8 @@ interface TerminalHandle {
   id: string;
   pty: IPty;
   shell: TerminalShell;
+  /** Absolute cwd the PTY was spawned in (for reuse matching). */
+  cwd: string;
 }
 
 const GIT_BASH_CANDIDATES = [
@@ -90,12 +93,19 @@ export class TerminalManager {
 
   create(opts: CreateTerminalOptions): { id: string; pid: number } {
     const { command, args } = this.resolveShell(opts.shell);
+    const cwd = resolve(opts.cwd || process.cwd());
 
-    // Reuse the live terminal if it already runs the requested shell. This is
-    // what keeps a long-running process (e.g. `npm install`) alive across
-    // terminal-panel open/close cycles — reopening re-attaches to it instead
-    // of spawning a fresh shell and orphaning the running process.
-    if (this.current && this.current.shell === opts.shell) {
+    // Reuse the live terminal only if it runs the requested shell AND was
+    // spawned in the same directory. Reusing across cwds would silently leave
+    // the terminal attached to the old working directory (e.g. after the user
+    // switched workspaces), which is confusing when the caller explicitly
+    // asked for a new cwd. A long-running process is still preserved across
+    // panel open/close cycles — reopening re-attaches to it.
+    if (
+      this.current &&
+      this.current.shell === opts.shell &&
+      resolve(this.current.cwd) === cwd
+    ) {
       return { id: this.current.id, pid: this.current.pty.pid };
     }
     // A different (or no) terminal is active: tear the previous session down
@@ -116,7 +126,7 @@ export class TerminalManager {
       name: "xterm-256color",
       cols,
       rows,
-      cwd: opts.cwd,
+      cwd,
       // Merge with the host env and advertise a 256-color terminal so tools
       // like `ls --color`, git diff, etc. render nicely.
       env: { ...process.env, TERM: "xterm-256color", FORCE_COLOR: "1" },
@@ -132,7 +142,7 @@ export class TerminalManager {
       if (this.current?.id === id) this.current = null;
     });
 
-    const handle: TerminalHandle = { id, pty: term, shell: opts.shell };
+    const handle: TerminalHandle = { id, pty: term, shell: opts.shell, cwd };
     this.terminals.set(id, handle);
     this.current = handle;
     return { id, pid: term.pid };

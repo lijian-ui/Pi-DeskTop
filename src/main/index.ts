@@ -1,5 +1,5 @@
-import { app } from "electron";
-import { createMainWindow, setPiManager, disposePi } from "./window";
+import { app, BrowserWindow } from "electron";
+import { createMainWindow, setPiManager, disposePi, getPiManager } from "./window";
 import { registerIpcHandlers } from "./ipc-handlers";
 import { PiDeskSessionManager } from "./pi/session-manager";
 import { TerminalManager } from "./pi/terminal-manager";
@@ -7,23 +7,32 @@ import { setupApplicationMenu } from "./menu";
 import { createTray } from "./tray";
 import { setupAutoUpdater, disposeAutoUpdater } from "./app-updater";
 
+let terminalManager: TerminalManager | null = null;
+
+/** Point the terminal + Pi event streams at a (re)created window's WebContents.
+ *  TerminalManager is a process-wide singleton so it survives window rebuilds. */
+function bindEventTargets(mainWindow: BrowserWindow): void {
+  terminalManager ??= new TerminalManager();
+  terminalManager.setWebContents(mainWindow.webContents);
+  getPiManager()?.setEventTarget(mainWindow.webContents);
+}
+
 app.whenReady().then(async () => {
   setupApplicationMenu();
   const mainWindow = createMainWindow();
   createTray(mainWindow);
-  setupAutoUpdater(mainWindow);
-  const terminalManager = new TerminalManager();
-  terminalManager.setWebContents(mainWindow.webContents);
+  setupAutoUpdater();
+  bindEventTargets(mainWindow);
 
   try {
     const piManager = new PiDeskSessionManager();
     await piManager.initialize();
     setPiManager(piManager);
     piManager.setEventTarget(mainWindow.webContents);
-    registerIpcHandlers(mainWindow, piManager, terminalManager);
+    registerIpcHandlers(mainWindow, piManager, terminalManager!);
   } catch (err) {
     console.error("Pi SDK initialization failed:", err);
-    registerIpcHandlers(mainWindow, null, terminalManager);
+    registerIpcHandlers(mainWindow, null, terminalManager!);
   }
 });
 
@@ -36,7 +45,14 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
-  if (app.getAllWindows().length === 0) {
+  const wins = BrowserWindow.getAllWindows();
+  if (wins.length === 0) {
+    // Window fully closed (edge path — close is normally intercepted to
+    // hide-to-tray). Rebuild it AND re-attach the event targets, otherwise
+    // streaming events and terminal output would never reach the new page.
     const mainWindow = createMainWindow();
+    bindEventTargets(mainWindow);
+  } else {
+    wins[0].show();
   }
 });

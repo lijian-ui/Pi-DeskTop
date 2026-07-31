@@ -113,6 +113,30 @@
   transform: rotate(90deg);
 }
 
+/* Provider-row delete affordance (right of the name, before the caret).
+   Hidden until hover so the row stays clean; grows into the empty right edge. */
+.rowDelete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-6, 6px);
+  color: var(--icon-tertiary, var(--text-tertiary));
+  flex-shrink: 0;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.rowWrap:hover .rowDelete,
+.rowDelete:focus-visible {
+  opacity: 1;
+}
+.rowDelete:hover {
+  color: var(--status-error-default, #dc2626);
+  background: var(--bg-overlay-l2, rgba(0, 0, 0, 0.04));
+}
+
 /* ── Expanded model list (drawer inside card) ── */
 .modelList {
   display: flex;

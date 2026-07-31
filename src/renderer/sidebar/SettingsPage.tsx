@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   X, Settings as SystemIcon, Palette, Brain, Cpu,
   Bot as AssistantIcon, Database, Keyboard, Shield, HelpCircle, Languages,
-  Layers,
+  Layers, Wrench,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUIStore } from "../store/ui-store";
@@ -11,6 +11,7 @@ import ThemeSettings from "./ThemeSettings";
 import SecurityPage from "./SecurityPage";
 import ContextPage from "./ContextPage";
 import SoulSettings from "./SoulSettings";
+import ToolsSettings from "./ToolsSettings";
 import { saveLang } from "../../shared/i18n/index";
 import styles from "./SettingsPage.module.css";
 
@@ -20,6 +21,7 @@ type SettingsSection =
   | "memory"
   | "models"
   | "assistant"
+  | "tools"
   | "data"
   | "shortcuts"
   | "security"
@@ -38,6 +40,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: "models", icon: Cpu, labelKey: "settings.models" },
   { key: "memory", icon: Brain, labelKey: "settings.memory" },
   { key: "assistant", icon: AssistantIcon, labelKey: "settings.assistant" },
+  { key: "tools", icon: Wrench, labelKey: "settings.tools" },
   { key: "security", icon: Shield, labelKey: "settings.security" },
   { key: "context", icon: Layers, labelKey: "settings.context" },
   { key: "language", icon: Languages, labelKey: "lang.switch" },
@@ -97,6 +100,8 @@ export default function SettingsPage() {
             <ContextPage />
           ) : activeSection === "assistant" ? (
             <SoulSettings />
+          ) : activeSection === "tools" ? (
+            <ToolsSettings />
           ) : activeSection === "language" ? (
             <div className={styles.langPage}>
               <h2 className={styles.langTitle}>{t("lang.switch")}</h2>

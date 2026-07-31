@@ -5,6 +5,21 @@ import { useWorkspaceStore } from "../store/workspace-store";
 
 let msgCounter = 0;
 
+/**
+ * Debounced session-list refresh: every message_end previously triggered a
+ * full load() (listSessions → main process re-reads EVERY session file header
+ * for the sidebar). Rapid tool loops produce many message_end events in a row,
+ * so batch them — the list only needs one refresh once the burst settles.
+ */
+let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleSessionListReload(): void {
+  if (reloadTimer) clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(() => {
+    reloadTimer = null;
+    useSessionStore.getState().load();
+  }, 500);
+}
+
 /** Events that carry chat content — these are buffered per-session (including
  * for background sessions) so each conversation accumulates its full live
  * history independently. */
@@ -71,21 +86,28 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
       ];
     }
 
-    case "message_update":
+    case "message_update": {
+      const delta = ev.assistantMessageEvent?.delta;
+      // Short-circuit empty deltas by returning the SAME array reference.
+      // mutateBuffer → setMessages keeps the identical reference, so the
+      // store notifies nothing and React bails out — zero re-render cost for
+      // events that carry no visible content.
+      if (typeof delta !== "string" || delta.length === 0) return msgs;
       if (ev.assistantMessageEvent?.type === "text_delta") {
         return msgs.map((m, i) =>
           i === msgs.length - 1 && m.role === "assistant"
-            ? { ...m, content: m.content + ev.assistantMessageEvent.delta }
+            ? { ...m, content: m.content + delta }
             : m
         );
       } else if (ev.assistantMessageEvent?.type === "thinking_delta") {
         return msgs.map((m, i) =>
           i === msgs.length - 1 && m.role === "assistant"
-            ? { ...m, thinking: (m.thinking ?? "") + ev.assistantMessageEvent.delta }
+            ? { ...m, thinking: (m.thinking ?? "") + delta }
             : m
         );
       }
       return msgs;
+    }
 
     case "message_end": {
       const msg = ev.message;
@@ -193,8 +215,9 @@ export function useAgentSession() {
       if (CONTENT_EVENTS.has(ev.type)) {
         session.mutateBuffer(targetPath, (msgs) => reduceMessageEvent(msgs, ev));
         if (ev.type === "message_end") {
-          // Refresh the session list so message counts / new sessions stay current.
-          useSessionStore.getState().load();
+          // Refresh the session list (debounced — a tool loop can end dozens
+          // of messages in a burst) so counts / new sessions stay current.
+          scheduleSessionListReload();
         }
         return;
       }

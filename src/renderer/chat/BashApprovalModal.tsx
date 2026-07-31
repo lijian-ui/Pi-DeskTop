@@ -9,12 +9,14 @@ import styles from "./BashApprovalModal.module.css";
  */
 export default function BashApprovalModal() {
   const pending = useBashGuardStore((s) => s.pending);
-  const setPending = useBashGuardStore((s) => s.setPending);
+  const queue = useBashGuardStore((s) => s.queue);
+  const enqueuePending = useBashGuardStore((s) => s.enqueuePending);
+  const respondAndAdvance = useBashGuardStore((s) => s.respondAndAdvance);
 
   useEffect(() => {
     window.piDesk.setBashGuardMode(useBashGuardStore.getState().mode);
     const off = window.piDesk.onBashApprovalRequest((data) => {
-      setPending({
+      enqueuePending({
         requestId: data.requestId,
         command: data.command,
         cwd: data.cwd,
@@ -22,13 +24,12 @@ export default function BashApprovalModal() {
       });
     });
     return off;
-  }, [setPending]);
+  }, [enqueuePending]);
 
   if (!pending) return null;
 
   const respond = (decision: "allow" | "deny" | "allow-session") => {
-    window.piDesk.respondBashApproval({ requestId: pending.requestId, decision });
-    setPending(null);
+    respondAndAdvance(pending.requestId, decision);
   };
 
   // Folder name of the owning workspace, so the user knows WHICH cwd this
@@ -44,6 +45,9 @@ export default function BashApprovalModal() {
         {cwdDir && <span className={styles.cwdTag} title={pending.cwd}>{cwdDir}</span>}
       </div>
       <div className={styles.hint}>模型请求执行以下 bash 命令，是否允许？（仅对本工作目录生效）</div>
+      {queue.length > 0 && (
+        <div className={styles.queueHint}>还有 {queue.length} 个待审批命令在排队</div>
+      )}
       <pre className={styles.command}>{pending.command}</pre>
       <div className={styles.actions}>
         <button className={styles.deny} onClick={() => respond("deny")}>

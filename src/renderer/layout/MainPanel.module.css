@@ -22,6 +22,16 @@
   flex-direction: column;
 }
 
+/* ChatPanel wrapper: stays mounted across view switches, hidden via inline
+   display:none when another view is active. Must fill the column exactly like
+   the panel it hosts. */
+.chatView {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .expandBtn {
   position: absolute;
   top: 8px;

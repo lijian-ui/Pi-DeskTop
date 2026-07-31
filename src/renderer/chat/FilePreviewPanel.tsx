@@ -76,9 +76,16 @@ function charIndexOf(lines: string[], line: number, local: number): number {
   return idx + local;
 }
 
-/** Map a character index in the file text to a 1-based line number. */
+/** Map a character index in the file text to a 1-based line number. Counting
+ *  scan instead of slice+split: on a ~1MB file the old version allocated a
+ *  huge array on EVERY selection. */
 function lineOf(content: string, charIndex: number): number {
-  return content.slice(0, charIndex).split("\n").length;
+  let line = 1;
+  const stop = Math.min(charIndex, content.length);
+  for (let i = 0; i < stop; i++) {
+    if (content.charCodeAt(i) === 10 /* \n */) line++;
+  }
+  return line;
 }
 
 /** Map a file extension to a highlight.js language id (best effort). */
@@ -101,6 +108,20 @@ const EXT_LANG: Record<string, string> = {
 // Skip token-level highlighting above this size to keep the UI snappy —
 // the file still renders as plain text with line numbers.
 const HIGHLIGHT_MAX = 300 * 1024;
+
+// ── Code-view virtual scrolling ──
+// Every code line is a fixed-height flex row (font-size 12px, line-height 1.6,
+// white-space: pre → never wraps), so ROW_HEIGHT is a constant. Files above
+// VIRT_THRESHOLD lines only render the visible window + overscan instead of
+// thousands of DOM rows (a 1MB file is ~50k rows otherwise).
+const ROW_HEIGHT = 12 * 1.6; // keep in sync with .codeRows / .codeRow css
+const VIRT_THRESHOLD = 800;
+const VIRT_OVERSCAN = 50;
+
+interface ViewWindow {
+  start: number;
+  end: number;
+}
 
 function extOf(path: string): string {
   const base = path.split(/[\\/]/).pop() || "";
@@ -153,6 +174,10 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
   const [loading, setLoading] = useState(true);
   // Markdown view mode: rendered preview (default) vs raw source.
   const [mdMode, setMdMode] = useState<"preview" | "source">("preview");
+  // Code-view virtual window (only meaningful when the file is virtualized).
+  const [viewWin, setViewWin] = useState<ViewWindow>({ start: 0, end: 0 });
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const scrollRafRef = useRef<number | null>(null);
   // Floating "Add to chat" button shown above a text selection in the code area.
   // We capture the structured range so the click can hand a CodeAttachment to
   // the composer instead of a plain-text blob.
@@ -185,6 +210,9 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
     setResult(null);
     setMdMode("preview");
     setFloatBtn(null);
+    // New file → reset the code-view scroll + virtual window.
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+    setViewWin({ start: 0, end: 0 });
     window.piDesk
       .readFileForPreview(filePath)
       .then((res) => {
@@ -200,6 +228,13 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
       cancelled = true;
     };
   }, [filePath]);
+
+  useEffect(() => {
+    // Cancel any pending virtual-window rAF on unmount.
+    return () => {
+      if (scrollRafRef.current != null) cancelAnimationFrame(scrollRafRef.current);
+    };
+  }, []);
 
   // Show a floating "Add to chat" button whenever the user selects text inside
   // the code area. The selection's character range is mapped back to line
@@ -282,6 +317,36 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
   // Keep the latest file path + text available to the document-level selection
   // listener without rebinding it on every render.
   latest.current = { filePath, content: textContent };
+  // Split once per file (NOT per render) — `split` on a ~1MB string is O(n)
+  // and the old code re-ran it on every keystroke/render of the panel.
+  const lines = useMemo(
+    () => (textContent ? textContent.split("\n") : []),
+    [textContent]
+  );
+
+  /** Recompute the visible line window for the virtualized code view. Called
+   *  from a rAF-throttled scroll handler and once after a file loads. */
+  const updateViewWindow = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const start = Math.max(0, Math.floor(el.scrollTop / ROW_HEIGHT) - VIRT_OVERSCAN);
+    const end = Math.min(
+      lines.length,
+      Math.ceil((el.scrollTop + el.clientHeight) / ROW_HEIGHT) + VIRT_OVERSCAN
+    );
+    setViewWin((prev) =>
+      prev.start === start && prev.end === end ? prev : { start, end }
+    );
+  };
+
+  // After a file loads, initialize the virtual window once the rows are in the
+  // DOM (clientHeight is only measurable post-commit).
+  useEffect(() => {
+    if (!textContent) return;
+    const raf = requestAnimationFrame(updateViewWindow);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [textContent]);
 
   // Highlight once per file; split into lines for the numbered gutter.
   // hljs can emit spans that cross line boundaries when split naively, so we
@@ -356,8 +421,53 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
         // alignment structural — they live in the same flex item, so they
         // cannot drift. The whole-text hljs run is split on '\n' so spans that
         // cross line boundaries keep the opening/closing tags on each half.
-        const lines = textContent.split("\n");
         const htmlLines = highlighted.html ? highlighted.html.split("\n") : null;
+        const isVirtual = lines.length > VIRT_THRESHOLD;
+
+        if (isVirtual) {
+          // Large file: render only the visible window (absolute-positioned
+          // inside a full-height spacer) so the DOM stays at ~100 rows instead
+          // of thousands. Rows keep their REAL line number in data-line, so
+          // selection→line mapping (locateRow / charIndexOf) keeps working.
+          const { start, end } = viewWin;
+          return (
+            <div className={styles.codeRows} ref={codeRef}>
+              <div style={{ height: lines.length * ROW_HEIGHT, position: "relative" }}>
+                {lines.slice(start, end).map((line, i) => {
+                  const idx = start + i;
+                  return (
+                    <div
+                      key={idx}
+                      className={styles.codeRow}
+                      data-line={idx}
+                      style={{
+                        position: "absolute",
+                        top: idx * ROW_HEIGHT,
+                        left: 0,
+                        right: 0,
+                      }}
+                    >
+                      <div className={styles.lineNo}>{idx + 1}</div>
+                      {htmlLines ? (
+                        <code
+                          data-content
+                          className="hljs"
+                           
+                          dangerouslySetInnerHTML={{ __html: htmlLines[idx] || "" }}
+                        />
+                      ) : (
+                        <code data-content className="hljs">
+                          {line}
+                        </code>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div className={styles.codeRows} ref={codeRef}>
             {lines.map((line, i) => (
@@ -367,7 +477,7 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
                   <code
                     data-content
                     className="hljs"
-                    // eslint-disable-next-line react/no-danger
+                     
                     dangerouslySetInnerHTML={{ __html: htmlLines[i] || "" }}
                   />
                 ) : (
@@ -432,7 +542,21 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
       <div className={styles.pathBar} title={filePath}>
         {filePath}
       </div>
-      <div className={styles.body} onScroll={() => setFloatBtn(null)}>
+      <div
+        className={styles.body}
+        ref={bodyRef}
+        onScroll={() => {
+          setFloatBtn(null);
+          // rAF-throttled: scroll fires faster than frames; the window only
+          // needs recomputing once per frame.
+          if (scrollRafRef.current == null) {
+            scrollRafRef.current = requestAnimationFrame(() => {
+              scrollRafRef.current = null;
+              updateViewWindow();
+            });
+          }
+        }}
+      >
         {renderBody()}
       </div>
       {floatBtn && (

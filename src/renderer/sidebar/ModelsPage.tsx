@@ -7,7 +7,7 @@
  * ModelsConfig catalog.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Plus, ChevronRight } from "lucide-react";
+import { Plus, ChevronRight, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import ProviderIcon from "./ProviderIcon";
 import AddProviderPicker from "./AddProviderPicker";
@@ -161,6 +161,24 @@ export default function ModelsPage() {
                     </span>
                     <span className={styles.rowName}>{row.name}</span>
                     <span className={styles.rowSub}>{row.sub}</span>
+                    <span
+                      className={styles.rowDelete}
+                      role="button"
+                      tabIndex={0}
+                      title={t("models.delete")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPendingDelete(row);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.stopPropagation();
+                          setPendingDelete(row);
+                        }
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </span>
                     <span
                       className={`${styles.caret} ${isOpen ? styles.caretOpen : ""}`}
                       aria-hidden="true"

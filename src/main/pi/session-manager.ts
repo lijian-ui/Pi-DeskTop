@@ -10,11 +10,10 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type AgentSessionRuntime,
-  type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import { readFile, writeFile, mkdir, unlink, readdir } from "node:fs/promises";
-import { existsSync, statSync, watch, mkdirSync, type FSWatcher } from "node:fs";
-import { basename, dirname, join, normalize, resolve, sep } from "node:path";
+import { existsSync, statSync, watch, mkdirSync, readdirSync, type FSWatcher } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import extract from "extract-zip";
 import type { WebContents } from "electron";
@@ -141,6 +140,12 @@ const DEFAULT_BASH_GUARD_BLACKLIST = [
   "git\\s+push\\s+--force\\b.*",
   "crontab\\s+-r\\b.*",
   // ── Windows: recursive delete & format ──
+  // Drive-letter paths (rm -rf E:\...) were a blind spot: the Unix patterns
+  // above only match `/`, `~`, `.` and `*` prefixes, and the Windows section
+  // only covered cmd.exe verbs. `[A-Za-z]:\\[^&|;]*` catches `rm -rf E:\project`
+  // (with optional quoting, incl. spaces inside quotes) while tolerating any
+  // rm flag order (rm -r -f) and stopping at command separators.
+  "rm\\s+(?:-[a-zA-Z]+\\s+)*\"?[A-Za-z]:\\\\[^&|;]*",
   "rmdir\\s+/s\\s+/q\\b.*",
   "rd\\s+/s\\s+/q\\b.*",
   "del\\s+/f\\s+/s\\s+/q\\b.*",
@@ -184,13 +189,6 @@ const DEFAULT_BASH_GUARD_BLACKLIST = [
   "srm\\b.*",
 ];
 
-const DEFAULT_BASH_GUARD_WHITELIST = [
-  "^ls(\\s|$)", "^pwd$", "^echo(\\s|$)", "^cat(\\s|$)", "^cd(\\s|$)",
-  "^git\\s+status", "^git\\s+log", "^git\\s+diff", "^grep(\\s|$)",
-  "^head(\\s|$)", "^tail(\\s|$)", "^wc(\\s|$)", "^date$", "^which(\\s|$)",
-  "^node\\s+-v", "^node\\s+--version", "^npm\\s+list", "^python\\s+-V",
-];
-
 function bashGuardPath(): string {
   return join(getAgentDir(), "bash-guard.json");
 }
@@ -199,13 +197,21 @@ async function readBashGuardConfig(): Promise<BashGuardConfig> {
   try {
     const content = await readFile(bashGuardPath(), "utf-8");
     const parsed = JSON.parse(content);
-    // Ensure both arrays exist
+    const disk = Array.isArray(parsed.blacklist) ? parsed.blacklist : [];
+    // ADD-ONLY merge with the defaults: a stale on-disk config (saved before
+    // a new default danger pattern was added — e.g. the Windows drive-path
+    // `rm -rf E:\...` pattern) would otherwise keep serving a blacklist that
+    // misses the newest protection. The user's own entries are preserved, and
+    // only default entries that are missing get re-added (security wins over
+    // "I deleted that default" — removing a default danger rule is not a
+    // supported hardening step).
+    const blacklist = [...new Set([...disk, ...DEFAULT_BASH_GUARD_BLACKLIST])];
     return {
-      blacklist: Array.isArray(parsed.blacklist) ? parsed.blacklist : DEFAULT_BASH_GUARD_BLACKLIST,
+      blacklist,
       whitelist: Array.isArray(parsed.whitelist) ? parsed.whitelist : [],
     };
   } catch {
-    return { blacklist: DEFAULT_BASH_GUARD_BLACKLIST, whitelist: [] };
+    return { blacklist: [...DEFAULT_BASH_GUARD_BLACKLIST], whitelist: [] };
   }
 }
 
@@ -410,6 +416,26 @@ function settingsJsonPath(): string {
   return join(getAgentDir(), "settings.json");
 }
 
+/** All built-in tools the Pi SDK registers (docs/sdk.md:492). The SDK by
+ * default activates only read/bash/edit/write; we allow opting into the rest
+ * via settings.json `activeTools`. */
+const ALL_BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+
+/** Active tool names from settings.json. Defaults to the full built-in set
+ * (grep/find/ls included) — users can narrow it down in the settings UI. */
+async function readActiveTools(): Promise<string[]> {
+  try {
+    const settings = await readSettingsJson();
+    const t = settings.activeTools;
+    if (Array.isArray(t) && t.length > 0) {
+      return t.filter((n): n is string => typeof n === "string" && ALL_BUILTIN_TOOLS.includes(n));
+    }
+  } catch {
+    // fall through to default
+  }
+  return [...ALL_BUILTIN_TOOLS];
+}
+
 async function readSettingsJson(): Promise<Record<string, any>> {
   try {
     const content = await readFile(settingsJsonPath(), "utf-8");
@@ -473,6 +499,14 @@ interface RuntimeUnit {
   activePath: string | null;
   /** Path of the session currently RUNNING a turn in this cwd, or null when idle. */
   runningPath: string | null;
+  /**
+   * Monotonic run counter, bumped on every prompt() start. The prompt()'s
+   * finally only clears runningPath if it still owns the latest run — without
+   * this, an old turn's cleanup can wipe a NEWER turn's running flag (the
+   * abort→re-prompt race), which would defeat the cwd-busy guard and make the
+   * stop button disappear mid-run.
+   */
+  runSeq: number;
   unsubscribe: (() => void) | null;
   /**
    * Bash guard state — ISOLATED PER UNIT (cwd). Under the old global guard a
@@ -536,7 +570,14 @@ export class PiDeskSessionManager {
    * invalidation path as skill import).
    */
   private contextFileWatchers: FSWatcher[] = [];
-  private contextFileDebounce: NodeJS.Timeout | null = null;
+  /**
+   * Per-cwd debounce for context-file changes. A single shared timer was a
+   * bug: two different workspaces touching AGENTS.md within 300ms would clear
+   * each other's pending invalidation, so one workspace kept serving stale
+   * services (old context kept being injected). Keyed by cwd, so invalidation
+   * never gets dropped across workspaces.
+   */
+  private contextFileDebounce = new Map<string, NodeJS.Timeout>();
   /** Recently used workspace paths, most-recent first, deduped, capped at 10. */
   private recentCwds: string[] = [];
 
@@ -563,6 +604,34 @@ export class PiDeskSessionManager {
   private bindingPaths = new Set<string>();
   // Runtime-loaded from ~/.pi/agent/bash-guard.json
   private guardConfig: BashGuardConfig = { blacklist: [], whitelist: [] };
+  /**
+   * Pre-compiled guard patterns, rebuilt whenever guardConfig changes.
+   * evaluateBash runs on EVERY command the model proposes (including inside
+   * tool loops), and compiling ~60 blacklist regexes per call was measurable
+   * garbage-collection churn. Invalid user-edited patterns are dropped here
+   * instead of being re-tried (and re-thrown) on every evaluation.
+   */
+  private bashBlacklistRx: RegExp[] = [];
+  private bashWhitelistRx: RegExp[] = [];
+
+  private compileBashPatterns(): void {
+    this.bashBlacklistRx = [];
+    for (const pat of this.guardConfig.blacklist) {
+      try {
+        this.bashBlacklistRx.push(new RegExp(`^(?:${pat})$`));
+      } catch {
+        // Malformed pattern — skip it (matches the old per-call behavior).
+      }
+    }
+    this.bashWhitelistRx = [];
+    for (const pat of this.guardConfig.whitelist) {
+      try {
+        this.bashWhitelistRx.push(new RegExp(pat));
+      } catch {
+        // skip malformed pattern
+      }
+    }
+  }
 
   async initialize(cwd?: string): Promise<void> {
     // No workspace is persisted to disk: the user picks one from the UI (or
@@ -571,6 +640,7 @@ export class PiDeskSessionManager {
     this.cwd = cwd ?? null;
     // Load bash guard config (blacklist/whitelist) from disk
     this.guardConfig = await readBashGuardConfig();
+    this.compileBashPatterns();
     // Always spin up the chat-only runtime so the user can chat even before
     // (or without ever) choosing a workspace folder.
     await this.ensureUnit(chatOnlyCwd());
@@ -652,6 +722,11 @@ export class PiDeskSessionManager {
       services,
       activePath: runtime.session?.sessionManager?.getSessionFile() ?? null,
       runningPath: null,
+      // MUST be initialized — prompt() does `++unit.runSeq`, and
+      // `++undefined` is NaN, which would make the finally ownership check
+      // (runSeq === seq) fail forever and strand runningPath → the stop
+      // button and sidebar spinner would never clear after a reply.
+      runSeq: 0,
       unsubscribe: null,
       allowAllSession: false,
       pendingBashRequests: new Map(),
@@ -659,6 +734,9 @@ export class PiDeskSessionManager {
       defaultModel: null,
     };
     this.units.set(cwd, unit);
+    // Fresh SDK sessions activate only read/bash/edit/write by default; apply
+    // the user's configured tool set (default: all built-ins) right away.
+    this.applyUnitActiveTools(unit);
     this.subscribeToUnit(unit);
     this.installContextWatchersFor(cwd);
     return unit;
@@ -684,21 +762,31 @@ export class PiDeskSessionManager {
    * `contextFileWatchers` and are all closed on dispose.
    */
   private installContextWatchersFor(cwd: string): void {
-    const dirs = new Set<string>();
-    dirs.add(getAgentDir());
-    let dir = resolve(cwd);
-    while (true) {
-      dirs.add(dir);
-      const parent = dirname(dir);
-      if (parent === dir) break; // reached fs root (e.g. "E:\")
-      dir = parent;
-    }
-
     const isContextFile = (name: string | null): boolean => {
       if (!name) return false;
       const n = name.toLowerCase();
       return n === "agents.md" || n === "claude.md" || n === "soul.md";
     };
+
+    const dirs = new Set<string>();
+    dirs.add(getAgentDir()); // soul.md lives here
+    const root = resolve(cwd);
+    dirs.add(root); // AGENTS.md usually lives here
+    // Context files may ALSO sit in any ancestor of cwd (the SDK walks up).
+    // Only watch ancestors where such a file currently exists — a new
+    // AGENTS.md dropped into an empty ancestor won't be caught, which we
+    // accept: it keeps the watcher count bounded (previously EVERY directory
+    // from cwd up to the filesystem root was watched, ~10 handles per
+    // workspace, and up to that many again per extra workspace).
+    let dir = dirname(root);
+    while (dir !== dirname(dir)) {
+      try {
+        if (readdirSync(dir).some((n) => isContextFile(n))) dirs.add(dir);
+      } catch {
+        // Unreadable ancestor — skip it.
+      }
+      dir = dirname(dir);
+    }
 
     for (const d of dirs) {
       if (!existsSync(d)) continue;
@@ -718,9 +806,10 @@ export class PiDeskSessionManager {
   }
 
   private onContextFileChanged(cwd: string): void {
-    if (this.contextFileDebounce) clearTimeout(this.contextFileDebounce);
-    this.contextFileDebounce = setTimeout(() => {
-      this.contextFileDebounce = null;
+    const existing = this.contextFileDebounce.get(cwd);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.contextFileDebounce.delete(cwd);
       // Next new session in this cwd rebuilds services → re-reads AGENTS.md/CLAUDE.md.
       this.servicesByCwd.delete(cwd);
       // Make the CURRENT session of this cwd pick up the change too (same
@@ -731,6 +820,7 @@ export class PiDeskSessionManager {
       });
       console.log(`Context file (AGENTS.md / CLAUDE.md / soul.md) changed in ${cwd} — services cache invalidated`);
     }, 300);
+    this.contextFileDebounce.set(cwd, timer);
   }
 
   private subscribeToUnit(unit: RuntimeUnit): void {
@@ -742,7 +832,11 @@ export class PiDeskSessionManager {
       this.webContents?.send("pi:event", {
         sessionPath: unit.activePath,
         cwd: unit.cwd,
-        event: this.serializeEvent(event),
+        // Pass the event by reference — Electron's IPC performs its own
+        // structured clone, so the renderer receives an independent copy.
+        // The previous JSON deep-copy was pure overhead on high-frequency
+        // streaming events (and silently dropped `undefined` fields).
+        event,
       });
       // Persist the precise post-compaction token count so the usage indicator
       // survives a restart even before the next assistant reply. The SDK
@@ -781,16 +875,16 @@ export class PiDeskSessionManager {
   }
 
   get session(): AgentSession | null {
-    return this.units.get(this.cwd)?.runtime.session ?? null;
+    return this.units.get(this.cwd ?? "")?.runtime.session ?? null;
   }
 
   getRuntime(): AgentSessionRuntime | null {
-    return this.units.get(this.cwd)?.runtime ?? null;
+    return this.units.get(this.cwd ?? "")?.runtime ?? null;
   }
 
   /** The runtime unit for a given cwd (defaults to the focused cwd). */
   getUnit(cwd?: string): RuntimeUnit | undefined {
-    return this.units.get(cwd ?? this.cwd);
+    return this.units.get(cwd ?? this.cwd ?? "");
   }
 
   /** Find the unit whose active session matches the given path. */
@@ -917,17 +1011,24 @@ export class PiDeskSessionManager {
       this.subscribeToUnit(unit);
     }
     unit.runningPath = sessionPath ?? unit.activePath;
+    const seq = ++unit.runSeq;
     this.broadcastRunningState();
     try {
       await unit.runtime.session?.prompt(text, { images });
     } finally {
-      unit.runningPath = null;
-      this.broadcastRunningState();
+      // Only clear the flag if we still own the latest run. A stale finally
+      // from a turn that was aborted and then re-prompted must not wipe the
+      // newer turn's runningPath (that would disable the busy guard and the
+      // stop button mid-run).
+      if (unit.runSeq === seq) {
+        unit.runningPath = null;
+        this.broadcastRunningState();
+      }
     }
   }
 
   async steer(text: string, cwd?: string, sessionPath?: string): Promise<void> {
-    const unit = cwd ? this.units.get(cwd) : this.units.get(this.cwd);
+    const unit = cwd ? this.units.get(cwd) : this.units.get(this.cwd ?? "");
     if (!unit) return;
     if (unit.runningPath && unit.runningPath !== sessionPath) {
       this.webContents?.send("pi:rejected", { reason: "cwd-busy", cwd: unit.cwd, sessionPath });
@@ -937,7 +1038,7 @@ export class PiDeskSessionManager {
   }
 
   async followUp(text: string, cwd?: string, sessionPath?: string): Promise<void> {
-    const unit = cwd ? this.units.get(cwd) : this.units.get(this.cwd);
+    const unit = cwd ? this.units.get(cwd) : this.units.get(this.cwd ?? "");
     if (!unit) return;
     if (unit.runningPath && unit.runningPath !== sessionPath) {
       this.webContents?.send("pi:rejected", { reason: "cwd-busy", cwd: unit.cwd, sessionPath });
@@ -947,14 +1048,17 @@ export class PiDeskSessionManager {
   }
 
   async abort(cwd?: string): Promise<void> {
-    const unit = cwd ? this.units.get(cwd) : this.units.get(this.cwd);
+    const unit = cwd ? this.units.get(cwd) : this.units.get(this.cwd ?? "");
     if (!unit) return;
     try {
       await unit.runtime.session?.abort();
-    } finally {
-      unit.runningPath = null;
-      this.broadcastRunningState();
+    } catch {
+      // Abort raced the turn finishing; the prompt() finally clears the flag.
     }
+    // NOTE: deliberately do NOT clear runningPath here. The owning prompt()'s
+    // finally (guarded by runSeq) clears it once its turn settles. Clearing it
+    // eagerly reintroduces the race where a stale finally of an aborted turn
+    // wipes a re-prompted turn's running flag.
   }
 
   // ── Bash guard (permission prototype) ──────────────────────────────────
@@ -1007,6 +1111,7 @@ export class PiDeskSessionManager {
   /** Save a new blacklist/whitelist config from the Settings UI. */
   async saveBashGuardConfig(cfg: BashGuardConfig): Promise<void> {
     this.guardConfig = cfg;
+    this.compileBashPatterns();
     await writeBashGuardConfig(cfg);
   }
 
@@ -1126,38 +1231,44 @@ export class PiDeskSessionManager {
     };
   }
 
+  /**
+   * Split a command line into its constituent commands on shell separators
+   * (`&&`, `||`, `;`, `|`, newlines). Used so the danger blacklist can't be
+   * bypassed by chaining — `rm -rf / && echo hi` splits into `rm -rf /` and
+   * `echo hi`, and the first segment hits the blacklist. Splitting too eagerly
+   * is safe here: segments are only ever SHORTER than the original, so a
+   * dangerous pattern can never be masked by splitting. (Quoted pipes are a
+   * theoretical over-split, but that only produces harmless shorter segments.)
+   */
+  private static splitCommandChain(cmd: string): string[] {
+    return cmd
+      .split(/\s*(?:&&|\|\||;|\||\r?\n)\s*/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
   private async evaluateBash(command: string, unit: RuntimeUnit): Promise<"allow" | "deny" | "deny-blacklist"> {
     const trimmed = command.trim();
     // The danger blacklist is a hard security floor — always enforced, even in
     // YOLO mode. Order matters: check it *before* the whitelist, so a whitelisted
     // verb like "rm" can never override a blacklisted dangerous variant like
     // "rm -rf /". Blacklist patterns are matched *precisely* (full-line, ^(?:…)$),
-    // so each entry describes exactly the command family it blocks. A malformed
-    // user-edited pattern is skipped rather than throwing.
-    if (
-      this.guardConfig.blacklist.some((pat) => {
-        try {
-          return new RegExp(`^(?:${pat})$`).test(trimmed);
-        } catch {
-          return false;
-        }
-      })
-    )
-      return "deny-blacklist";
+    // so each entry describes exactly the command family it blocks. Patterns are
+    // pre-compiled by compileBashPatterns() whenever the config changes.
+    //
+    // Two passes:
+    //  1. whole line  — catches patterns that CONTAIN separators themselves
+    //     (e.g. `curl … | sh`, the fork-bomb pattern), which splitting would
+    //     otherwise fragment and miss;
+    //  2. per segment — catches chained bypasses (`rm -rf / && echo hi`).
+    const segments = PiDeskSessionManager.splitCommandChain(trimmed);
+    const hitsBlacklist = (s: string) => this.bashBlacklistRx.some((rx) => rx.test(s));
+    if (hitsBlacklist(trimmed) || segments.some(hitsBlacklist)) return "deny-blacklist";
     if (unit.allowAllSession) return "allow";
     if (this.bashMode === "yolo") return "allow";
     // Whitelist patterns are matched *broadly* (substring regex) so a verb like
     // "rm" whitelists the whole command family.
-    if (
-      this.guardConfig.whitelist.some((pat) => {
-        try {
-          return new RegExp(pat).test(trimmed);
-        } catch {
-          return false;
-        }
-      })
-    )
-      return "allow";
+    if (this.bashWhitelistRx.some((rx) => rx.test(trimmed))) return "allow";
     return this.requestApproval(command, unit);
   }
 
@@ -1228,9 +1339,42 @@ export class PiDeskSessionManager {
     }
   }
 
+  /** Apply the configured active tool set to this unit's live session.
+   * newSession()/switchSession() reset the tool set to the SDK default, so we
+   * re-apply the user's selection after each — same pattern as
+   * applyUnitDefaultModel. */
+  private applyUnitActiveTools(unit: RuntimeUnit): void {
+    const session = unit.runtime?.session;
+    if (!session) return;
+    readActiveTools()
+      .then((tools) => session.setActiveToolsByName(tools))
+      .catch(() => {});
+  }
+
+  /** Current active tool names (from ~/.pi/agent/settings.json). */
+  async getActiveTools(): Promise<string[]> {
+    return readActiveTools();
+  }
+
+  /** Persist the active tool selection and apply it to every live unit. */
+  async saveActiveTools(tools: string[]): Promise<void> {
+    const valid = tools.filter((t) => ALL_BUILTIN_TOOLS.includes(t));
+    try {
+      const settings = await readSettingsJson();
+      settings.activeTools = valid;
+      await writeJsonFile(settingsJsonPath(), settings);
+    } catch {
+      // Non-fatal: in-memory application below still takes effect this run.
+    }
+    for (const unit of this.units.values()) {
+      unit.runtime?.session?.setActiveToolsByName(valid);
+    }
+  }
+
   async getAvailableModels(): Promise<any[]> {
     if (!this.modelRuntime) return [];
-    return await this.modelRuntime.getAvailable();
+    // SDK 返回 readonly 数组，转成可变数组供渲染层使用
+    return (await this.modelRuntime.getAvailable()) as unknown as any[];
   }
 
   /**
@@ -1250,6 +1394,7 @@ export class PiDeskSessionManager {
     // Re-apply the user's chosen model — newSession() resets it to the SDK
     // default, which would make a "new task" silently drop the selection.
     this.applyUnitDefaultModel(unit);
+    this.applyUnitActiveTools(unit);
     this.subscribeToUnit(unit);
     return unit.activePath;
   }
@@ -1263,6 +1408,7 @@ export class PiDeskSessionManager {
     // A switched-to session may carry a different model; re-apply the unit's
     // chosen default so the pill stays consistent with the user's selection.
     this.applyUnitDefaultModel(unit);
+    this.applyUnitActiveTools(unit);
     this.subscribeToUnit(unit);
   }
 
@@ -1326,6 +1472,18 @@ export class PiDeskSessionManager {
    * Permanently delete a session file.
    */
   async deleteSession(sessionPath: string): Promise<void> {
+    // Refuse to delete a session that is currently RUNNING: unlinking the
+    // file mid-stream would corrupt the conversation (Windows would also
+    // likely throw EPERM on the open handle). The renderer surfaces the
+    // rejection via the failed IPC call. Note: we deliberately do NOT match
+    // on `activePath` — deleting the currently-focused-but-idle session is a
+    // supported flow (the renderer deletes it and immediately creates a new
+    // one), so only the actually-streaming case is blocked.
+    for (const u of this.units.values()) {
+      if (u.runningPath === sessionPath) {
+        throw new Error("Session is currently running and cannot be deleted");
+      }
+    }
     try {
       await unlink(sessionPath);
     } catch (err) {
@@ -1463,13 +1621,14 @@ export class PiDeskSessionManager {
    * Delegates to SDK AgentSession.getContextUsage().
    * Returns undefined if no model is set or contextWindow is unknown.
    */
-  async getContextUsage():
+  async getContextUsage(): Promise<
     | {
         tokens: number | null;
         contextWindow: number;
         percent: number | null;
       }
-    | undefined {
+    | undefined
+  > {
     const sdk = this.session?.getContextUsage();
     if (!sdk) return undefined;
     const sid = this.session?.sessionId;
@@ -1643,15 +1802,16 @@ export class PiDeskSessionManager {
     const key = cwd && cwd.trim().length > 0 ? cwd : this.cwd ?? chatOnlyCwd();
     const unit = this.units.get(key);
     const session = unit?.runtime.session;
-    return JSON.parse(
-      JSON.stringify({
-        model: session?.model ?? unit?.defaultModel ?? null,
-        thinkingLevel: session?.thinkingLevel ?? null,
-        isStreaming: session?.isStreaming ?? false,
-        sessionId: session?.sessionId ?? null,
-        messages: session?.messages ?? [],
-      })
-    );
+    // Return by reference: Electron IPC structured-clones the payload, so the
+    // renderer gets an independent copy. The previous JSON deep-copy doubled
+    // the cost on every call (and silently dropped `undefined` fields).
+    return {
+      model: session?.model ?? unit?.defaultModel ?? null,
+      thinkingLevel: session?.thinkingLevel ?? null,
+      isStreaming: session?.isStreaming ?? false,
+      sessionId: session?.sessionId ?? null,
+      messages: session?.messages ?? [],
+    };
   }
 
   /**
@@ -1699,7 +1859,7 @@ export class PiDeskSessionManager {
       throw new Error(`Workspace path does not exist: ${newCwd}`);
     }
     // Must be a directory, not a file.
-    let isDir = false;
+    let isDir: boolean;
     try {
       isDir = statSync(newCwd).isDirectory();
     } catch {
@@ -1768,7 +1928,7 @@ export class PiDeskSessionManager {
     if (!existsSync(workspaceCwd)) {
       throw new Error(`Workspace path does not exist: ${workspaceCwd}`);
     }
-    let isDir = false;
+    let isDir: boolean;
     try {
       isDir = statSync(workspaceCwd).isDirectory();
     } catch {
@@ -1814,6 +1974,7 @@ export class PiDeskSessionManager {
         wsUnit.runtime.session?.sessionManager?.getSessionFile() ?? "";
       wsUnit.activePath = newPath || null;
       this.applyUnitDefaultModel(wsUnit);
+      this.applyUnitActiveTools(wsUnit);
       this.subscribeToUnit(wsUnit);
 
       // The chat unit must never be left pointing at the abandoned placeholder.
@@ -1824,6 +1985,7 @@ export class PiDeskSessionManager {
           srcUnit.activePath =
             srcUnit.runtime.session?.sessionManager?.getSessionFile() ?? null;
           this.applyUnitDefaultModel(srcUnit);
+          this.applyUnitActiveTools(srcUnit);
           this.subscribeToUnit(srcUnit);
         } catch {
           /* non-fatal: the chat unit recovers on the next newSession */
@@ -1857,10 +2019,7 @@ export class PiDeskSessionManager {
       try { w.close(); } catch { /* ignore */ }
     }
     this.contextFileWatchers = [];
-    if (this.contextFileDebounce) clearTimeout(this.contextFileDebounce);
-  }
-
-  private serializeEvent(event: AgentSessionEvent): any {
-    return JSON.parse(JSON.stringify(event));
+    for (const t of this.contextFileDebounce.values()) clearTimeout(t);
+    this.contextFileDebounce.clear();
   }
 }

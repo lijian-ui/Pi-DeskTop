@@ -52,6 +52,10 @@ export interface PiDeskAPI {
   onRejected(callback: (info: { reason: string; cwd: string; sessionPath?: string }) => void): () => void;
   onShowAbout(callback: () => void): () => void;
 
+  // Active tools (assistant settings)
+  getActiveTools(): Promise<string[]>;
+  saveActiveTools(tools: string[]): Promise<void>;
+
   // Auto-update (electron-updater, generic provider -> Gitee Releases)
   checkForUpdates(): Promise<{
     status: string;
@@ -70,7 +74,6 @@ export interface PiDeskAPI {
   ): () => void;
 
   // Provider management
-  getProviders(): Promise<ProviderInfo[]>;
   setApiKey(providerId: string, apiKey: string): Promise<void>;
   removeApiKey(providerId: string): Promise<void>;
   saveApiKey(providerId: string, apiKey: string): Promise<void>;

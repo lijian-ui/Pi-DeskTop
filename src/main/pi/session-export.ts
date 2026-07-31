@@ -148,7 +148,11 @@ export async function exportSessionToHtmlFile(
       const text = extractText(msg.content).trim();
       const thinking = extractThinking(msg.content).trim();
       const toolCalls = Array.isArray(msg.content)
-        ? msg.content.filter((b: any) => b && b.type === "toolCall")
+        ? (msg.content.filter((b: any) => b && b.type === "toolCall") as Array<{
+            id: string;
+            name: string;
+            arguments: any;
+          }>)
         : [];
 
       if (!text && !thinking && toolCalls.length === 0) continue;

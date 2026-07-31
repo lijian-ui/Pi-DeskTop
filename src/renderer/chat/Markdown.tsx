@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import ReactMarkdown, { type Options as MarkdownOptions } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import mermaid from "mermaid";
@@ -60,22 +60,40 @@ function Mermaid({ chart }: { chart: string }) {
   return <div className={styles.mermaid} ref={ref} />;
 }
 
-export default function Markdown({ content }: { content: string }) {
+/**
+ * Module-level constants for ReactMarkdown's plugins/components. Keeping these
+ * references stable is what makes `memo(Markdown)` effective — if they were
+ * re-created per render, the shallow prop comparison would always fail and
+ * ReactMarkdown would re-run its whole remark/rehype pipeline on every
+ * streamed token (the #1 rendering cost in long conversations).
+ */
+const REMARK_PLUGINS: MarkdownOptions["remarkPlugins"] = [remarkGfm];
+const REHYPE_PLUGINS: MarkdownOptions["rehypePlugins"] = [
+  [rehypeHighlight, { ignoreMissing: true }],
+];
+function InlinePre({ children }: { children?: ReactNode }) {
+  return <>{children}</>;
+}
+const MD_COMPONENTS: MarkdownOptions["components"] = {
+  pre: InlinePre,
+  code: CodeBlock,
+};
+
+function Markdown({ content }: { content: string }) {
   return (
     <div className={styles.markdown}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeHighlight, { ignoreMissing: true }]]}
-        components={{
-          pre: ({ children }) => <>{children}</>,
-          code: CodeBlock,
-        }}
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
+        components={MD_COMPONENTS}
       >
         {content}
       </ReactMarkdown>
     </div>
   );
 }
+
+export default memo(Markdown);
 
 function CodeBlock(props: any) {
   const { t } = useTranslation();

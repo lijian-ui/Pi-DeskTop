@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   Plus,
@@ -22,7 +22,6 @@ import {
 import { useUIStore } from "../store/ui-store";
 import { useTranslation } from "react-i18next";
 import { useSessionStore, type SessionInfo } from "../store/session-store";
-import { useWorkspaceStore } from "../store/workspace-store";
 import FileManagerPanel from "./FileManagerPanel";
 import ConfirmDialog from "../sidebar/ConfirmDialog";
 import styles from "./Sidebar.module.css";
@@ -228,16 +227,21 @@ function SessionsSection({
   const openFileManager = useUIStore((s) => s.openFileManager);
 
   // A session is a "task" (no workspace) when it has no cwd or its cwd is the
-  // chat-only fallback directory.
-  const isTask = (s: SessionInfo): boolean =>
-    !s.cwd || normalizeCwd(s.cwd) === normalizeCwd(chatOnlyCwd);
+  // chat-only fallback directory. Stable identity (depends only on the
+  // chat-only dir) so the memos below satisfy exhaustive-deps without
+  // recomputing on every render.
+  const isTask = useCallback(
+    (s: SessionInfo): boolean =>
+      !s.cwd || normalizeCwd(s.cwd) === normalizeCwd(chatOnlyCwd),
+    [chatOnlyCwd]
+  );
   const taskSessions = useMemo(
     () => sessions.filter(isTask),
-    [sessions, chatOnlyCwd],
+    [sessions, isTask],
   );
   const spaceSessions = useMemo(
     () => sessions.filter((s) => !isTask(s)),
-    [sessions, chatOnlyCwd],
+    [sessions, isTask],
   );
   const spaceGroups = useMemo(
     () => groupSessions(spaceSessions, t("sessions.ungrouped")),

@@ -424,7 +424,14 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   removeSession: async (path: string) => {
     const wasCurrent = get().currentPath === path;
     get().clearBuffer(path);
-    await window.piDesk.deleteSession(path);
+    try {
+      await window.piDesk.deleteSession(path);
+    } catch (err) {
+      // Main process refused (e.g. the session is still generating). Keep the
+      // buffer/list intact so the user can stop it and retry.
+      console.error("Failed to delete session:", err);
+      return;
+    }
     if (wasCurrent) {
       // Don't leave the user staring at a deleted conversation — start fresh.
       await get().createNew();

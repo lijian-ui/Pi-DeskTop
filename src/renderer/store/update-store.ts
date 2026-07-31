@@ -25,9 +25,16 @@ interface UpdateStore {
   quitAndInstall: () => void;
 }
 
+// Guards against duplicate subscriptions: App's effect can run twice under
+// React StrictMode (dev), which would otherwise register two IPC listeners
+// and double-process every broadcast.
+let initialized = false;
+
 export const useUpdateStore = create<UpdateStore>((set) => ({
   state: { status: "idle" },
   init: () => {
+    if (initialized) return;
+    initialized = true;
     window.piDesk.onUpdateState((s) => {
       set({ state: s as UpdateState });
     });

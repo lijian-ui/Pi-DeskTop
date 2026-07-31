@@ -51,6 +51,8 @@ export default function AtFilePicker({ cwd, onConfirm, onClose }: AtFilePickerPr
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  /** Guards against out-of-order search replies (see the search effect). */
+  const searchSeqRef = useRef(0);
 
   const loadDir = useCallback(async (dir: string) => {
     setLoadingDirs((l) => ({ ...l, [dir]: true }));
@@ -88,23 +90,31 @@ export default function AtFilePicker({ cwd, onConfirm, onClose }: AtFilePickerPr
     searchInputRef.current?.focus();
   }, []);
 
-  // Debounced, bounded search across the workspace.
+  // Debounced, bounded search across the workspace. A sequence number guards
+  // against out-of-order results: clearing the debounce timer only cancels the
+  // *pending* request — an already in-flight IPC reply could otherwise arrive
+  // after a newer query and clobber its results. Each query bumps the counter,
+  // and stale replies are discarded.
   useEffect(() => {
     const q = search.trim();
     if (!q) {
+      searchSeqRef.current++;
       setResults(null);
       setSearching(false);
       return;
     }
+    const seq = ++searchSeqRef.current;
     setSearching(true);
     const timer = setTimeout(async () => {
       try {
         const res = await window.piDesk.searchWorkspace(q, 200);
+        if (searchSeqRef.current !== seq) return; // stale reply
         setResults(res.results);
-      } catch (e: any) {
+      } catch {
+        if (searchSeqRef.current !== seq) return;
         setResults([]);
       } finally {
-        setSearching(false);
+        if (searchSeqRef.current === seq) setSearching(false);
       }
     }, 200);
     return () => clearTimeout(timer);

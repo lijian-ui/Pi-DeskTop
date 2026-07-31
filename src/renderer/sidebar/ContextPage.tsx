@@ -1,12 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import styles from "./ContextPage.module.css";
-
-interface CompactionConfig {
-  keepRecentTokens: number;
-  reserveTokens: number;
-  enabled: boolean;
-}
 
 export default function ContextPage() {
   const { t } = useTranslation();
@@ -16,26 +10,30 @@ export default function ContextPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    loadConfig();
-  }, []);
-
-  async function loadConfig() {
+  // Stable identity (mount-time fetch) so the effect below runs exactly once
+  // and exhaustive-deps stays satisfied.
+  const loadConfig = useCallback(async () => {
     try {
       const cfg = await window.piDesk.getCompactionConfig();
       setKeepRecent(cfg.keepRecentTokens);
       setReserve(cfg.reserveTokens);
       setEnabled(cfg.enabled);
-    } catch {
-      /* fall back to defaults already set */
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("context.saveFailed"));
     }
     setLoading(false);
-  }
+  }, [t]);
+
+  useEffect(() => {
+    loadConfig();
+  }, [loadConfig]);
 
   async function handleSave() {
     setSaving(true);
     setSaved(false);
+    setError("");
     try {
       const clampedKeep = Math.max(1000, Math.min(200000, Math.floor(keepRecent) || 20000));
       const clampedReserve = Math.max(1024, Math.min(200000, Math.floor(reserve) || 16384));
@@ -48,6 +46,8 @@ export default function ContextPage() {
       setReserve(clampedReserve);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("context.saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -106,6 +106,8 @@ export default function ContextPage() {
       </section>
 
       <p className={styles.hint}>{t("context.restartHint")}</p>
+
+      {error && <p className={styles.error}>{error}</p>}
 
       <div className={styles.actions}>
         <button

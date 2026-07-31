@@ -43,15 +43,23 @@ export default function MainPanel() {
       )}
       <div className={styles.chatRow}>
         <div className={styles.chatArea}>
+          {/* ChatPanel stays MOUNTED across view switches (hidden via CSS),
+              so the message list scroll position and any in-flight streaming
+              survive going to Settings/Skills/Automate and back — same model
+              as the terminal panel. The other views mount on demand. */}
+          <div
+            className={styles.chatView}
+            style={{ display: mainView === "chat" ? undefined : "none" }}
+          >
+            <ChatPanel />
+          </div>
           {mainView === "settings" ? (
             <SettingsPage />
           ) : mainView === "skills" ? (
             <SkillsPage />
           ) : mainView === "automate" ? (
             <AutomatePage />
-          ) : (
-            <ChatPanel />
-          )}
+          ) : null}
         </div>
         {/* File preview column (opened from the sidebar file manager).
             Sits to the RIGHT of the chat area — a sibling column like the
