@@ -1,0 +1,50 @@
+.activityBar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 48px;
+  height: 100%;
+  background: var(--bg-base-secondary);
+  border-right: 1px solid var(--border-neutral-l1);
+  padding: var(--spacer-4) 0;
+  gap: var(--spacer-2);
+}
+
+.item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  color: var(--icon-secondary);
+  border-radius: var(--radius-4);
+  cursor: pointer;
+  padding: 0;
+}
+
+.item:hover {
+  color: var(--icon-default);
+  background: var(--bg-overlay-l1);
+}
+
+.active {
+  color: var(--icon-default);
+}
+
+.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  background: var(--bg-brand);
+  border-radius: 0 var(--radius-2) var(--radius-2) 0;
+}
+
+.spacer {
+  flex: 1;
+}

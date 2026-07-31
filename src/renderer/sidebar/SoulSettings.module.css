@@ -1,0 +1,131 @@
+.page {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: var(--spacer-32) var(--spacer-24);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-24);
+}
+
+.loading {
+  padding: var(--spacer-32);
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+/* ── Section ── */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-8);
+}
+
+.sectionTitle {
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-default);
+  margin: 0;
+}
+
+.sectionDesc {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ── Textarea (soul editor) ── */
+.textarea {
+  width: 100%;
+  min-height: 320px;
+  padding: var(--spacer-12) var(--spacer-14);
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 10px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-default);
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.textarea:focus {
+  border-color: var(--border-brand);
+  box-shadow: 0 0 0 3px var(--bg-brand-disabled);
+}
+
+.textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ── Actions ── */
+.actions {
+  display: flex;
+  gap: var(--spacer-10);
+  align-items: center;
+  padding-top: var(--spacer-4);
+}
+
+.saveBtn {
+  padding: var(--spacer-10) var(--spacer-24);
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-brand);
+  color: var(--text-onbrand);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.saveBtn:hover:not(:disabled) {
+  background: var(--bg-brand-hover);
+}
+
+.saveBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.saveBtnSuccess {
+  background: var(--bg-brand-hover);
+}
+
+.clearBtn {
+  padding: var(--spacer-10) var(--spacer-24);
+  border: none;
+  border-radius: 8px;
+  background: #e5484d;
+  color: #ffffff;
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.clearBtn:hover:not(:disabled) {
+  background: #c93b3f;
+}
+
+.clearBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+:global([data-theme="dark"]) .clearBtn {
+  background: #ef5350;
+}
+
+:global([data-theme="dark"]) .clearBtn:hover:not(:disabled) {
+  background: #e5484d;
+}

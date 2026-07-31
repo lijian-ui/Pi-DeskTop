@@ -1,0 +1,32 @@
+appId: com.pi-desk.app
+productName: Pi Desktop
+directories:
+  output: release
+# node-pty is a native (N-API) module; .node binaries cannot be loaded from
+# inside asar, so the whole package must be unpacked next to the archive.
+asar: true
+asarUnpack:
+  - "node_modules/node-pty/**/*"
+files:
+  - dist/**/*
+  - resources/**/*
+  - package.json
+# electron-updater 更新源：Gitee Releases 固定 tag `latest`（generic provider）。
+# 每次发版把 latest.yml + 安装包上传到该 release 附件，electron-updater 会请求
+# {url}/latest.yml 获取元数据并下载新安装包。
+publish:
+  provider: generic
+  url: https://gitee.com/rooky-top/pi-desk-top/releases/download/latest
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+win:
+  target:
+    - nsis
+    - portable
+linux:
+  target:
+    - AppImage
+    - deb

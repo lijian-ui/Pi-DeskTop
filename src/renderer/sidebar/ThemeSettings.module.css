@@ -1,0 +1,78 @@
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--spacer-32) var(--spacer-16);
+}
+
+.title {
+  font-size: var(--heading-sm-font-size);
+  line-height: var(--heading-sm-line-height);
+  font-weight: var(--font-weight-strong);
+  color: var(--text-default);
+  margin-bottom: 6px;
+}
+
+.desc {
+  font-size: var(--body-base-font-size);
+  line-height: var(--body-base-line-height);
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-10);
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-10);
+  background: var(--bg-base-secondary);
+  color: var(--text-default);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.option:hover {
+  background: var(--bg-base-tertiary);
+  border-color: var(--border-neutral-l3);
+}
+
+.optionActive {
+  border-color: var(--border-brand);
+  background: var(--bg-brand-popup);
+}
+
+.optionIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-8);
+  background: var(--bg-overlay-l3);
+  color: var(--text-default);
+  flex-shrink: 0;
+}
+
+.optionLabel {
+  flex: 1;
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-medium);
+}
+
+.optionCheck {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-brand);
+  flex-shrink: 0;
+}

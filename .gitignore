@@ -1,0 +1,36 @@
+# ── 依赖与构建产物（体积大 / 可再生）──
+node_modules/
+dist/
+release/
+
+# ── 发布脚本（含 Gitee/GitHub 令牌，严禁提交！）──
+scripts/publish.mjs
+
+# ── 内置 Node 绿色包 / 安装包（几十~上百 MB，不应入库）──
+node-v24.18.0-win-x64/
+node-v24.18.0-x64.msi
+node-v24.18.1-win-x64/
+node-v24.18.1-win-x64.zip
+node-v24.18.1-darwin-x64/
+node-v24.18.1-darwin-x64.tar.gz
+
+# ── 工具/IDE 元数据 ──
+.workbuddy/
+.arts/
+.codeartsdoer/
+.idea/
+.vscode/
+
+# ── 系统 / 编辑器 ──
+.DS_Store
+Thumbs.db
+*.log
+*.pid
+npm-debug.log*
+
+# ── Windows 误创建 ──
+nul
+
+# ── 本地临时文件 ──
+*.tmp
+*.bak

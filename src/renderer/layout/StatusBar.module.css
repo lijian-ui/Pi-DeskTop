@@ -1,0 +1,42 @@
+.statusBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 24px;
+  padding: 0 var(--spacer-8);
+  background: var(--bg-base-secondary);
+  border-top: 1px solid var(--border-neutral-l1);
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  user-select: none;
+}
+
+.left,
+.right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-12);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-4);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--status-success-default);
+}
+
+.dotStreaming {
+  background: var(--status-primary-default);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}

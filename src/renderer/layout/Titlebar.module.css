@@ -1,0 +1,116 @@
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 var(--spacer-12);
+  background: var(--bg-base-secondary);
+  border-bottom: 1px solid var(--border-neutral-l1);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  -webkit-app-region: no-drag;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-2);
+  margin-right: var(--spacer-12);
+  -webkit-app-region: no-drag;
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--icon-secondary);
+  border-radius: var(--radius-4);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.iconBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+}
+
+.iconBtnActive {
+  background: var(--bg-brand-subtle);
+  color: var(--icon-brand);
+}
+
+.iconBtnActive:hover {
+  background: var(--bg-brand-subtle);
+  color: var(--icon-brand);
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  background: var(--bg-base-tertiary);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+  padding: 0 var(--spacer-6);
+  height: 26px;
+}
+
+.searchIcon {
+  color: var(--icon-tertiary);
+  flex-shrink: 0;
+}
+
+.searchInput {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  width: 200px;
+}
+
+.searchInput::placeholder {
+  color: var(--text-tertiary);
+}
+
+.searchCount {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.searchNav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--icon-secondary);
+  border-radius: var(--radius-4);
+  cursor: pointer;
+  padding: 0;
+}
+
+.searchNav:hover:not(:disabled) {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+}
+
+.searchNav:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

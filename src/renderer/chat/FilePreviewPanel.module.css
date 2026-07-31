@@ -1,0 +1,294 @@
+/* Side column to the RIGHT of the chat area (sibling of TerminalPanel),
+   with a draggable divider on its left edge — same model as the terminal. */
+.panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: 520px;
+  height: 100%;
+  min-height: 0;
+  border-left: 1px solid var(--border-neutral-l1);
+  background: var(--bg-base-default);
+  overflow: hidden;
+}
+
+/* Draggable divider between the chat area and the preview column. */
+.resizeHandle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+  transition: background-color 0.12s ease;
+}
+
+.resizeHandle:hover,
+.resizeHandle:active {
+  background: var(--bg-brand-subtle);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  padding: var(--spacer-6) var(--spacer-12);
+  border-bottom: 1px solid var(--border-neutral-l1);
+  flex-shrink: 0;
+}
+
+.headerIcon {
+  color: var(--icon-secondary);
+  flex-shrink: 0;
+}
+
+.fileName {
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fileMeta {
+  color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+  flex-shrink: 0;
+}
+
+.headerSpacer {
+  flex: 1;
+}
+
+.mdToggle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+  flex-shrink: 0;
+}
+
+.mdToggleBtn {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  padding: 2px var(--spacer-8);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+  cursor: pointer;
+  border-radius: var(--radius-4);
+}
+
+.mdToggleBtn:hover {
+  color: var(--text-default);
+}
+
+.mdToggleActive {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.closeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--icon-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-4);
+  flex-shrink: 0;
+}
+
+.closeBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.pathBar {
+  padding: var(--spacer-4) var(--spacer-12);
+  color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--border-neutral-l1);
+  flex-shrink: 0;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-base-default);
+}
+
+/* ── Code view: per-line rows. Each file line is a flex row
+   [lineNo | code line]. The line number and code live in the SAME row box,
+   so they are structurally forced to align vertically — no two-column drift
+   is possible. There is no <pre> wrapper, so the hljs theme's
+   `pre code.hljs { padding: 1em }` never matches.
+
+   The full-height background is split into a gutter strip (left) and the
+   code area (right) via a linear gradient on `.codeRows`. This way the
+   gutter gray extends to the bottom of the panel even when the file has
+   fewer lines than the viewport — without it, the gutter would end at the
+   last line and the panel bg would show through below. ── */
+.codeRows {
+  --gutter-w: 64px;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono, ui-monospace, "Cascadia Code", Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  /* Unified editor canvas: the whole code area (gutter + code) shares the
+     app's main background, matching VS Code. The gutter is distinguished only
+     by its 1px right border, not by a separate fill color. */
+  background: var(--bg-base-default);
+}
+
+.codeRow {
+  display: flex;
+  align-items: stretch;
+  min-height: 1.6em;
+  /* Same background as the main editor canvas so every pixel of the row is
+     the app's main background — no gaps when the flex child sits shorter
+     than the row height. */
+  background: var(--bg-base-default);
+}
+
+.lineNo {
+  flex-shrink: 0;
+  width: var(--gutter-w);
+  /* box-sizing is border-box globally (see global.css), so width includes
+     padding + border and the right edge lines up exactly with the
+     gradient boundary at --gutter-w. */
+  padding: 0 var(--spacer-10) 0 var(--spacer-12);
+  text-align: right;
+  user-select: none;
+  color: var(--text-tertiary);
+  border-right: 1px solid var(--border-neutral-l1);
+  position: sticky;
+  left: 0;
+  line-height: 1.6;
+}
+
+/* ── hljs layout lock ─────────────────────────────────────────────
+   Token COLORS live in tokens.css (global, theme-aware).
+   Here we only force the per-line layout that no other component can
+   safely override — block display, zero padding, and the app's main
+   background (so stale third-party hljs themes can never bleed white
+   rectangles behind each line in dark mode).                   ───── */
+
+/* Layout lock — NO external hljs theme can touch these. */
+.codeRows code.hljs {
+  display: block !important;
+  flex: 1;
+  min-width: 0;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: var(--bg-base-default) !important;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre;
+  overflow: visible !important;
+  /* Ensure text selection works reliably across per-line <code> elements.
+     Without this, drag-selecting across consecutive lines may only highlight
+     part of the range in some browsers/layout conditions. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* ── Markdown preview ── */
+.mdPreview {
+  width: 100%;
+  align-self: center;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: var(--spacer-16) var(--spacer-24);
+}
+
+/* ── Image preview ── */
+.imageWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacer-24);
+  flex: 1;
+  min-height: 0;
+}
+
+.image {
+  max-width: 100%;
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: var(--radius-8);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* ── Notices ── */
+.notice,
+.noticeError {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  justify-content: center;
+  padding: var(--spacer-24);
+  flex: 1;
+  min-height: 0;
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+}
+
+.noticeError {
+  color: var(--status-error-default);
+}
+
+.spinner {
+  animation: fpSpin 0.9s linear infinite;
+}
+
+@keyframes fpSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── Floating "Add to chat" button above a text selection ── */
+.addToChatBtn {
+  position: absolute;
+  z-index: 20;
+  transform: translate(-50%, calc(-100% - 8px));
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  padding: 4px var(--spacer-10);
+  border: 1px solid var(--bg-brand);
+  border-radius: var(--radius-6);
+  background: var(--bg-brand);
+  color: #fff;
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
+}
+
+.addToChatBtn:hover {
+  filter: brightness(1.06);
+}
+
+.addToChatBtn:active {
+  transform: translate(-50%, calc(-100% - 8px)) scale(0.97);
+}

@@ -1,0 +1,953 @@
+.composer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacer-8);
+  width: 100%;
+  min-width: 360px;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: var(--spacer-12) var(--spacer-24) var(--spacer-16) var(--spacer-24);
+}
+
+.statusBars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-8);
+  width: 100%;
+}
+
+.composerInner {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-10);
+  padding: var(--spacer-12);
+  gap: var(--spacer-8);
+  transition: border-color 0.12s ease;
+  position: relative;
+}
+
+.composerInner:focus-within {
+  border-color: var(--border-brand);
+}
+
+.textarea {
+  width: 100%;
+  min-height: 24px;
+  max-height: 200px;
+  resize: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-default);
+  font-family: var(--font-family-default);
+  font-size: var(--body-base-font-size);
+  line-height: 1.5;
+  padding: 0;
+}
+
+.textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-8);
+}
+
+.toolbarLeft,
+.toolbarRight {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--icon-secondary);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-6);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.iconBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+}
+
+.permissionPill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  height: 28px;
+  padding: 0 var(--spacer-10);
+  border: 1px solid var(--border-neutral-l2);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  transition: background 0.12s ease;
+}
+
+.permissionPill:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.permissionWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.permissionMenu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  min-width: 210px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-2);
+  padding: var(--spacer-6);
+  background: var(--bg-base, #ffffff);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  z-index: 20;
+}
+
+.permissionItem {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--spacer-8) var(--spacer-10);
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-6);
+  cursor: pointer;
+  text-align: left;
+}
+
+.permissionItem:hover {
+  background: var(--bg-overlay-l2);
+}
+
+.permissionItemActive {
+  background: var(--bg-brand);
+}
+
+.permissionItemActive .permissionItemLabel,
+.permissionItemActive .permissionItemDesc {
+  color: var(--icon-onbrand);
+}
+
+.permissionItemLabel {
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-default);
+}
+
+.permissionItemDesc {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+}
+
+/* ── YOLO confirmation dialog ── */
+.yoloOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.yoloDialog {
+  width: 420px;
+  max-width: 90vw;
+  background: var(--bg-base, #ffffff);
+  border-radius: 20px;
+  padding: var(--spacer-24);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.yoloHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  margin-bottom: var(--spacer-16);
+}
+
+.yoloIcon {
+  color: var(--text-danger, #e5484d);
+  flex-shrink: 0;
+}
+
+.yoloTitle {
+  font-size: var(--body-lg-font-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-default);
+  line-height: 1.3;
+}
+
+.yoloBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-8);
+  margin-bottom: var(--spacer-20);
+}
+
+.yoloDesc {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.yoloCheckboxLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  cursor: pointer;
+  font-size: var(--body-sm-font-size);
+  color: var(--text-default);
+  user-select: none;
+  padding-top: var(--spacer-4);
+}
+
+.yoloCheckboxLabel input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--bg-brand, #2563eb);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.yoloActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacer-10);
+}
+
+.yoloCancel {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.yoloCancel:hover {
+  background: rgba(15, 23, 42, 0.1);
+}
+
+.yoloConfirm {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 8px;
+  background: #f43f5e;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.yoloConfirm:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.yoloConfirmDisabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.modelPill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  height: 28px;
+  padding: 0 var(--spacer-10);
+  border: 1px solid var(--border-neutral-l2);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  transition: background 0.12s ease;
+}
+
+.modelPill:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+/* ── Model selector dropdown ── */
+.modelSelector {
+  position: relative;
+}
+
+.modelDropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  min-width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-base-tertiary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  padding: var(--spacer-6);
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.modelGroupLabel {
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-tertiary);
+  padding: var(--spacer-4) var(--spacer-8);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.modelItem {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  width: 100%;
+  height: 32px;
+  padding: 0 var(--spacer-8);
+  border: none;
+  background: transparent;
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+  border-radius: var(--radius-4);
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.modelItem:hover {
+  background: var(--bg-overlay-l2);
+}
+
+.modelItemActive {
+  background: var(--bg-overlay-l3);
+}
+
+.modelItemName {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modelEmpty {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: var(--spacer-16) var(--spacer-8);
+}
+
+.sendBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: var(--bg-brand);
+  color: var(--icon-onbrand);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-6);
+  transition: background 0.12s ease;
+}
+
+.sendBtn:hover:not(:disabled) {
+  background: var(--bg-brand-hover);
+}
+
+.sendBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.stopBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: var(--bg-brand);
+  color: var(--icon-onbrand);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-6);
+  transition: background 0.12s ease;
+}
+
+.stopBtn:hover {
+  background: var(--status-error-default);
+}
+
+/* ── Queued messages (sent while a reply is streaming) ── */
+.queuePanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-6);
+  width: 100%;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: var(--spacer-4) var(--spacer-6);
+  background: var(--bg-overlay-l1);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+}
+
+.queueHeader {
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.queueItem {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  min-width: 0;
+}
+
+.queueText {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--body-sm-font-size);
+  color: var(--text-default);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+
+.queueEditInput {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-base-tertiary);
+  border: 1px solid var(--border-brand);
+  border-radius: var(--radius-4);
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  padding: 4px var(--spacer-6);
+  outline: none;
+}
+
+.queueEdit,
+.queueDelete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-4);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.queueEdit {
+  color: var(--icon-secondary);
+}
+
+.queueEdit:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+}
+
+.queueDelete {
+  color: var(--icon-secondary);
+}
+
+.queueDelete:hover {
+  background: rgba(246, 90, 90, 0.16);
+  color: var(--status-error-default);
+}
+
+.disclaimer {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.errorBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-8);
+  width: 100%;
+  min-width: 360px;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: var(--spacer-8) var(--spacer-12);
+  background: var(--status-error-surface-l1);
+  border: 1px solid var(--status-error-default);
+  border-radius: var(--radius-6);
+  font-size: var(--body-xs-font-size);
+  color: var(--status-error-default);
+  word-break: break-word;
+}
+
+.errorDismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--status-error-default);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-4);
+  flex-shrink: 0;
+}
+
+.errorDismiss:hover {
+  background: rgba(246, 90, 90, 0.2);
+}
+
+/* ── Slash command (skill) suggestions ── */
+.slashBox {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--bg-base-tertiary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  padding: var(--spacer-6);
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.slashHint {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: var(--spacer-4) var(--spacer-6) var(--spacer-6);
+}
+
+.slashGroupLabel {
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: var(--spacer-6) var(--spacer-6) var(--spacer-2);
+}
+
+.slashDivider {
+  height: 1px;
+  background: var(--border-neutral-l2);
+  margin: var(--spacer-4) 0;
+}
+
+.slashItem {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text-default);
+  padding: var(--spacer-6) var(--spacer-8);
+  border-radius: var(--radius-4);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.slashItem:hover,
+.slashItemActive {
+  background: var(--bg-overlay-l2);
+}
+
+.slashName {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-semibold);
+}
+
+.slashDesc {
+  font-size: 10px;
+  color: var(--text-secondary);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* ── Meta row (below the input box): workspace + permissions ── */
+.metaRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-8);
+  width: 100%;
+}
+
+.workspaceSelector {
+  position: relative;
+}
+
+.workspacePill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  height: 28px;
+  padding: 0 var(--spacer-8) 0 var(--spacer-10);
+  border: 1px solid var(--border-neutral-l2);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  max-width: 360px;
+  min-width: 0;
+}
+
+.workspacePill:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.workspacePillPending {
+  border-color: var(--border-brand-default, var(--border-brand));
+  color: var(--text-brand-default, var(--text-brand));
+  animation: workspacePulse 2s ease-in-out infinite;
+}
+
+@keyframes workspacePulse {
+  0%, 100% { border-color: var(--border-brand-default, var(--border-brand)); }
+  50% { border-color: transparent; }
+}
+
+.workspaceLabel {
+  min-width: 0;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspaceDropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 320px;
+  max-width: 480px;
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--bg-base-tertiary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  padding: var(--spacer-6);
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workspaceGroupLabel {
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-tertiary);
+  padding: var(--spacer-6) var(--spacer-8) var(--spacer-2);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.workspaceOption {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  width: 100%;
+  height: 32px;
+  padding: 0 var(--spacer-8);
+  border: none;
+  background: transparent;
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+  border-radius: var(--radius-4);
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.workspaceOption:hover:not(:disabled) {
+  background: var(--bg-overlay-l2);
+}
+
+.workspaceOption:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.workspaceOptionIcon {
+  flex-shrink: 0;
+  color: var(--icon-secondary);
+}
+
+.workspaceOptionLabel {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspaceEmpty {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: var(--spacer-8);
+}
+
+/* ── Context compaction indicator ── */
+.compactingBar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  padding: var(--spacer-4) var(--spacer-6);
+  background: var(--bg-overlay-l1);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-6);
+  font-size: var(--body-xs-font-size);
+  color: var(--text-secondary);
+}
+
+.compactDoneBar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  padding: var(--spacer-4) var(--spacer-6);
+  background: rgba(22, 163, 74, 0.12);
+  border: 1px solid rgba(22, 163, 74, 0.4);
+  border-radius: var(--radius-6);
+  font-size: var(--body-xs-font-size);
+  color: #16a34a;
+}
+
+.compactTokens {
+  color: var(--text-secondary);
+  margin-left: 2px;
+}
+
+.compactDots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.compactDots span {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--bg-brand);
+  opacity: 0.4;
+  animation: compactBounce 1.2s infinite ease-in-out;
+}
+
+.compactDots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.compactDots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes compactBounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+/* ── Context usage ring (tokens / contextWindow) ── */
+.contextRing {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  cursor: default;
+  user-select: none;
+}
+
+.contextRingSvg {
+  width: 26px;
+  height: 26px;
+  transform: rotate(-90deg);
+}
+
+.contextRingTrack {
+  fill: none;
+  stroke: var(--border-neutral-l2);
+  stroke-width: 3;
+}
+
+.contextRingFill {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.4s ease, stroke 0.2s ease;
+}
+
+.contextRingText {
+  position: absolute;
+  font-size: 9px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* Custom tooltip — appears above the ring (native title is bottom-right,
+   which the user didn't want). */
+.contextRingTooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: var(--spacer-4) var(--spacer-8);
+  background: var(--bg-base-tertiary);
+  color: var(--text-default);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-6);
+  font-size: var(--body-xs-font-size);
+  line-height: 1.3;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 200;
+}
+
+.contextRing:hover .contextRingTooltip {
+  opacity: 1;
+}
+
+/* ── Code-reference attachments (from the file-preview panel) ── */
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacer-6);
+  width: 100%;
+}
+
+.attachPill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  max-width: 100%;
+  height: 28px;
+  padding: 0 var(--spacer-4) 0 var(--spacer-8);
+  background: var(--bg-base-tertiary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-full);
+  font-size: var(--body-xs-font-size);
+  color: var(--text-default);
+  user-select: none;
+  white-space: nowrap;
+}
+
+.attachIcon {
+  flex-shrink: 0;
+  color: var(--bg-brand);
+}
+
+.attachName {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-medium);
+}
+
+.attachLines {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.attachRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin-left: 2px;
+  border: none;
+  background: transparent;
+  color: var(--icon-secondary);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.attachRemove:hover {
+  background: rgba(246, 90, 90, 0.16);
+  color: var(--status-error-default);
+}

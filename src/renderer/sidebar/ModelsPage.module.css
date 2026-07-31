@@ -1,0 +1,258 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--spacer-32);
+  position: relative;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacer-24);
+}
+
+.title {
+  font-size: var(--heading-md-font-size, 22px);
+  font-weight: var(--font-weight-strong);
+  color: var(--text-default);
+  margin: 0;
+}
+
+.addBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  height: 32px;
+  padding: 0 var(--spacer-14, 14px);
+  background: var(--bg-brand);
+  color: var(--icon-onbrand);
+  border: none;
+  border-radius: var(--radius-6);
+  cursor: pointer;
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  transition: background 0.12s ease;
+}
+.addBtn:hover { background: var(--bg-brand-hover); }
+
+/* ── Section ── */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-10);
+}
+
+.sectionTitle {
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-tertiary);
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-left: var(--spacer-2);
+}
+
+/* ── Configured list ── */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-10);
+}
+
+/* Wrapper owns the card border so the row + expanded model list form one panel */
+.rowWrap {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-10);
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.rowWrap:hover {
+  border-color: var(--border-neutral-l2);
+}
+.rowWrap[data-expanded="true"] {
+  border-color: var(--border-neutral-l2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-10);
+  min-height: 56px;
+  padding: var(--spacer-12, 12px) var(--spacer-16, 16px);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  transition: background 0.12s ease;
+}
+.row:hover {
+  background: var(--bg-overlay-l1);
+}
+.rowClickable {
+  cursor: pointer;
+}
+
+/* Disclosure caret on the right (custom providers clickable) */
+.caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--icon-tertiary, var(--text-tertiary));
+  flex-shrink: 0;
+  transition: transform 0.2s ease, color 0.12s ease;
+}
+.caretOpen {
+  transform: rotate(90deg);
+}
+
+/* ── Expanded model list (drawer inside card) ── */
+.modelList {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--border-neutral-l1);
+  background: var(--bg-overlay-l1, rgba(0, 0, 0, 0.02));
+}
+
+.modelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-8);
+  padding: var(--spacer-8) var(--spacer-12, 12px);
+  padding-left: 54px;
+  border-bottom: 1px solid var(--border-neutral-l1, transparent);
+  transition: background 0.12s ease;
+}
+.modelRow:last-child {
+  border-bottom: none;
+}
+.modelRow:hover {
+  background: var(--bg-overlay-l2, rgba(0, 0, 0, 0.04));
+}
+.modelName {
+  font-size: var(--body-xs-font-size, 13px);
+  color: var(--text-secondary, var(--text-default));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modelEmpty {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  padding: var(--spacer-6) var(--spacer-10, 10px);
+}
+
+.rowIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-8);
+  background: var(--bg-overlay-l2);
+  flex-shrink: 0;
+}
+
+.rowName {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-default);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowSub {
+  flex-shrink: 0;
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+}
+
+.rowActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  flex-shrink: 0;
+}
+
+.editTextBtn,
+.deleteTextBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 var(--spacer-10, 10px);
+  border-radius: var(--radius-6);
+  font-size: var(--body-xs-font-size);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.editTextBtn {
+  border: 1px solid var(--border-neutral-l1);
+  background: transparent;
+  color: var(--text-secondary, var(--text-default));
+}
+.editTextBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+.deleteTextBtn {
+  border: 1px solid var(--status-error-default, #e5484d);
+  background: transparent;
+  color: var(--status-error-default, #e5484d);
+}
+.deleteTextBtn:hover {
+  background: var(--status-error-surface-l1, rgba(229, 72, 77, 0.08));
+}
+
+.readonlyTag {
+  flex-shrink: 0;
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  padding: 0 var(--spacer-4);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-4, 4px);
+}
+
+/* ── Empty state ── */
+.emptyHint {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: var(--spacer-32) var(--spacer-16);
+  background: var(--bg-base-secondary);
+  border: 1px dashed var(--border-neutral-l2);
+  border-radius: var(--radius-10);
+}
+.textLink {
+  background: none;
+  border: none;
+  color: var(--text-brand);
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  font-weight: var(--font-weight-medium);
+}
+.textLink:hover { text-decoration: underline; }
+
+/* ── Loading ── */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-tertiary);
+  font-size: var(--body-sm-font-size);
+}

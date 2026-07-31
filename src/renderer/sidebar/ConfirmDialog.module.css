@@ -1,0 +1,117 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  padding: var(--spacer-24);
+  animation: cdFadeIn 0.15s ease;
+}
+@keyframes cdFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal {
+  width: 380px;
+  max-width: 100%;
+  background: var(--bg-base-default);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-14, 14px);
+  padding: var(--spacer-24, 24px);
+  box-shadow:
+    0 20px 48px rgba(0, 0, 0, 0.36),
+    0 4px 12px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--spacer-12, 12px);
+  animation: cdSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes cdSlideIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background: var(--status-error-surface-l1);
+  color: var(--status-error-default);
+}
+
+.title {
+  font-size: var(--body-base-font-size, 16px);
+  font-weight: var(--font-weight-strong);
+  color: var(--text-default);
+  margin: 0;
+}
+
+.message {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+  white-space: pre-line;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacer-8);
+  width: 100%;
+  margin-top: var(--spacer-8);
+}
+
+.btnGhost {
+  height: 36px;
+  padding: 0 var(--spacer-16);
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  cursor: pointer;
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.btnGhost:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.btnPrimary {
+  height: 36px;
+  padding: 0 var(--spacer-18, 18px);
+  background: var(--bg-brand);
+  color: var(--icon-onbrand);
+  border: none;
+  border-radius: var(--radius-8);
+  cursor: pointer;
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  transition: background 0.12s ease;
+}
+.btnPrimary:hover { background: var(--bg-brand-hover); }
+
+.btnDanger {
+  height: 36px;
+  padding: 0 var(--spacer-18, 18px);
+  background: var(--status-error-default);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-8);
+  cursor: pointer;
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  transition: filter 0.12s ease;
+}
+.btnDanger:hover { filter: brightness(0.92); }

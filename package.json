@@ -1,0 +1,52 @@
+{
+  "name": "pi-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Desktop shell for Pi AI coding agent",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "build:electron": "tsc -p tsconfig.node.json && electron-builder",
+    "preview": "vite preview",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@lobehub/icons": "^5.15.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.9",
+    "extract-zip": "^2.0.1",
+    "highlight.js": "^11.11.1",
+    "i18next": "^26.3.6",
+    "lucide-react": "^0.511.0",
+    "mermaid": "^11.16.0",
+    "next-themes": "^0.4.6",
+    "node-pty": "^1.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-i18next": "^17.0.11",
+    "react-markdown": "^9.0.3",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "zustand": "^5.0.5"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "electron": "^35.0.0",
+    "electron-builder": "^25.1.8",
+    "electron-rebuild": "^3.2.9",
+    "typescript": "^5.9.3",
+    "vite": "^6.3.5",
+    "vite-plugin-electron": "^1.1.0",
+    "vite-plugin-electron-renderer": "^1.0.0"
+  }
+}

@@ -1,0 +1,13 @@
+.workbench {
+  display: grid;
+  grid-template-rows: 36px 1fr;
+  height: 100vh;
+  background: var(--bg-base-default);
+  color: var(--text-default);
+}
+
+.body {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  overflow: hidden;
+}

@@ -1,0 +1,132 @@
+.page {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: var(--spacer-32) var(--spacer-24);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-24);
+}
+
+.loading {
+  padding: var(--spacer-32);
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+/* ── Section ── */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-8);
+}
+
+.sectionTitle {
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-default);
+  margin: 0;
+}
+
+.sectionDesc {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ── Number input ── */
+.field {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+}
+
+.input {
+  width: 160px;
+  padding: var(--spacer-10) var(--spacer-12);
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--text-default);
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.input:focus {
+  border-color: var(--border-brand);
+  box-shadow: 0 0 0 3px var(--bg-brand-disabled);
+}
+
+.unit {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-tertiary);
+}
+
+/* ── Toggle row ── */
+.toggleRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacer-10);
+  cursor: pointer;
+}
+
+.toggleRow input {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--bg-brand);
+  cursor: pointer;
+}
+
+.toggleLabel {
+  display: block;
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-default);
+  margin-bottom: 2px;
+}
+
+/* ── Hint ── */
+.hint {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  margin: 0;
+  padding: var(--spacer-10) var(--spacer-12);
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 8px;
+}
+
+/* ── Save button ── */
+.actions {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: var(--spacer-4);
+}
+
+.saveBtn {
+  padding: var(--spacer-10) var(--spacer-24);
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-brand);
+  color: var(--text-onbrand);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.saveBtn:hover:not(:disabled) {
+  background: var(--bg-brand-hover);
+}
+
+.saveBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.saveBtnSuccess {
+  background: #16a34a;
+}

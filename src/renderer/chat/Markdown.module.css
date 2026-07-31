@@ -1,0 +1,161 @@
+.markdown {
+  font-size: var(--body-base-font-size);
+  line-height: var(--body-base-line-height);
+  color: var(--text-default);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.markdown :global(p) {
+  margin: 0 0 var(--spacer-8);
+}
+
+.markdown :global(p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown :global(h1) {
+  font-size: var(--heading-sm-font-size);
+  line-height: var(--heading-sm-line-height);
+  font-weight: var(--font-weight-strong);
+  margin: var(--spacer-12) 0 var(--spacer-8);
+}
+
+.markdown :global(h2) {
+  font-size: var(--heading-xs-font-size);
+  line-height: var(--heading-xs-line-height);
+  font-weight: var(--font-weight-strong);
+  margin: var(--spacer-12) 0 var(--spacer-6);
+}
+
+.markdown :global(h3) {
+  font-size: var(--body-base-font-size);
+  line-height: var(--body-base-line-height);
+  font-weight: var(--font-weight-strong);
+  margin: var(--spacer-10) 0 var(--spacer-6);
+}
+
+.markdown :global(ul),
+.markdown :global(ol) {
+  margin: 0 0 var(--spacer-8);
+  padding-left: var(--spacer-24);
+}
+
+.markdown :global(li) {
+  margin: var(--spacer-2) 0;
+}
+
+.markdown :global(a) {
+  color: var(--text-brand);
+  text-decoration: underline;
+}
+
+.markdown :global(blockquote) {
+  margin: 0 0 var(--spacer-8);
+  padding: var(--spacer-4) var(--spacer-12);
+  border-left: 3px solid var(--border-neutral-l2);
+  color: var(--text-secondary);
+}
+
+.markdown :global(table) {
+  border-collapse: collapse;
+  margin: var(--spacer-8) 0;
+  width: 100%;
+}
+
+.markdown :global(th),
+.markdown :global(td) {
+  border: 1px solid var(--border-neutral-l1);
+  padding: var(--spacer-4) var(--spacer-8);
+  text-align: left;
+}
+
+.markdown :global(hr) {
+  border: none;
+  border-top: 1px solid var(--border-neutral-l1);
+  margin: var(--spacer-12) 0;
+}
+
+.inlineCode {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  background: var(--bg-overlay-l2);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-4);
+  padding: 1px 4px;
+}
+
+.codeBlock {
+  margin: var(--spacer-10) 0;
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  overflow: hidden;
+  background: var(--bg-base-default);
+}
+
+.codeHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacer-4) var(--spacer-10);
+  background: var(--bg-base-tertiary);
+  border-bottom: 1px solid var(--border-neutral-l1);
+}
+
+.codeLang {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.codeCopy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+  cursor: pointer;
+  padding: 2px var(--spacer-6);
+  border-radius: var(--radius-4);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.codeCopy:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.codePre {
+  margin: 0;
+  padding: var(--spacer-12);
+  overflow-x: auto;
+  background: var(--bg-base-default);
+}
+
+.codePre code {
+  font-family: var(--font-family-mono);
+  font-size: var(--code-terminal-font-size);
+  line-height: var(--code-terminal-line-height);
+  /* leave token colors to the highlight.js theme (token spans win over inherited) */
+  color: inherit;
+  white-space: pre;
+}
+
+.mermaid {
+  margin: var(--spacer-10) 0;
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+  background: var(--bg-base-default);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  padding: var(--spacer-12);
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}

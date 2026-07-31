@@ -1,0 +1,121 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: var(--bg-base-default);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 32px;
+  border-bottom: 1px solid var(--border-neutral-l1);
+  flex-shrink: 0;
+  min-height: 64px;
+  gap: 16px;
+  background: var(--bg-base-default);
+}
+
+.titleBlock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.titleIcon {
+  color: var(--text-brand);
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: var(--font-weight-strong);
+  color: var(--text-default);
+  margin: 0;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.count {
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: var(--font-weight-regular);
+  flex-shrink: 0;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.importBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-overlay-l1);
+  color: var(--text-default);
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  border-radius: var(--radius-6);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.importBtn:hover:not(:disabled) {
+  background: var(--bg-overlay-l2);
+  border-color: var(--border-default);
+}
+
+.importBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.closeBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--icon-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-6);
+  flex-shrink: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.closeBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+}
+
+.contentBody {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pageBody {
+  width: 100%;
+  max-width: 880px;
+  height: 100%;
+  margin: 0 auto;
+  padding: 28px 32px 32px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  box-sizing: border-box;
+}

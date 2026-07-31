@@ -1,0 +1,449 @@
+.sidebar {
+  width: 260px;
+  height: 100%;
+  background: var(--bg-base-default);
+  border-right: 1px solid var(--border-neutral-l1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  padding: var(--spacer-10) var(--spacer-12) var(--spacer-6) var(--spacer-12);
+}
+
+.headerIcons {
+  margin-left: auto;
+  display: flex;
+  gap: var(--spacer-4);
+}
+
+.headerIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--icon-tertiary);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-4);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.headerIcon:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+}
+
+/* ── Action buttons list ── */
+.navList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 var(--spacer-12) 0 var(--spacer-24);
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 32px;
+  padding: 0 var(--spacer-10) 0 var(--spacer-14);
+  border: none;
+  background: transparent;
+  color: var(--text-default);
+  border-radius: var(--radius-6);
+  cursor: pointer;
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.navItem:hover {
+  background: var(--bg-overlay-l2);
+}
+
+.navItemActive {
+  background: var(--bg-overlay-l3);
+  color: var(--text-default);
+}
+
+/* ── New session (primary action) ── */
+.newChatBtn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 36px;
+  margin-bottom: var(--spacer-8);
+  padding: 0 var(--spacer-10) 0 var(--spacer-14);
+  border: none;
+  background: transparent;
+  color: var(--text-default);
+  border-radius: var(--radius-6);
+  cursor: pointer;
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.newChatBtn:hover {
+  background: var(--bg-overlay-l2);
+}
+
+.newChatBtn svg {
+  flex-shrink: 0;
+}
+
+/* ── Content area ── */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--spacer-12) var(--spacer-12) var(--spacer-12) var(--spacer-24);
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: var(--body-sm-font-size);
+  text-align: center;
+  padding: var(--spacer-24);
+}
+
+/* ── Spaces section ── */
+.spacesSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-8);
+}
+
+.spacesHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--spacer-4);
+}
+
+.spacesTitle {
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+}
+
+/* Collapsible section title (chevron + label) */
+.spacesTitleBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-4);
+}
+
+.spacesTitleBtn:hover .spacesTitle {
+  color: var(--text-default);
+}
+
+.spacesHeaderBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-4);
+}
+
+.spacesHeaderBtn:hover {
+  color: var(--text-default);
+}
+
+.spacesAddBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--icon-tertiary);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-4);
+}
+
+.spacesAddBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+}
+
+.spacesList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.spaceItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.spaceHeader {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: var(--spacer-4);
+  padding: 4px var(--spacer-8) 4px var(--spacer-4);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-md-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  border-radius: var(--radius-4);
+}
+
+.spaceHeader:hover {
+  background: var(--bg-overlay-l1);
+  color: var(--text-default);
+}
+
+.spaceName {
+  flex: 0 1 auto;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+}
+
+.spaceChevron {
+  color: var(--icon-tertiary);
+  flex-shrink: 0;
+}
+
+.spaceFolderIcon {
+  color: var(--icon-tertiary);
+  flex-shrink: 0;
+}
+
+.spaceCount {
+  color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-regular, 400);
+  padding-left: var(--spacer-4);
+  margin-left: auto;
+}
+
+/* Per-folder "new session" button; revealed on folder-row hover. */
+.spaceAddBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--icon-tertiary);
+  border-radius: var(--radius-4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.spaceHeader:hover .spaceAddBtn,
+.spaceHeader:focus-within .spaceAddBtn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.spaceAddBtn:hover {
+  background: var(--bg-overlay-l3);
+  color: var(--icon-default);
+}
+
+.spaceSessions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Sessions inside a 空间 group: align their text with the folder name above
+ * (4px header padding + 16px Folder icon + 4px gap), creating a clear
+ * hierarchical indent instead of starting from the icon edge. */
+.spaceSessions .sessionItem {
+  padding-left: calc(var(--spacer-4) + 16px + var(--spacer-4));
+}
+
+.sessionItem {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  width: 100%;
+  padding: 5px var(--spacer-8);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-4);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.sessionItem:hover {
+  background: var(--bg-overlay-l1);
+  color: var(--text-default);
+}
+
+/* ── "⋯" menu trigger (replaces the old inline action buttons) ── */
+.sessionMenuBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--icon-tertiary);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.sessionItem:hover .sessionMenuBtn,
+.sessionItem:focus-within .sessionMenuBtn,
+.sessionMenuBtnOpen {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sessionMenuBtn:hover {
+  background: var(--bg-overlay-l3);
+  color: var(--text-default);
+}
+
+/* Transparent full-screen catcher that closes the menu on any outside click. */
+.menuOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+/* Dropdown anchored to the bottom-right of the session row. */
+.sessionMenu {
+  position: absolute;
+  right: 4px;
+  top: calc(100% - 2px);
+  min-width: 152px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--bg-base-default);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.sessionMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-4);
+}
+
+.sessionMenuItem:hover {
+  background: var(--bg-overlay-l2);
+}
+
+.sessionMenuItemDanger {
+  color: #e5484d;
+}
+
+.sessionMenuItemDanger:hover {
+  background: rgba(229, 72, 77, 0.12);
+}
+
+/* Inline rename editor shown in place of the title. */
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--body-xs-font-size);
+  padding: 2px 6px;
+  border: 1px solid var(--border-brand);
+  border-radius: var(--radius-4);
+  background: var(--bg-base-secondary);
+  color: var(--text-default);
+  outline: none;
+}
+
+.sessionItemActive {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+  font-weight: var(--font-weight-medium);
+}
+
+.sessionTitle {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+}
+
+.sessionTime {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+}
+
+.sessionSpinner {
+  flex: 0 0 auto;
+  color: var(--text-brand);
+  animation: session-spin 0.9s linear infinite;
+}
+
+@keyframes session-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.sessionSparkle {
+  color: var(--text-brand);
+  font-size: 11px;
+}

@@ -1,0 +1,81 @@
+.chatPanel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.messageList {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--spacer-16) var(--spacer-24);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-16);
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+  gap: var(--spacer-12);
+}
+
+.heroTitle {
+  font-family: var(--font-family-heading);
+  font-size: var(--heading-xl-font-size, 24px);
+  font-weight: var(--font-weight-strong);
+  color: var(--text-default);
+}
+
+.heroSub {
+  font-size: var(--body-base-font-size);
+  color: var(--text-secondary);
+}
+
+.brand {
+  color: var(--text-brand);
+}
+
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacer-10);
+  margin-top: var(--spacer-8);
+}
+
+.suggestionsLabel {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--spacer-8);
+  max-width: 560px;
+}
+
+.chip {
+  padding: var(--spacer-8) var(--spacer-12);
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.chip:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+  border-color: var(--border-brand);
+}

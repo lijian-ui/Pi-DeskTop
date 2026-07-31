@@ -1,0 +1,185 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  padding: var(--spacer-4) var(--spacer-8);
+  flex-shrink: 0;
+}
+
+.backBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--icon-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-4);
+}
+
+.backBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.title {
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  margin: 0 var(--spacer-8) var(--spacer-6);
+  padding: 4px var(--spacer-8);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+  background: var(--bg-overlay-l1);
+  flex-shrink: 0;
+}
+
+.searchIcon {
+  color: var(--icon-tertiary);
+  flex-shrink: 0;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+}
+
+.searchInput::placeholder {
+  color: var(--text-tertiary);
+}
+
+.pathBar {
+  margin: 0 var(--spacer-8) var(--spacer-6);
+  color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* show the tail (deepest segments) when truncated */
+  text-align: left;
+  flex-shrink: 0;
+}
+
+.tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 var(--spacer-4) var(--spacer-8);
+}
+
+.node {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  width: 100%;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: var(--spacer-6);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+  border-radius: var(--radius-4);
+  text-align: left;
+}
+
+.node:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.nodeActive {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.nodeName {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chevron {
+  color: var(--icon-tertiary);
+  flex-shrink: 0;
+}
+
+.iconFolder {
+  color: #e8b339;
+  flex-shrink: 0;
+}
+
+.iconCode {
+  color: #6a9ff5;
+  flex-shrink: 0;
+}
+
+.iconJson {
+  color: #cbb047;
+  flex-shrink: 0;
+}
+
+.iconText {
+  color: var(--icon-secondary);
+  flex-shrink: 0;
+}
+
+.iconImage {
+  color: #9d7cd8;
+  flex-shrink: 0;
+}
+
+.iconFile {
+  color: var(--icon-tertiary);
+  flex-shrink: 0;
+}
+
+.loadingRow,
+.errorRow,
+.truncatedRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  padding-top: 3px;
+  padding-bottom: 3px;
+  color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+}
+
+.errorRow {
+  color: var(--status-error-default);
+}
+
+.spinner {
+  animation: fmSpin 0.9s linear infinite;
+}
+
+@keyframes fmSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

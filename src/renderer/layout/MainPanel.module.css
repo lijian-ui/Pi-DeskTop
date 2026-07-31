@@ -1,0 +1,48 @@
+.mainPanel {
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-base-default);
+  position: relative;
+}
+
+.chatRow {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chatArea {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.expandBtn {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-6);
+  background: var(--bg-base-secondary);
+  color: var(--icon-secondary);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.expandBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+  border-color: var(--border-brand);
+}

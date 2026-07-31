@@ -1,0 +1,92 @@
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--bg-base-default);
+  color: var(--text-default);
+  font-family: var(--font-family-default);
+  font-size: var(--body-base-font-size);
+  line-height: var(--body-base-line-height);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-overlay-l3);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--bg-overlay-l4);
+}
+
+::selection {
+  background: var(--bg-overlay-l3);
+  color: var(--text-default);
+}
+
+input,
+textarea,
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--code-link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Inline code (e.g. `foo` inside a chat message).  EXCLUDE:
+   - `pre code` — already gets `background: none` from the rule below.
+   - `.hljs`     — used by FilePreviewPanel per-line rows; its background
+                   must stay identical to the panel main bg. */
+code:not(pre code):not(.hljs) {
+  font-family: var(--font-family-mono);
+  font-size: var(--code-terminal-font-size);
+  background: var(--bg-base-tertiary);
+  padding: 2px 6px;
+  border-radius: var(--radius-4);
+}
+
+pre {
+  font-family: var(--font-family-mono);
+  font-size: var(--code-terminal-font-size);
+  line-height: var(--code-terminal-line-height);
+  background: var(--bg-base-tertiary);
+  padding: var(--spacer-12);
+  border-radius: var(--radius-6);
+  overflow-x: auto;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}

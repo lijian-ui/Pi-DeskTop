@@ -1,0 +1,125 @@
+/* ── Bash approval popup (rendered inside ChatComposer, above input) ── */
+
+.popup {
+  width: 100%;
+  margin: 0 0 var(--spacer-8);
+  background: #ffffff;
+  border: 1px solid #e2e6f2;
+  border-radius: 12px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.08),
+    0 1px 3px rgba(0, 0, 0, 0.05);
+  animation: slideDown 0.18s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.cwdTag {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  padding: 2px 10px;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hint {
+  font-size: 13px;
+  color: #64748b;
+  margin: 0;
+}
+
+.command {
+  margin: 0;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e6f2;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 13px;
+  color: #334155;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.actions button {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.deny {
+  background: #f43f5e;
+  color: #ffffff;
+  border-color: #f43f5e;
+}
+
+.deny:hover {
+  background: #e11d48;
+  border-color: #e11d48;
+}
+
+.allow {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+}
+
+.allow:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.allowSession {
+  background: #16a34a;
+  color: #ffffff;
+  border-color: #16a34a;
+}
+
+.allowSession:hover {
+  background: #15803d;
+  border-color: #15803d;
+}

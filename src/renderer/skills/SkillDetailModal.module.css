@@ -1,0 +1,271 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 32px;
+  box-sizing: border-box;
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 840px;
+  min-height: 55vh;
+  max-height: 94vh;
+  background: var(--bg-base-default);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-12);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-neutral-l1);
+  flex-shrink: 0;
+}
+
+.titleBlock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.itemName {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-default);
+}
+
+.closeBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--icon-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-6);
+  flex-shrink: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.closeBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+}
+
+.body {
+  padding: 18px 22px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.summary {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.meta {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: var(--bg-overlay-l1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-8);
+}
+
+.metaTitle {
+  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metaList {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.metaRow {
+  display: flex;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.metaKey {
+  margin: 0;
+  min-width: 180px;
+  max-width: 240px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+.metaVal {
+  margin: 0;
+  color: var(--text-default);
+  word-break: break-all;
+}
+
+.filePath {
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.filePathLabel {
+  font-weight: var(--font-weight-medium);
+}
+
+.filePath code,
+.md :global(code) {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-overlay-l2);
+  padding: 1px 5px;
+  border-radius: var(--radius-4);
+  color: var(--text-default);
+}
+
+/* ── Markdown body ── */
+.md {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-default);
+  /* Long URLs / unbroken tokens must wrap instead of being clipped by the
+     modal's overflow:hidden, otherwise content looks "truncated". */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.md :global(h1),
+.md :global(h2),
+.md :global(h3),
+.md :global(h4) {
+  margin: 18px 0 10px;
+  line-height: 1.3;
+  color: var(--text-default);
+}
+
+.md :global(h1) { font-size: 20px; }
+.md :global(h2) { font-size: 17px; }
+.md :global(h3) { font-size: 15px; }
+
+.md :global(p) {
+  margin: 10px 0;
+}
+
+.md :global(a) {
+  color: var(--text-brand);
+  text-decoration: underline;
+}
+
+.md :global(ul),
+.md :global(ol) {
+  margin: 10px 0;
+  padding-left: 22px;
+}
+
+.md :global(li) {
+  margin: 4px 0;
+}
+
+.md :global(blockquote) {
+  margin: 12px 0;
+  padding: 4px 14px;
+  border-left: 3px solid var(--border-default);
+  color: var(--text-secondary);
+}
+
+.md :global(pre) {
+  margin: 12px 0;
+  padding: 12px 14px;
+  background: var(--bg-overlay-l2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-8);
+  overflow-x: auto;
+}
+
+.md :global(pre code) {
+  background: transparent;
+  padding: 0;
+}
+
+.md :global(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.md :global(th),
+.md :global(td) {
+  border: 1px solid var(--border-subtle);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.md :global(hr) {
+  border: none;
+  border-top: 1px solid var(--border-neutral-l1);
+  margin: 16px 0;
+}
+
+.md :global(img) {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ── Badges (shared look with SkillsPanel) ── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: var(--font-weight-medium);
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.badge_user {
+  background: var(--bg-brand-subtle, rgba(99, 102, 241, 0.16));
+  color: var(--text-brand);
+}
+
+.badge_project {
+  background: var(--bg-success-subtle, rgba(34, 197, 94, 0.16));
+  color: var(--text-success, #16a34a);
+}
+
+.badge_path {
+  background: var(--bg-overlay-l2);
+  color: var(--text-secondary);
+}
+
+.badgeModelOnly {
+  background: var(--bg-warning-subtle, rgba(245, 158, 11, 0.18));
+  color: var(--text-warning, #d97706);
+}

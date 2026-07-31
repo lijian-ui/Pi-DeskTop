@@ -1,0 +1,268 @@
+:root {
+  --radius-2: 2px;
+  --radius-4: 4px;
+  --radius-6: 6px;
+  --radius-8: 8px;
+  --radius-10: 10px;
+  --radius-full: 9999px;
+
+  --spacer-0: 0px;
+  --spacer-4: 4px;
+  --spacer-6: 6px;
+  --spacer-8: 8px;
+  --spacer-10: 10px;
+  --spacer-12: 12px;
+  --spacer-14: 14px;
+  --spacer-16: 16px;
+  --spacer-24: 24px;
+  --spacer-32: 32px;
+  --spacer-40: 40px;
+
+  --font-family-default: "SF Pro Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-family-heading: "SF Pro", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-family-mono: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+  --font-weight-default: 400;
+  --font-weight-code: 450;
+  --font-weight-medium: 500;
+  --font-weight-strong: 600;
+
+  --body-xs-font-size: 10px;
+  --body-xs-line-height: 14px;
+  --body-sm-font-size: 11px;
+  --body-sm-line-height: 16px;
+  --body-md-font-size: 12px;
+  --body-md-line-height: 18px;
+  --body-base-font-size: 13px;
+  --body-base-line-height: 20px;
+
+  --heading-3xs-font-size: 11px;
+  --heading-3xs-line-height: 16px;
+  --heading-2xs-font-size: 12px;
+  --heading-2xs-line-height: 18px;
+  --heading-xs-font-size: 13px;
+  --heading-xs-line-height: 20px;
+  --heading-sm-font-size: 16px;
+  --heading-sm-line-height: 24px;
+  --heading-md-font-size: 20px;
+  --heading-md-line-height: 28px;
+
+  --code-editor-font-size: 13px;
+  --code-editor-line-height: 20px;
+  --code-terminal-font-size: 12px;
+  --code-terminal-line-height: 18px;
+  --code-text: #E0E3EE;
+  --code-doc: #7F838C;
+  --code-link: #3C7EFF;
+  --code-number: #F48CCA;
+  --code-action: #B38CFF;
+  --code-function: #F29D79;
+  --code-constant: #80BBFF;
+  --code-parameter: #82D99F;
+  --code-attribute: #DED47E;
+  --code-tag: #F2858C;
+
+  --bg-base-default: #25282E;
+  --bg-base-secondary: #30343B;
+  --bg-base-tertiary: #3A3F47;
+  --bg-overlay-l1: rgba(224, 226, 242, 0.04);
+  --bg-overlay-l2: rgba(224, 226, 242, 0.06);
+  --bg-overlay-l3: rgba(224, 226, 242, 0.08);
+  --bg-overlay-l4: rgba(224, 226, 242, 0.12);
+  --bg-menu: #2A2E34;
+  --bg-tooltip: #25282E;
+
+  --bg-brand: #32F08C;
+  --bg-brand-hover: #0FDC78;
+  --bg-brand-disabled: rgba(50, 240, 140, 0.2);
+  --bg-brand-popup: rgba(50, 240, 140, 0.12);
+
+  --text-default: #D1D3DB;
+  --text-default-hover: #F5F9FE;
+  --text-default-active: #F5F9FE;
+  --text-secondary: #9599A6;
+  --text-secondary-hover: #D1D3DB;
+  --text-tertiary: #666B75;
+  --text-disabled: #666B75;
+  --text-onbrand: #0C0C0D;
+
+  --text-brand: #32F08C;
+  --text-brand-hover: #0FDC78;
+
+  --icon-default: #D1D3DB;
+  --icon-default-hover: #F5F9FE;
+  --icon-secondary: #9599A6;
+  --icon-secondary-hover: #D1D3DB;
+  --icon-tertiary: #666B75;
+  --icon-onbrand: #0C0C0D;
+  --icon-brand: #32F08C;
+  --icon-brand-hover: #0FDC78;
+
+  --border-neutral-l1: rgba(224, 226, 242, 0.1);
+  --border-neutral-l2: rgba(224, 226, 242, 0.16);
+  --border-neutral-l3: rgba(224, 226, 242, 0.2);
+  --border-contrast: #FFFFFF;
+  --border-brand: #32F08C;
+
+  --status-primary-default: #387BFF;
+  --status-success-default: #33C192;
+  --status-alert-default: #D29D00;
+  --status-warning-default: #D27E24;
+  --status-error-default: #F65A5A;
+  --status-error-surface-l1: rgba(246, 70, 70, 0.18);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Light theme — overrides only the color tokens above.
+   `:root` keeps the dark values as the default/fallback, so the app
+   renders dark until next-themes sets `data-theme="light"` on <html>.
+   ════════════════════════════════════════════════════════════════ */
+[data-theme="light"] {
+  --bg-base-default: #FFFFFF;
+  --bg-base-secondary: #F4F5F7;
+  --bg-base-tertiary: #E9EBEF;
+  --bg-overlay-l1: rgba(15, 23, 42, 0.04);
+  --bg-overlay-l2: rgba(15, 23, 42, 0.06);
+  --bg-overlay-l3: rgba(15, 23, 42, 0.08);
+  --bg-overlay-l4: rgba(15, 23, 42, 0.12);
+  --bg-menu: #FFFFFF;
+  --bg-tooltip: #FFFFFF;
+
+  --bg-brand: #14C46A;
+  --bg-brand-hover: #0FB35F;
+  --bg-brand-disabled: rgba(20, 196, 106, 0.2);
+  --bg-brand-popup: rgba(20, 196, 106, 0.12);
+
+  --text-default: #1A1B1D;
+  --text-default-hover: #000000;
+  --text-default-active: #000000;
+  --text-secondary: #5B606B;
+  --text-secondary-hover: #1A1B1D;
+  --text-tertiary: #8A8F99;
+  --text-disabled: #AEB3BD;
+  --text-onbrand: #FFFFFF;
+
+  --text-brand: #0E9E54;
+  --text-brand-hover: #0C8A49;
+
+  --icon-default: #3A3D44;
+  --icon-default-hover: #1A1B1D;
+  --icon-secondary: #5B606B;
+  --icon-secondary-hover: #1A1B1D;
+  --icon-tertiary: #8A8F99;
+  --icon-onbrand: #FFFFFF;
+  --icon-brand: #0E9E54;
+  --icon-brand-hover: #0C8A49;
+
+  --border-neutral-l1: rgba(15, 23, 42, 0.08);
+  --border-neutral-l2: rgba(15, 23, 42, 0.12);
+  --border-neutral-l3: rgba(15, 23, 42, 0.18);
+  --border-contrast: #0C0C0D;
+  --border-brand: #14C46A;
+
+  --status-primary-default: #2D6BE0;
+  --status-success-default: #1FA97A;
+  --status-alert-default: #B8860B;
+  --status-warning-default: #C26A1E;
+  --status-error-default: #DC3D3D;
+  --status-error-surface-l1: rgba(220, 61, 61, 0.12);
+
+  --code-text: #24292F;
+  --code-doc: #6B7280;
+  --code-link: #1A56DB;
+  --code-number: #B5179E;
+  --code-action: #6E2BC4;
+  --code-function: #C2410C;
+  --code-constant: #1D6FD0;
+  --code-parameter: #15803D;
+  --code-attribute: #9A7B00;
+  --code-tag: #C0392B;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   In-session search — inline match highlighting (CSS Custom Highlight API).
+   Mirrors browser Ctrl+F: every match gets a soft background, the active
+   match (current navigation position) a stronger one. Theme-agnostic.
+   ════════════════════════════════════════════════════════════════ */
+::highlight(search-mark) {
+  background-color: rgba(255, 214, 0, 0.42);
+  border-radius: 2px;
+}
+
+::highlight(search-mark-active) {
+  background-color: rgba(255, 140, 0, 0.78);
+  color: #0C0C0D;
+  border-radius: 2px;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   highlight.js token colours — theme-aware via the --code-* variables
+   defined above.  These rules apply EVERYWHERE the app renders hljs-
+   highlighted code (FilePreviewPanel, Markdown code blocks, anywhere
+   else).  No highlight.js CSS theme is imported anywhere — we provide
+   our own token colours so they follow the app theme automatically and
+   never leave stale white backgrounds behind when switching themes.
+   ════════════════════════════════════════════════════════════════ */
+.hljs { color: var(--code-text); }
+
+/* Comments / documentation */
+.hljs-comment,
+.hljs-quote,
+.hljs-doctag,
+.hljs-meta,
+.hljs-formula,
+.hljs-code { color: var(--code-doc); }
+
+/* Keywords / operators / selectors */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-template-tag { color: var(--code-action); }
+
+/* Strings / regex / attributes */
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-attr,
+.hljs-literal,
+.hljs-template-variable,
+.hljs-bullet { color: var(--code-attribute); }
+
+/* Numbers / booleans / symbols */
+.hljs-number,
+.hljs-symbol { color: var(--code-number); }
+
+/* Functions / titles / sections */
+.hljs-built_in,
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-title.class_.inherited__,
+.hljs-section { color: var(--code-function); }
+
+/* Types / constants / properties / variables */
+.hljs-type,
+.hljs-property,
+.hljs-constant,
+.hljs-variable,
+.hljs-variable.language_,
+.hljs-operator,
+.hljs-punctuation { color: var(--code-constant); }
+
+/* Parameters */
+.hljs-params { color: var(--code-parameter); }
+
+/* Tags / names / deletions */
+.hljs-name,
+.hljs-tag,
+.hljs-deletion { color: var(--code-tag); }
+
+/* Links */
+.hljs-link { color: var(--code-link); }
+
+/* Emphasis / strong */
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
