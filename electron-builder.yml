@@ -7,6 +7,11 @@ directories:
 asar: true
 asarUnpack:
   - "node_modules/node-pty/**/*"
+# node-pty ships prebuilt binaries (prebuilds/win32-x64/pty.node etc.) and is
+# N-API (ABI-stable), so it does NOT need to be rebuilt for Electron.
+# Without this, electron-builder runs @electron/rebuild → node-gyp → Python,
+# which fails on Python 3.12+ (distutils removed from stdlib).
+npmRebuild: false
 files:
   - dist/**/*
   - resources/**/*
@@ -23,9 +28,13 @@ mac:
     - dmg
     - zip
 win:
+  icon: resources/pi-logo.ico
   target:
     - nsis
     - portable
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
 linux:
   target:
     - AppImage

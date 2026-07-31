@@ -311,6 +311,10 @@ export default function ChatComposer() {
     preloadDir(cwd).catch(() => {});
   }, [cwd]);
 
+  // ── Model selector state (declared early so the preload effect below can
+  // reference setAvailableModels without a forward-use lint warning) ──
+  const [availableModels, setAvailableModels] = useState<ModelItem[]>([]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -324,7 +328,8 @@ export default function ChatComposer() {
     return () => {
       cancelled = true;
     };
-  }, [cwd]);
+    // Model list is global — independent of cwd.
+  }, []);
 
   // Apply a skill command / suggestion dropped into the composer from
   // elsewhere (e.g. the Skills panel "click to invoke" action, or an empty-state
@@ -344,7 +349,7 @@ export default function ChatComposer() {
 
   // ── Model selector state ──
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [availableModels, setAvailableModels] = useState<ModelItem[]>([]);
+
   const [loadingModels, setLoadingModels] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 

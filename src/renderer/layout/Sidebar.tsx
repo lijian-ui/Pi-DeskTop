@@ -227,13 +227,16 @@ function SessionsSection({
   const openFileManager = useUIStore((s) => s.openFileManager);
 
   // A session is a "task" (no workspace) when it has no cwd or its cwd is the
-  // chat-only fallback directory. Stable identity (depends only on the
-  // chat-only dir) so the memos below satisfy exhaustive-deps without
-  // recomputing on every render.
+  // chat-only fallback directory. Precompute the normalized chat-only cwd so
+  // we don't re-normalize it once per session on every filter pass.
+  const normalizedChatOnlyCwd = useMemo(
+    () => normalizeCwd(chatOnlyCwd),
+    [chatOnlyCwd],
+  );
   const isTask = useCallback(
     (s: SessionInfo): boolean =>
-      !s.cwd || normalizeCwd(s.cwd) === normalizeCwd(chatOnlyCwd),
-    [chatOnlyCwd]
+      !s.cwd || normalizeCwd(s.cwd) === normalizedChatOnlyCwd,
+    [normalizedChatOnlyCwd],
   );
   const taskSessions = useMemo(
     () => sessions.filter(isTask),

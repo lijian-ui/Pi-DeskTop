@@ -26,6 +26,7 @@ export interface UpdateState {
 
 let currentState: UpdateState = { status: "idle" };
 let updateCheckTimer: NodeJS.Timeout | null = null;
+let updateCheckInterval: NodeJS.Timeout | null = null;
 
 /** Whether the current executable supports auto-update. In dev (electron .)
  * autoUpdater does not have a real update feed; only check in packaged builds. */
@@ -120,13 +121,20 @@ export function setupAutoUpdater(): void {
   updateCheckTimer = setTimeout(() => {
     checkForUpdates().catch(() => {});
   }, UPDATE_CHECK_DELAY);
-  const interval = setInterval(() => {
+  updateCheckInterval = setInterval(() => {
     checkForUpdates().catch(() => {});
   }, UPDATE_CHECK_INTERVAL);
-  interval.unref();
+  updateCheckInterval.unref();
 }
 
 /** Clean up timers (called on app quit). */
 export function disposeAutoUpdater(): void {
-  if (updateCheckTimer) clearTimeout(updateCheckTimer);
+  if (updateCheckTimer) {
+    clearTimeout(updateCheckTimer);
+    updateCheckTimer = null;
+  }
+  if (updateCheckInterval) {
+    clearInterval(updateCheckInterval);
+    updateCheckInterval = null;
+  }
 }

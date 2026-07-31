@@ -21,6 +21,17 @@ import { exportSessionToHtmlFile } from "./session-export";
 import { readSoul, writeSoul } from "./soul";
 import { soulExtension } from "./soul-extension";
 
+// ── Agent data directory (per-platform) ──────────────────────────────────
+// Pi SDK defaults to ~/.pi/agent, a hidden folder macOS Finder hides. On macOS
+// we redirect the data dir to ~/Documents/PiAgent so it is easy to find; other
+// platforms keep the SDK default (~/.pi/agent).
+// The SDK's getAgentDir() reads PI_CODING_AGENT_DIR (config.js:412), so setting
+// it here (before any SDK call) makes every path — settings.json, auth.json,
+// sessions/, skills/, soul.md — follow the new location.
+if (process.platform === "darwin" && !process.env.PI_CODING_AGENT_DIR) {
+  process.env.PI_CODING_AGENT_DIR = join(homedir(), "Documents", "PiAgent");
+}
+
 /** A skill as surfaced to the renderer (stable subset of SDK Skill). */
 export interface SkillInfo {
   name: string;
@@ -255,6 +266,18 @@ const COMPACTION_SUMMARY_OVERHEAD_TOKENS = 500;
 // in the session file name as <timestamp>_<sessionId>.jsonl).
 // ─────────────────────────────────────────────────────────────────────────
 const MAX_CONTEXT_USAGE_ENTRIES = 500;
+
+/** Auto-deny a bash approval if the renderer doesn't respond within this time.
+ *  Prevents the agent loop from hanging forever if the window is closed,
+ *  crashes, or the user simply walks away from the modal. */
+const BASH_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+/** Cap on per-unit denied-command tracking entries. The denialCounts Map
+ *  grows on every rejected bash command and is never fully drained (only
+ *  allowed commands are deleted), so without a cap a long session with many
+ *  distinct denied commands would leak memory. When the cap is hit we clear
+ *  the oldest entries (FIFO — Map preserves insertion order). */
+const MAX_DENIAL_COUNTS = 500;
 
 interface ContextUsageEntry {
   tokens: number;
@@ -518,7 +541,7 @@ interface RuntimeUnit {
   allowAllSession: boolean;
   pendingBashRequests: Map<
     number,
-    { resolve: (d: "allow" | "deny") => void; command: string }
+    { resolve: (d: "allow" | "deny") => void; command: string; timer: NodeJS.Timeout }
   >;
   /**
    * The model the user picked for this unit, persisted so it survives across
@@ -528,6 +551,9 @@ interface RuntimeUnit {
    */
   defaultModel: { provider: string; modelId: string } | null;
   denialCounts: Map<string, number>;
+  /** Pending retry timer for installToolGuardOn (cleared on dispose so a
+   *  destroyed unit is never re-touched by a stale callback). */
+  toolGuardTimer: NodeJS.Timeout | null;
 }
 
 export class PiDeskSessionManager {
@@ -550,16 +576,20 @@ export class PiDeskSessionManager {
    * focused cwd does NOT dispose other units; they keep streaming in the
    * background and stay resumable.
    */
-  private units: Map<string, RuntimeUnit> = new Map();
-  /**
-   * Cwd-bound SDK services cache. createAgentSessionServices() is EXPENSIVE:
-   * it synchronously scans skill/extension dirs, compiles TS extensions via
-   * jiti and reads AGENTS.md up the directory tree — several seconds of
-   * main-thread blocking. Services are cwd-bound, so we build them once per
-   * cwd and reuse for every session in that workspace. Invalidated on skill
-   * import / context-file change / provider change, keyed by cwd.
-   */
-  private servicesByCwd: Map<string, any> = new Map();
+   private units: Map<string, RuntimeUnit> = new Map();
+   /**
+    * Cwd-bound SDK services cache. createAgentSessionServices() is EXPENSIVE:
+    * it synchronously scans skill/extension dirs, compiles TS extensions via
+    * jiti and reads AGENTS.md up the directory tree — several seconds of
+    * main-thread blocking. Services are cwd-bound, so we build them once per
+    * cwd and reuse for every session in that workspace. Invalidated on skill
+    * import / context-file change / provider change, keyed by cwd.
+    *
+    * Stored as a Promise (single-flight): concurrent ensureUnit() calls for the
+    * same NEW cwd share one in-flight createAgentSessionServices() instead of
+    * racing and running the expensive build twice.
+    */
+   private servicesByCwd: Map<string, Promise<any>> = new Map();
   /**
    * Watchers for AGENTS.md/CLAUDE.md context files. The SDK reads these files
    * ONCE when services are created (resourceLoader.reload() snapshot), so a
@@ -569,7 +599,7 @@ export class PiDeskSessionManager {
    * relevant change invalidate servicesCache + reload the live session (same
    * invalidation path as skill import).
    */
-  private contextFileWatchers: FSWatcher[] = [];
+   private contextFileWatchers: Map<string, FSWatcher[]> = new Map();
   /**
    * Per-cwd debounce for context-file changes. A single shared timer was a
    * bug: two different workspaces touching AGENTS.md within 300ms would clear
@@ -680,8 +710,10 @@ export class PiDeskSessionManager {
     // Reuse cached cwd-bound services when available — this is what makes
     // "new task" instant instead of blocking the main process for seconds
     // (skill dir scans + jiti extension compilation are all synchronous).
-    let services = this.servicesByCwd.get(cwd) ?? null;
-    if (!services) {
+    // Single-flight: store the Promise so concurrent ensureUnit() calls for
+    // the same new cwd share one build instead of racing.
+    let servicesPromise = this.servicesByCwd.get(cwd);
+    if (!servicesPromise) {
       // Soul / persona: injected via the `soulExtension` inline extension
       // (before_agent_start event) so the soul text lands at the ABSOLUTE
       // BOTTOM of the fully assembled system prompt — after Pi's base
@@ -692,15 +724,16 @@ export class PiDeskSessionManager {
       // Hot-reload: the extension re-reads soul.md on EVERY turn, so edits
       // apply on the next message even without session.reload(). The
       // soul.md watcher/invalidation remains as harmless belt-and-braces.
-      services = await createAgentSessionServices({
+      servicesPromise = createAgentSessionServices({
         cwd,
         modelRuntime: this.modelRuntime!,
         resourceLoaderOptions: {
           extensionFactories: [soulExtension],
         },
       });
-      this.servicesByCwd.set(cwd, services);
+      this.servicesByCwd.set(cwd, servicesPromise);
     }
+    const services = await servicesPromise;
 
     const runtime = await createAgentSessionRuntime(
       async ({ sessionManager: sm, sessionStartEvent }) => ({
@@ -732,6 +765,7 @@ export class PiDeskSessionManager {
       pendingBashRequests: new Map(),
       denialCounts: new Map(),
       defaultModel: null,
+      toolGuardTimer: null,
     };
     this.units.set(cwd, unit);
     // Fresh SDK sessions activate only read/bash/edit/write by default; apply
@@ -761,49 +795,65 @@ export class PiDeskSessionManager {
    * cache and reload its live session. Watchers from all units accumulate in
    * `contextFileWatchers` and are all closed on dispose.
    */
-  private installContextWatchersFor(cwd: string): void {
-    const isContextFile = (name: string | null): boolean => {
-      if (!name) return false;
-      const n = name.toLowerCase();
-      return n === "agents.md" || n === "claude.md" || n === "soul.md";
-    };
+   private installContextWatchersFor(cwd: string): void {
+     // Close any previous watchers for this cwd (e.g. re-ensureUnit after
+     // services invalidation) so handles don't accumulate across rebuilds.
+     this.closeContextWatchersFor(cwd);
 
-    const dirs = new Set<string>();
-    dirs.add(getAgentDir()); // soul.md lives here
-    const root = resolve(cwd);
-    dirs.add(root); // AGENTS.md usually lives here
-    // Context files may ALSO sit in any ancestor of cwd (the SDK walks up).
-    // Only watch ancestors where such a file currently exists — a new
-    // AGENTS.md dropped into an empty ancestor won't be caught, which we
-    // accept: it keeps the watcher count bounded (previously EVERY directory
-    // from cwd up to the filesystem root was watched, ~10 handles per
-    // workspace, and up to that many again per extra workspace).
-    let dir = dirname(root);
-    while (dir !== dirname(dir)) {
-      try {
-        if (readdirSync(dir).some((n) => isContextFile(n))) dirs.add(dir);
-      } catch {
-        // Unreadable ancestor — skip it.
-      }
-      dir = dirname(dir);
-    }
+     const isContextFile = (name: string | null): boolean => {
+       if (!name) return false;
+       const n = name.toLowerCase();
+       return n === "agents.md" || n === "claude.md" || n === "soul.md";
+     };
 
-    for (const d of dirs) {
-      if (!existsSync(d)) continue;
-      try {
-        const watcher = watch(d, (_event, filename) => {
-          if (!isContextFile(filename)) return;
-          this.onContextFileChanged(cwd);
-        });
-        // Never keep the process alive because of these watchers.
-        watcher.unref?.();
-        watcher.on("error", () => { /* dir removed etc. — ignore */ });
-        this.contextFileWatchers.push(watcher);
-      } catch {
-        // Directory not watchable (permissions, network drive) — skip.
-      }
-    }
-  }
+     const dirs = new Set<string>();
+     dirs.add(getAgentDir()); // soul.md lives here
+     const root = resolve(cwd);
+     dirs.add(root); // AGENTS.md usually lives here
+     // Context files may ALSO sit in any ancestor of cwd (the SDK walks up).
+     // Only watch ancestors where such a file currently exists — a new
+     // AGENTS.md dropped into an empty ancestor won't be caught, which we
+     // accept: it keeps the watcher count bounded (previously EVERY directory
+     // from cwd up to the filesystem root was watched, ~10 handles per
+     // workspace, and up to that many again per extra workspace).
+     let dir = dirname(root);
+     while (dir !== dirname(dir)) {
+       try {
+         if (readdirSync(dir).some((n) => isContextFile(n))) dirs.add(dir);
+       } catch {
+         // Unreadable ancestor — skip it.
+       }
+       dir = dirname(dir);
+     }
+
+     const watchers: FSWatcher[] = [];
+     for (const d of dirs) {
+       if (!existsSync(d)) continue;
+       try {
+         const watcher = watch(d, (_event, filename) => {
+           if (!isContextFile(filename)) return;
+           this.onContextFileChanged(cwd);
+         });
+         // Never keep the process alive because of these watchers.
+         watcher.unref?.();
+         watcher.on("error", () => { /* dir removed etc. — ignore */ });
+         watchers.push(watcher);
+       } catch {
+         // Directory not watchable (permissions, network drive) — skip.
+       }
+     }
+     if (watchers.length) this.contextFileWatchers.set(cwd, watchers);
+   }
+
+   /** Close and remove all FS watchers for a specific cwd. */
+   private closeContextWatchersFor(cwd: string): void {
+     const watchers = this.contextFileWatchers.get(cwd);
+     if (!watchers) return;
+     for (const w of watchers) {
+       try { w.close(); } catch { /* ignore */ }
+     }
+     this.contextFileWatchers.delete(cwd);
+   }
 
   private onContextFileChanged(cwd: string): void {
     const existing = this.contextFileDebounce.get(cwd);
@@ -1089,6 +1139,7 @@ export class PiDeskSessionManager {
     this.pendingBashIndex.delete(requestId);
     if (!entry) return;
     unit.pendingBashRequests.delete(requestId);
+    clearTimeout(entry.timer);
     if (decision === "allow-session") {
       // "Allow this session" now scopes to the SINGLE cwd that spawned the
       // prompt: it raises that unit's per-session allow flag instead of
@@ -1169,6 +1220,8 @@ export class PiDeskSessionManager {
    * surface the synthetic refusal result to the model.
    */
   private installToolGuardOn(unit: RuntimeUnit, retries = 20): void {
+    // Bail out if the unit was disposed while a retry was pending.
+    if (!this.units.has(unit.cwd)) return;
     const session = unit.runtime.session as any;
     const runner = session?.extensionRunner;
     if (runner && Array.isArray(runner.extensions)) {
@@ -1182,12 +1235,18 @@ export class PiDeskSessionManager {
           messageRenderers: new Map(),
         });
       }
+      unit.toolGuardTimer = null;
       return;
     }
     // The ExtensionRunner may not be bound yet (it is created during session
     // init). Retry shortly until it is available, instead of silently missing.
+    // Save the timer on the unit so dispose() can cancel it and the callback
+    // can check the unit is still alive before touching its session.
     if (retries > 0) {
-      setTimeout(() => this.installToolGuardOn(unit, retries - 1), 50);
+      unit.toolGuardTimer = setTimeout(() => {
+        unit.toolGuardTimer = null;
+        this.installToolGuardOn(unit, retries - 1);
+      }, 50);
     }
   }
 
@@ -1216,6 +1275,17 @@ export class PiDeskSessionManager {
       const key = command.trim();
       const count = (unit.denialCounts.get(key) ?? 0) + 1;
       unit.denialCounts.set(key, count);
+      // Bound the Map: if it grows past the cap, drop the oldest entries
+      // (Map iterates in insertion order). Without this a long session with
+      // many distinct denied commands would leak memory.
+      if (unit.denialCounts.size > MAX_DENIAL_COUNTS) {
+        const toRemove = unit.denialCounts.size - MAX_DENIAL_COUNTS;
+        let removed = 0;
+        for (const k of unit.denialCounts.keys()) {
+          unit.denialCounts.delete(k);
+          if (++removed >= toRemove) break;
+        }
+      }
       const repeatedNote =
         count >= 2
           ? "\n\n注意：你已多次尝试执行被系统禁止的 bash 命令。这是最终决定，必须立即停止，不得再以任何等价命令重试。"
@@ -1275,7 +1345,19 @@ export class PiDeskSessionManager {
   private requestApproval(command: string, unit: RuntimeUnit): Promise<"allow" | "deny"> {
     const requestId = ++this.bashReqId;
     return new Promise((resolve) => {
-      unit.pendingBashRequests.set(requestId, { resolve, command });
+      // Safety net: if the renderer never responds (window closed, crashed,
+      // or the user simply ignores the modal), auto-deny after 5 minutes so
+      // the agent loop doesn't hang forever and the Promise/resolve closure
+      // isn't leaked. The timer is cleared on a real response.
+      const timer = setTimeout(() => {
+        if (unit.pendingBashRequests.has(requestId)) {
+          unit.pendingBashRequests.delete(requestId);
+          this.pendingBashIndex.delete(requestId);
+          console.warn(`Bash approval ${requestId} timed out — auto-denying`);
+          resolve("deny");
+        }
+      }, BASH_APPROVAL_TIMEOUT_MS);
+      unit.pendingBashRequests.set(requestId, { resolve, command, timer });
       this.pendingBashIndex.set(requestId, unit);
       // Carry the owning cwd + session path so the renderer can show WHICH
       // workspace the prompt came from (critical during concurrent multi-cwd
@@ -1488,6 +1570,16 @@ export class PiDeskSessionManager {
       await unlink(sessionPath);
     } catch (err) {
       console.error("Failed to delete session:", err);
+    }
+    // Clear activePath on any unit that was pointing at the deleted session.
+    // The renderer immediately creates a new session after deleting the focused
+    // one, but if activePath is left stale, a subsequent switchSession or
+    // prompt targeting the old path would fail. Resetting to null makes the
+    // next newSession() call re-establish a valid path cleanly.
+    for (const u of this.units.values()) {
+      if (u.activePath === sessionPath) {
+        u.activePath = null;
+      }
     }
     // Best-effort cleanup of the usage sidecar. Never block or fail the
     // actual session deletion. Session file name: <timestamp>_<sessionId>.jsonl
@@ -2009,16 +2101,32 @@ export class PiDeskSessionManager {
   }
 
   dispose(): void {
+    // Reject every pending bash approval so the agent loop doesn't hang on a
+    // resolve() that will never come (renderer gone / app quitting). Clear the
+    // timeout timers first so they can't fire after the resolve.
+    for (const u of this.units.values()) {
+      for (const { resolve, timer } of u.pendingBashRequests.values()) {
+        clearTimeout(timer);
+        resolve("deny");
+      }
+      u.pendingBashRequests.clear();
+    }
     for (const u of this.units.values()) {
       u.unsubscribe?.();
+      if (u.toolGuardTimer) {
+        clearTimeout(u.toolGuardTimer);
+        u.toolGuardTimer = null;
+      }
       try { u.runtime.session?.dispose?.(); } catch { /* ignore */ }
     }
     this.units.clear();
     this.pendingBashIndex.clear();
-    for (const w of this.contextFileWatchers) {
-      try { w.close(); } catch { /* ignore */ }
+    for (const watchers of this.contextFileWatchers.values()) {
+      for (const w of watchers) {
+        try { w.close(); } catch { /* ignore */ }
+      }
     }
-    this.contextFileWatchers = [];
+    this.contextFileWatchers.clear();
     for (const t of this.contextFileDebounce.values()) clearTimeout(t);
     this.contextFileDebounce.clear();
   }

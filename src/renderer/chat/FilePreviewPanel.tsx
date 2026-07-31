@@ -315,8 +315,11 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
 
   const textContent = result?.kind === "text" ? result.content : "";
   // Keep the latest file path + text available to the document-level selection
-  // listener without rebinding it on every render.
-  latest.current = { filePath, content: textContent };
+  // listener without rebinding it on every render. Updated in an effect to
+  // avoid accessing/mutating a ref during render.
+  useEffect(() => {
+    latest.current = { filePath, content: textContent };
+  }, [filePath, textContent]);
   // Split once per file (NOT per render) — `split` on a ~1MB string is O(n)
   // and the old code re-ran it on every keystroke/render of the panel.
   const lines = useMemo(

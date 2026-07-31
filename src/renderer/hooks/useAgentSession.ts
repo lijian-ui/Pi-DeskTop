@@ -165,13 +165,14 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
 }
 
 /** Send the next queued message (queued while a reply was streaming). Deferred
- * to a microtask so it runs after the current event dispatch settles. */
+ * to a microtask so it runs after the current event dispatch settles.
+ * The message is only removed from the queue AFTER prompt() succeeds; on
+ * failure it is re-enqueued so the user's input is never silently lost. */
 function drainQueue() {
   queueMicrotask(() => {
     const s = useAgentStore.getState();
     if (s.messageQueue.length === 0) return;
     const next = s.messageQueue[0];
-    s.removeQueuedMessage(next.id);
     s.addMessage({
       id: `user-${Date.now()}`,
       role: "user",
@@ -186,7 +187,14 @@ function drainQueue() {
       useWorkspaceStore.getState().cwd;
     window.piDesk
       .prompt(next.content, undefined, cwd, path ?? undefined)
+      .then(() => {
+        // Success — safe to drop from the queue.
+        useAgentStore.getState().removeQueuedMessage(next.id);
+      })
       .catch((err: any) => {
+        // Failure — remove the optimistic user bubble and surface the error,
+        // but KEEP the message in the queue so the user can retry or edit it
+        // instead of losing their input silently.
         useAgentStore.getState().setError(err?.message ?? "Failed to send queued message");
       });
   });

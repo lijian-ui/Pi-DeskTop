@@ -385,29 +385,39 @@ export function registerIpcHandlers(
       const results: { name: string; path: string; isDirectory: boolean }[] = [];
       if (!q) return { results };
       const stack: { dir: string; depth: number }[] = [{ dir: root, depth: 0 }];
+      const REaddir_BATCH = 16;
       while (stack.length && results.length < MAX) {
         // Give up early if the requesting renderer is gone or the budget is up.
         if (event.sender.isDestroyed() || Date.now() - start > TIME_BUDGET_MS) break;
-        const { dir, depth } = stack.pop()!;
-        let dirents;
-        try {
-          dirents = await readdir(dir, { withFileTypes: true });
-        } catch {
-          continue;
-        }
-        for (const d of dirents) {
-          if (results.length >= MAX) break;
-          const full = join(dir, d.name);
-          if (d.name.toLowerCase().includes(q)) {
-            results.push({ name: d.name, path: full, isDirectory: d.isDirectory() });
-          }
-          if (
-            d.isDirectory() &&
-            !d.isSymbolicLink() &&
-            depth < MAX_DEPTH &&
-            !SKIP.has(d.name)
-          ) {
-            stack.push({ dir: full, depth: depth + 1 });
+        // Process a batch of directories concurrently instead of one-at-a-time
+        // to keep the main process event loop fed with I/O.
+        const batch = stack.splice(-REaddir_BATCH);
+        const entries = await Promise.all(
+          batch.map(async ({ dir, depth }) => {
+            try {
+              return { dir, depth, dirents: await readdir(dir, { withFileTypes: true }) };
+            } catch {
+              return null;
+            }
+          }),
+        );
+        for (const entry of entries) {
+          if (!entry || results.length >= MAX) continue;
+          const { dir, depth, dirents } = entry;
+          for (const d of dirents) {
+            if (results.length >= MAX) break;
+            const full = join(dir, d.name);
+            if (d.name.toLowerCase().includes(q)) {
+              results.push({ name: d.name, path: full, isDirectory: d.isDirectory() });
+            }
+            if (
+              d.isDirectory() &&
+              !d.isSymbolicLink() &&
+              depth < MAX_DEPTH &&
+              !SKIP.has(d.name)
+            ) {
+              stack.push({ dir: full, depth: depth + 1 });
+            }
           }
         }
       }
