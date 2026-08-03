@@ -545,7 +545,7 @@ export default function ChatComposer() {
         }
       });
     },
-    [cwd]
+    [cwd, setMentionOpen]
   );
 
   // Cancel: drop the stray "@" we left in the text.
@@ -559,7 +559,7 @@ export default function ChatComposer() {
     });
     setMentionOpen(false);
     textareaRef.current?.focus();
-  }, []);
+  }, [setMentionOpen]);
 
   const handleSend = () => {
     if (!text.trim() && codeAttachments.length === 0) return;
@@ -702,13 +702,16 @@ export default function ChatComposer() {
     }
   };
 
-  // Group models by provider
-  const groupedModels: Record<string, ModelItem[]> = {};
-  for (const m of availableModels) {
-    const key = m.provider || "unknown";
-    if (!groupedModels[key]) groupedModels[key] = [];
-    groupedModels[key].push(m);
-  }
+  // Group models by provider (memoised to avoid rebuilding every render)
+  const groupedModels = useMemo(() => {
+    const groups: Record<string, ModelItem[]> = {};
+    for (const m of availableModels) {
+      const key = m.provider || "unknown";
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(m);
+    }
+    return groups;
+  }, [availableModels]);
 
   const currentLabel = model?.name
     ? model.name

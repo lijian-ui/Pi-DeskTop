@@ -3,6 +3,9 @@ import { ChevronDown, ChevronRight, Wrench } from "lucide-react";
 import type { ToolExecution as ToolExecutionType } from "../store/agent-store";
 import styles from "./ToolExecution.module.css";
 
+/** Tool outputs longer than this are collapsed with a "Show full output" button. */
+const OUTPUT_TRUNCATE_LENGTH = 5000;
+
 /**
  * 从工具参数中提炼一行摘要，直接在 header 显示（不用展开就能看到参数）。
  *
@@ -58,7 +61,16 @@ function summarizeArgs(toolName: string, input: any): string {
 
 function ToolExecution({ execution }: { execution: ToolExecutionType }) {
   const [expanded, setExpanded] = useState(false);
+  const [outputExpanded, setOutputExpanded] = useState(false);
   const argsSummary = summarizeArgs(execution.toolName, execution.input);
+
+  // Truncate very long tool outputs (e.g. build logs) to avoid rendering
+  // megabytes of text. The full output is still stored in execution.output;
+  // clicking "Show full output" renders the complete text.
+  const outputTruncated =
+    !outputExpanded &&
+    typeof execution.output === "string" &&
+    execution.output.length > OUTPUT_TRUNCATE_LENGTH;
 
   return (
     <div className={styles.toolExecution}>
@@ -81,7 +93,24 @@ function ToolExecution({ execution }: { execution: ToolExecutionType }) {
       {expanded && (
         <div className={styles.body}>
           <div className={styles.input}>{JSON.stringify(execution.input, null, 2)}</div>
-          {execution.output && <div className={styles.output}>{execution.output}</div>}
+          {execution.output && (
+            <div className={styles.output}>
+              {outputTruncated
+                ? execution.output!.slice(0, OUTPUT_TRUNCATE_LENGTH)
+                : execution.output}
+              {outputTruncated && (
+                <button
+                  className={styles.expandOutput}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOutputExpanded(true);
+                  }}
+                >
+                  Show full output ({(execution.output!.length / 1024).toFixed(0)} KB)
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

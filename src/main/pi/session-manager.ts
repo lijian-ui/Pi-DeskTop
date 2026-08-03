@@ -17,6 +17,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import extract from "extract-zip";
 import type { WebContents } from "electron";
+import { BrowserWindow } from "electron";
 import { exportSessionToHtmlFile } from "./session-export";
 import { readSoul, writeSoul } from "./soul";
 import { soulExtension } from "./soul-extension";
@@ -293,6 +294,11 @@ let contextUsageCache: Record<string, ContextUsageEntry> | null = null;
 let contextUsageLoadPromise: Promise<Record<string, ContextUsageEntry>> | null =
   null;
 
+// SAFETY NOTE (B3): This cache is intentionally never expired at runtime
+// because Pi Desktop is a single-process application — no other process
+// writes to context-usage.json. If the app ever becomes multi-instance,
+// add a file-watcher or periodic re-read to invalidate this cache.
+
 function contextUsagePath(): string {
   return join(getAgentDir(), "context-usage.json");
 }
@@ -554,6 +560,12 @@ interface RuntimeUnit {
   /** Pending retry timer for installToolGuardOn (cleared on dispose so a
    *  destroyed unit is never re-touched by a stale callback). */
   toolGuardTimer: NodeJS.Timeout | null;
+  /**
+   * Last tokens value we persisted for context usage. Short-circuits duplicate
+   * compaction_end writes — if the same session compacts to the same token
+   * count, the file write is skipped.
+   */
+  lastPersistedTokens: number | undefined;
 }
 
 export class PiDeskSessionManager {
@@ -632,6 +644,14 @@ export class PiDeskSessionManager {
   private pendingBashIndex = new Map<number, RuntimeUnit>();
   // In-flight bind operations keyed by source session path (single-flight).
   private bindingPaths = new Set<string>();
+  /**
+   * Sequential write lock for auth.json. Methods that do read→modify→write
+   * (saveApiKey, deleteApiKey, saveCustomProvider, deleteCustomProvider)
+   * chain through this Promise so concurrent calls never overwrite each
+   * other's writes. Resolved immediately when empty so the first caller is
+   * not delayed.
+   */
+  private authWriteLock: Promise<void> = Promise.resolve();
   // Runtime-loaded from ~/.pi/agent/bash-guard.json
   private guardConfig: BashGuardConfig = { blacklist: [], whitelist: [] };
   /**
@@ -650,7 +670,9 @@ export class PiDeskSessionManager {
       try {
         this.bashBlacklistRx.push(new RegExp(`^(?:${pat})$`));
       } catch {
-        // Malformed pattern — skip it (matches the old per-call behavior).
+        // Malformed pattern — skip it, but warn so the user knows their
+        // rule isn't active (previous version silently dropped these).
+        console.warn(`Bash guard: skipping malformed blacklist pattern: "${pat}"`);
       }
     }
     this.bashWhitelistRx = [];
@@ -658,9 +680,22 @@ export class PiDeskSessionManager {
       try {
         this.bashWhitelistRx.push(new RegExp(pat));
       } catch {
-        // skip malformed pattern
+        console.warn(`Bash guard: skipping malformed whitelist pattern: "${pat}"`);
       }
     }
+  }
+
+  /**
+   * Serialise auth.json writes through a sequential Promise chain.
+   * Callers that read→modify→write surrender ordering to this lock so
+   * concurrent calls never overwrite each other's changes.
+   */
+  private withAuthLock<T>(fn: () => Promise<T>): Promise<T> {
+    let release: () => void;
+    const next = new Promise<void>((r) => { release = r; });
+    const prev = this.authWriteLock;
+    this.authWriteLock = next;
+    return prev.then(fn).finally(() => release!());
   }
 
   async initialize(cwd?: string): Promise<void> {
@@ -714,6 +749,12 @@ export class PiDeskSessionManager {
     // the same new cwd share one build instead of racing.
     let servicesPromise = this.servicesByCwd.get(cwd);
     if (!servicesPromise) {
+      // Notify the renderer that an expensive service build is starting,
+      // so it can show a loading indicator instead of appearing frozen.
+      const wc = this.webContents && !this.webContents.isDestroyed()
+        ? this.webContents
+        : this.findLiveWebContents();
+      wc?.send("pi:servicesBuilding", { cwd });
       // Soul / persona: injected via the `soulExtension` inline extension
       // (before_agent_start event) so the soul text lands at the ABSOLUTE
       // BOTTOM of the fully assembled system prompt — after Pi's base
@@ -766,6 +807,7 @@ export class PiDeskSessionManager {
       denialCounts: new Map(),
       defaultModel: null,
       toolGuardTimer: null,
+      lastPersistedTokens: undefined,
     };
     this.units.set(cwd, unit);
     // Fresh SDK sessions activate only read/bash/edit/write by default; apply
@@ -806,28 +848,33 @@ export class PiDeskSessionManager {
        return n === "agents.md" || n === "claude.md" || n === "soul.md";
      };
 
-     const dirs = new Set<string>();
-     dirs.add(getAgentDir()); // soul.md lives here
-     const root = resolve(cwd);
-     dirs.add(root); // AGENTS.md usually lives here
-     // Context files may ALSO sit in any ancestor of cwd (the SDK walks up).
-     // Only watch ancestors where such a file currently exists — a new
-     // AGENTS.md dropped into an empty ancestor won't be caught, which we
-     // accept: it keeps the watcher count bounded (previously EVERY directory
-     // from cwd up to the filesystem root was watched, ~10 handles per
-     // workspace, and up to that many again per extra workspace).
-     let dir = dirname(root);
-     while (dir !== dirname(dir)) {
-       try {
-         if (readdirSync(dir).some((n) => isContextFile(n))) dirs.add(dir);
-       } catch {
-         // Unreadable ancestor — skip it.
-       }
-       dir = dirname(dir);
-     }
+      const dirs = new Set<string>();
+      dirs.add(getAgentDir()); // soul.md lives here
+      const root = resolve(cwd);
+      dirs.add(root); // AGENTS.md usually lives here
+      // Context files may ALSO sit in any ancestor of cwd (the SDK walks up).
+      // Only watch ancestors where such a file currently exists — a new
+      // AGENTS.md dropped into an empty ancestor won't be caught, which we
+      // accept: it keeps the watcher count bounded (previously EVERY directory
+      // from cwd up to the filesystem root was watched, ~10 handles per
+      // workspace, and up to that many again per extra workspace).
+      // Cap the upward traversal at 16 levels to avoid excessive sync I/O
+      // on deeply nested paths or pathological filesystem roots.
+      const MAX_ANCESTOR_DEPTH = 16;
+      let dir = dirname(root);
+      let depth = 0;
+      while (dir !== dirname(dir) && depth < MAX_ANCESTOR_DEPTH) {
+        try {
+          if (readdirSync(dir).some((n) => isContextFile(n))) dirs.add(dir);
+        } catch {
+          // Unreadable ancestor — skip it.
+        }
+        dir = dirname(dir);
+        depth++;
+      }
 
-     const watchers: FSWatcher[] = [];
-     for (const d of dirs) {
+      const watchers: FSWatcher[] = [];
+      for (const d of dirs) {
        if (!existsSync(d)) continue;
        try {
          const watcher = watch(d, (_event, filename) => {
@@ -879,7 +926,14 @@ export class PiDeskSessionManager {
       // Tag every event with the owning session path + cwd so the renderer can
       // route it to the right conversation (back-ground sessions keep
       // streaming; only the focused one drives the visible chat panel).
-      this.webContents?.send("pi:event", {
+      // Dynamically resolve the live webContents instead of using the stale
+      // captured reference — the window may have been destroyed and rebuilt
+      // (macOS "activate" edge path), in which case the old reference's send
+      // would be silently dropped.
+      const wc = this.webContents && !this.webContents.isDestroyed()
+        ? this.webContents
+        : this.findLiveWebContents();
+      wc?.send("pi:event", {
         sessionPath: unit.activePath,
         cwd: unit.cwd,
         // Pass the event by reference — Electron's IPC performs its own
@@ -895,7 +949,9 @@ export class PiDeskSessionManager {
       if (ev.type === "compaction_end" && ev.result?.estimatedTokensAfter != null) {
         const sid = unit.runtime.session?.sessionId;
         const cw = unit.runtime.session?.getContextUsage()?.contextWindow ?? 0;
-        if (sid && cw > 0) {
+        // Skip if the token count hasn't changed since the last persist
+        if (sid && cw > 0 && ev.result.estimatedTokensAfter !== unit.lastPersistedTokens) {
+          unit.lastPersistedTokens = ev.result.estimatedTokensAfter;
           saveContextUsage(sid, ev.result.estimatedTokensAfter, cw).catch(() => {});
         }
       }
@@ -917,11 +973,22 @@ export class PiDeskSessionManager {
         cwds.push(u.cwd);
       }
     }
-    this.webContents?.send("pi:runningState", { running, cwds });
+    const wc = this.webContents && !this.webContents.isDestroyed()
+      ? this.webContents
+      : this.findLiveWebContents();
+    wc?.send("pi:runningState", { running, cwds });
   }
 
   setEventTarget(wc: WebContents): void {
     this.webContents = wc;
+  }
+
+  /** Find the webContents of a live (non-destroyed) BrowserWindow.
+   *  Used as a fallback when the captured webContents reference is stale
+   *  (window destroyed and rebuilt on macOS "activate"). */
+  private findLiveWebContents(): WebContents | undefined {
+    const win = BrowserWindow.getAllWindows()[0];
+    return win && !win.isDestroyed() ? win.webContents : undefined;
   }
 
   get session(): AgentSession | null {
@@ -1761,16 +1828,20 @@ export class PiDeskSessionManager {
   }
 
   async saveApiKey(providerId: string, apiKey: string): Promise<void> {
-    const data = await readAuthJson();
-    data[providerId] = { type: "api_key", key: apiKey };
-    await writeAuthJson(data);
+    await this.withAuthLock(async () => {
+      const data = await readAuthJson();
+      data[providerId] = { type: "api_key", key: apiKey };
+      await writeAuthJson(data);
+    });
     await this.modelRuntime?.setRuntimeApiKey(providerId, apiKey);
   }
 
   async deleteApiKey(providerId: string): Promise<void> {
-    const data = await readAuthJson();
-    delete data[providerId];
-    await writeAuthJson(data);
+    await this.withAuthLock(async () => {
+      const data = await readAuthJson();
+      delete data[providerId];
+      await writeAuthJson(data);
+    });
     await this.modelRuntime?.removeRuntimeApiKey(providerId);
   }
 
@@ -1782,20 +1853,23 @@ export class PiDeskSessionManager {
     const mr = this.modelRuntime;
     if (!mr) throw new Error("ModelRuntime not available");
 
-    // Persist config
-    const all = await readCustomModelsJson();
-    all[providerId] = config;
-    await writeJsonFile(customModelsPath(), all);
+    // Persist config + API key under the write lock to prevent races
+    await this.withAuthLock(async () => {
+      const all = await readCustomModelsJson();
+      all[providerId] = config;
+      await writeJsonFile(customModelsPath(), all);
 
-    // Register in runtime
+      if (config.apiKey) {
+        const auth = await readAuthJson();
+        auth[providerId] = { type: "api_key", key: config.apiKey };
+        await writeAuthJson(auth);
+      }
+    });
+
+    // Register in runtime (outside the lock — no fs access)
     mr.registerProvider(providerId, config);
-
-    // Set + persist API key
     if (config.apiKey) {
       mr.setRuntimeApiKey(providerId, config.apiKey);
-      const auth = await readAuthJson();
-      auth[providerId] = { type: "api_key", key: config.apiKey };
-      await writeAuthJson(auth);
     }
   }
 
@@ -1807,16 +1881,18 @@ export class PiDeskSessionManager {
     const mr = this.modelRuntime;
     if (!mr) throw new Error("ModelRuntime not available");
 
-    const all = await readCustomModelsJson();
-    delete all[providerId];
-    await writeJsonFile(customModelsPath(), all);
+    await this.withAuthLock(async () => {
+      const all = await readCustomModelsJson();
+      delete all[providerId];
+      await writeJsonFile(customModelsPath(), all);
+
+      const auth = await readAuthJson();
+      delete auth[providerId];
+      await writeAuthJson(auth);
+    });
 
     mr.unregisterProvider(providerId);
     mr.removeRuntimeApiKey(providerId);
-
-    const auth = await readAuthJson();
-    delete auth[providerId];
-    await writeAuthJson(auth);
   }
 
   /**
@@ -1829,26 +1905,36 @@ export class PiDeskSessionManager {
     const mr = this.modelRuntime;
     if (!mr) throw new Error("ModelRuntime not available");
 
-    const all = await readCustomModelsJson();
-    const cfg = all[providerId];
-    if (!cfg) return;
+    await this.withAuthLock(async () => {
+      const all = await readCustomModelsJson();
+      const cfg = all[providerId];
+      if (!cfg) return;
 
-    const models = Array.isArray(cfg.models)
-      ? cfg.models.filter((m: any) => String(m?.id ?? "") !== modelId)
-      : [];
+      const models = Array.isArray(cfg.models)
+        ? cfg.models.filter((m: any) => String(m?.id ?? "") !== modelId)
+        : [];
 
-    if (models.length === 0) {
-      // Last model removed → the provider itself disappears.
-      await this.deleteCustomProvider(providerId);
-      return;
-    }
+      if (models.length === 0) {
+        // Last model removed → the provider itself disappears.
+        // Delete provider config + auth key under the same lock.
+        delete all[providerId];
+        await writeJsonFile(customModelsPath(), all);
+        const auth = await readAuthJson();
+        delete auth[providerId];
+        await writeAuthJson(auth);
+        // Unregister from runtime (outside the lock below — after fs writes)
+        mr.unregisterProvider(providerId);
+        mr.removeRuntimeApiKey(providerId);
+        return;
+      }
 
-    const updated = { ...cfg, models };
-    all[providerId] = updated;
-    await writeJsonFile(customModelsPath(), all);
+      const updated = { ...cfg, models };
+      all[providerId] = updated;
+      await writeJsonFile(customModelsPath(), all);
 
-    // Re-compose the runtime model set without the deleted model.
-    mr.registerProvider(providerId, updated);
+      // Re-compose the runtime model set without the deleted model.
+      mr.registerProvider(providerId, updated);
+    });
   }
 
   /**

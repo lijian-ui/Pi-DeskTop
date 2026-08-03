@@ -16,6 +16,7 @@ import styles from "./Markdown.module.css";
  */
 
 let mermaidReady = false;
+let mermaidIdCounter = 0;
 function ensureMermaid() {
   if (!mermaidReady) {
     mermaid.initialize({ startOnLoad: false, theme: "default" });
@@ -31,9 +32,11 @@ function Mermaid({ chart }: { chart: string }) {
     ensureMermaid();
     setError(false);
     let cancelled = false;
-    // debounce: avoid thrashing mermaid.render on every streamed token
+    // debounce: avoid thrashing mermaid.render on every streamed token.
+    // 500ms is long enough to skip most mid-token renders while still
+    // feeling responsive once the diagram stabilises.
     const timer = window.setTimeout(() => {
-      const id = `mmd-${Math.random().toString(36).slice(2)}`;
+      const id = `mmd-${++mermaidIdCounter}`;
       mermaid
         .render(id, chart)
         .then(({ svg }) => {
@@ -42,7 +45,7 @@ function Mermaid({ chart }: { chart: string }) {
         .catch(() => {
           if (!cancelled) setError(true);
         });
-    }, 200);
+    }, 500);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);

@@ -44,7 +44,8 @@ export default function MessageList() {
   const loadingMoreRef = useRef(false);
 
   // Reset the visible window whenever a different session is loaded
-  // (detected by the first message's id changing).
+  // (detected by the first message's id changing), or when search closes
+  // (to restore virtual scrolling after search expanded all messages).
   const firstId = messages[0]?.id;
   const firstIdRef = useRef(firstId);
   useEffect(() => {
@@ -53,6 +54,12 @@ export default function MessageList() {
       setVisibleCount(BATCH_SIZE);
     }
   }, [firstId]);
+
+  useEffect(() => {
+    if (!searchOpen && visibleCount > BATCH_SIZE) {
+      setVisibleCount(BATCH_SIZE);
+    }
+  }, [searchOpen]);
 
   const isNearBottom = () => {
     const list = listRef.current;
@@ -197,6 +204,9 @@ export default function MessageList() {
     for (const id of searchMatchIds) {
       const el = document.getElementById(`msg-${id}`);
       if (!el) continue;
+      // Skip elements that are not in the visible viewport to avoid
+      // expensive TreeWalker scans on off-screen (lazily hidden) messages.
+      if (!el.offsetParent) continue;
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
       let node: Node | null;
       while ((node = walker.nextNode())) {

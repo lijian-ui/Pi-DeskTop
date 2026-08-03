@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useAgentStore, type Message } from "../store/agent-store";
 import { useSessionStore } from "../store/session-store";
 import { useWorkspaceStore } from "../store/workspace-store";
+import { extractText } from "../utils/content-utils";
 
 let msgCounter = 0;
 
@@ -17,7 +18,7 @@ function scheduleSessionListReload(): void {
   reloadTimer = setTimeout(() => {
     reloadTimer = null;
     useSessionStore.getState().load();
-  }, 500);
+  }, 1500);
 }
 
 /** Events that carry chat content — these are buffered per-session (including
@@ -65,14 +66,7 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
       // for assistant messages it streams in via text_delta so start empty.
       let content = "";
       if (role === "user" && ev.message?.content) {
-        if (typeof ev.message.content === "string") {
-          content = ev.message.content;
-        } else if (Array.isArray(ev.message.content)) {
-          content = ev.message.content
-            .filter((b: any) => b?.type === "text" && b.text)
-            .map((b: any) => b.text)
-            .join("\n");
-        }
+        content = extractText(ev.message.content);
       }
       return [
         ...msgs,

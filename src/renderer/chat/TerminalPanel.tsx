@@ -299,7 +299,7 @@ export default function TerminalPanel({ visible }: { visible: boolean }) {
     // Wait until shell detection finishes, and never spawn an unavailable one.
     if (!available || !available.includes(shell)) return;
     return attachPty(shell);
-  }, [shell, available, attachPty]);
+  }, [shell, available, attachPty, cwd]);
 
   // 3) Selection → floating "Add to chat" button. xterm renders to canvas so
   // there is no DOM selection; we read term.getSelection() on mouseup inside

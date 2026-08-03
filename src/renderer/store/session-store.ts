@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useAgentStore, type Message } from "./agent-store";
 import { useWorkspaceStore } from "./workspace-store";
+import { extractText, extractThinking } from "../utils/content-utils";
 
 export interface SessionInfo {
   path: string;
@@ -13,27 +14,6 @@ export interface SessionInfo {
   messageCount: number;
   firstMessage: string;
   allMessagesText: string;
-}
-
-function extractText(content: any): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((b: any) => b && b.type === "text" && b.text)
-      .map((b: any) => b.text)
-      .join("\n");
-  }
-  return "";
-}
-
-function extractThinking(content: any): string {
-  if (Array.isArray(content)) {
-    return content
-      .filter((b: any) => b && b.type === "thinking" && b.thinking)
-      .map((b: any) => b.thinking)
-      .join("\n");
-  }
-  return "";
 }
 
 /**
@@ -210,6 +190,12 @@ interface SessionStoreState {
    * BACKGROUND sessions accumulate their streaming output here in real time
    * (every message_start/update/end event is appended), so focusing a
    * background session later shows its complete live history WITHOUT a reload.
+   *
+   * Capped at MAX_BUFFERED_SESSIONS (20); when the limit is hit the oldest
+   * non-current entry is evicted (Map iterates insertion order). Focusing the
+   * evicted session triggers a normal reload from disk — only the live-stream
+   * state is lost, which is acceptable for a session the user hasn't touched
+   * in a long time.
    */
   messagesByPath: Map<string, Message[]>;
   /** Transient message shown when a prompt is rejected (e.g. cwd busy). */
@@ -252,6 +238,11 @@ interface SessionStoreState {
   /** Drop a session's buffer (or all buffers when path omitted). */
   clearBuffer: (path?: string) => void;
 }
+
+/** Cap the number of cached per-session message buffers so switching between
+ *  many workspaces doesn't endlessly accumulate memory. When exceeded, the
+ *  oldest non-current entry is evicted. */
+const MAX_BUFFERED_SESSIONS = 20;
 
 export const useSessionStore = create<SessionStoreState>((set, get) => ({
   sessions: [],
@@ -467,23 +458,39 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   setBuffer: (path, messages) => {
     if (!path) return;
     set((state) => {
-      const map = new Map(state.messagesByPath);
-      map.set(path, messages);
-      return { messagesByPath: map };
+      // Mutate in-place then create a new reference for Zustand.
+      state.messagesByPath.set(path, messages);
+      if (state.messagesByPath.size > MAX_BUFFERED_SESSIONS) {
+        const cur = get().currentPath;
+        for (const k of state.messagesByPath.keys()) {
+          if (k !== cur) { state.messagesByPath.delete(k); break; }
+        }
+      }
+      return { messagesByPath: new Map(state.messagesByPath) };
     });
   },
 
   mutateBuffer: (path, fn) => {
     if (!path) return;
-    const prev = get().messagesByPath.get(path) ?? [];
+    const state = get();
+    const prev = state.messagesByPath.get(path) ?? [];
     const next = fn(prev);
-    set((state) => {
-      const map = new Map(state.messagesByPath);
-      map.set(path, next);
-      return { messagesByPath: map };
-    });
+    // Short-circuit: if the reducer returned the same reference, skip the
+    // Map copy entirely (happens on empty streaming deltas).
+    if (next === prev) return;
+    // Mutate the existing Map in-place and trigger Zustand update via
+    // a new reference. This avoids copying all entries on every token.
+    state.messagesByPath.set(path, next);
+    // Evict oldest non-current entry when the cap is exceeded
+    if (state.messagesByPath.size > MAX_BUFFERED_SESSIONS) {
+      const cur = state.currentPath;
+      for (const k of state.messagesByPath.keys()) {
+        if (k !== cur) { state.messagesByPath.delete(k); break; }
+      }
+    }
+    set({ messagesByPath: new Map(state.messagesByPath) });
     // Mirror into the visible chat panel if this is the focused session.
-    if (path === get().currentPath) {
+    if (path === state.currentPath) {
       useAgentStore.getState().setMessages(next);
     }
   },

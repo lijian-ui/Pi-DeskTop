@@ -41,7 +41,9 @@ app.on("window-all-closed", () => {
   // （托盘菜单「退出」→ requestQuit → app.quit）时触发。释放 SDK 资源即可，
   // 退出由 app.quit() 完成，这里不要再重复调用。
   disposeAutoUpdater();
-  disposePi();
+  void disposePi();
+  terminalManager?.dispose();
+  terminalManager = null;
 });
 
 app.on("activate", () => {

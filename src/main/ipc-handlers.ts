@@ -483,7 +483,7 @@ export function registerIpcHandlers(
 
   // Which shells are actually installed on this machine (Git Bash may be
   // absent). The renderer uses this to hide unavailable shell options.
-  ipcMain.handle("pi:terminal:availableShells", (): ("gitbash" | "powershell" | "cmd")[] => {
+  ipcMain.handle("pi:terminal:availableShells", async (): Promise<("gitbash" | "powershell" | "cmd")[]> => {
     return terminalManager.getAvailableShells();
   });
 

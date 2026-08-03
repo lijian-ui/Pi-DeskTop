@@ -1,6 +1,6 @@
 import { spawn, type IPty } from "node-pty";
 import { existsSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import type { WebContents } from "electron";
@@ -28,20 +28,18 @@ const GIT_BASH_CANDIDATES = [
 ];
 
 /** True if `name` resolves on PATH (e.g. `where git-bash.exe`). */
-function commandExists(name: string): boolean {
-  try {
-    execSync(`where ${name}`, { windowsHide: true, timeout: 5000 });
-    return true;
-  } catch {
-    return false;
-  }
+function commandExistsAsync(name: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    exec(`where ${name}`, { windowsHide: true, timeout: 5000 }, (err) => {
+      resolve(!err);
+    });
+  });
 }
 
 /** Git Bash is present if its launcher or bash binary is reachable. */
-function hasGitBash(): boolean {
-  if (commandExists("git-bash.exe")) return true;
-  // `bash.exe` may come from Git or another source; require a Git marker too.
-  if (commandExists("bash.exe") && (commandExists("git.exe") || GIT_BASH_CANDIDATES.some((p) => existsSync(p)))) {
+async function hasGitBash(): Promise<boolean> {
+  if (await commandExistsAsync("git-bash.exe")) return true;
+  if ((await commandExistsAsync("bash.exe")) && ((await commandExistsAsync("git.exe")) || GIT_BASH_CANDIDATES.some((p) => existsSync(p)))) {
     return true;
   }
   return GIT_BASH_CANDIDATES.some((p) => existsSync(p));
@@ -57,6 +55,8 @@ export class TerminalManager {
   // The single live terminal. It survives panel close/open so a running
   // process (e.g. `npm install`) keeps going; reopening just re-attaches.
   private current: TerminalHandle | null = null;
+  /** Cached available shells (computed once on first query). */
+  private availableShellsCache: TerminalShell[] | null = null;
 
   setWebContents(wc: WebContents | null): void {
     this.webContents = wc;
@@ -65,13 +65,16 @@ export class TerminalManager {
   /**
    * Returns the shells actually available on this machine, so the renderer
    * can hide options the user never installed (Git Bash) instead of letting
-   * node-pty fail at spawn time.
+   * node-pty fail at spawn time. Results are cached after the first async
+   * detection to avoid repeated `where` calls.
    */
-  getAvailableShells(): TerminalShell[] {
+  async getAvailableShells(): Promise<TerminalShell[]> {
+    if (this.availableShellsCache) return this.availableShellsCache;
     const shells: TerminalShell[] = [];
-    if (hasGitBash()) shells.push("gitbash");
-    if (commandExists("powershell.exe") || commandExists("pwsh.exe")) shells.push("powershell");
-    if (commandExists("cmd.exe")) shells.push("cmd");
+    if (await hasGitBash()) shells.push("gitbash");
+    if (await commandExistsAsync("powershell.exe") || await commandExistsAsync("pwsh.exe")) shells.push("powershell");
+    if (await commandExistsAsync("cmd.exe")) shells.push("cmd");
+    this.availableShellsCache = shells;
     return shells;
   }
 

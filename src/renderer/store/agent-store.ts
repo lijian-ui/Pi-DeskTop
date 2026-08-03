@@ -29,6 +29,13 @@ export interface QueuedMessage {
   content: string;
 }
 
+export interface ModelInfo {
+  id: string;
+  provider: string;
+  name?: string;
+  [key: string]: unknown;
+}
+
 interface AgentState {
   messages: Message[];
   isStreaming: boolean;
@@ -38,7 +45,7 @@ interface AgentState {
   compactTokensBefore: number | null;
   compactTokensAfter: number | null;
   isRetrying: boolean;
-  model: any | null;
+  model: ModelInfo | null;
   thinkingLevel: string;
   /** Messages queued while a reply is still streaming; auto-sent in order once idle. */
   messageQueue: QueuedMessage[];
@@ -62,7 +69,7 @@ interface AgentState {
   ) => void;
   clearCompactDone: () => void;
   setRetrying: (v: boolean) => void;
-  setModel: (model: any) => void;
+  setModel: (model: ModelInfo | null) => void;
   setThinkingLevel: (level: string) => void;
   setContextUsage: (usage: {
     tokens: number | null;
@@ -80,6 +87,17 @@ interface AgentState {
   updateQueuedMessage: (id: string, content: string) => void;
   removeQueuedMessage: (id: string) => void;
   clearQueue: () => void;
+}
+
+/**
+ * Find the index of the last assistant message. Returns -1 if none found.
+ * Used to avoid O(n) reverse scan on every streaming token update.
+ */
+function findLastAssistantIndex(msgs: Message[]): number {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "assistant") return i;
+  }
+  return -1;
 }
 
 export const useAgentStore = create<AgentState>((set) => ({
@@ -102,72 +120,59 @@ export const useAgentStore = create<AgentState>((set) => ({
 
   updateLastAssistant: (delta) =>
     set((state) => {
+      const idx = findLastAssistantIndex(state.messages);
+      if (idx === -1) return state;
       const msgs = [...state.messages];
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role === "assistant") {
-          msgs[i] = { ...msgs[i], content: msgs[i].content + delta };
-          break;
-        }
-      }
+      msgs[idx] = { ...msgs[idx], content: msgs[idx].content + delta };
       return { messages: msgs };
     }),
 
   updateLastAssistantThinking: (delta) =>
     set((state) => {
+      const idx = findLastAssistantIndex(state.messages);
+      if (idx === -1) return state;
       const msgs = [...state.messages];
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role === "assistant") {
-          msgs[i] = {
-            ...msgs[i],
-            thinking: (msgs[i].thinking ?? "") + delta,
-          };
-          break;
-        }
-      }
+      msgs[idx] = {
+        ...msgs[idx],
+        thinking: (msgs[idx].thinking ?? "") + delta,
+      };
       return { messages: msgs };
     }),
 
   finishLastAssistant: (stoppedByUser = false) =>
     set((state) => {
+      const idx = findLastAssistantIndex(state.messages);
+      if (idx === -1) return state;
+      if (!state.messages[idx].isStreaming) return state;
       const msgs = [...state.messages];
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role === "assistant" && msgs[i].isStreaming) {
-          msgs[i] = {
-            ...msgs[i],
-            isStreaming: false,
-            stoppedByUser: stoppedByUser ? true : msgs[i].stoppedByUser,
-          };
-          break;
-        }
-      }
+      msgs[idx] = {
+        ...msgs[idx],
+        isStreaming: false,
+        stoppedByUser: stoppedByUser ? true : msgs[idx].stoppedByUser,
+      };
       return { messages: msgs };
     }),
 
   addToolExecution: (tool) =>
     set((state) => {
+      const idx = findLastAssistantIndex(state.messages);
+      if (idx === -1) return state;
       const msgs = [...state.messages];
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role === "assistant") {
-          const toolExecutions = [...(msgs[i].toolExecutions ?? []), tool];
-          msgs[i] = { ...msgs[i], toolExecutions };
-          break;
-        }
-      }
+      const toolExecutions = [...(msgs[idx].toolExecutions ?? []), tool];
+      msgs[idx] = { ...msgs[idx], toolExecutions };
       return { messages: msgs };
     }),
 
   updateToolExecution: (id, update) =>
     set((state) => {
+      const idx = findLastAssistantIndex(state.messages);
+      if (idx === -1) return state;
+      const toolExecutions = state.messages[idx].toolExecutions?.map((t) =>
+        t.id === id ? { ...t, ...update } : t
+      );
+      if (toolExecutions === state.messages[idx].toolExecutions) return state;
       const msgs = [...state.messages];
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role === "assistant") {
-          const toolExecutions = msgs[i].toolExecutions?.map((t) =>
-            t.id === id ? { ...t, ...update } : t
-          );
-          msgs[i] = { ...msgs[i], toolExecutions };
-          break;
-        }
-      }
+      msgs[idx] = { ...msgs[idx], toolExecutions };
       return { messages: msgs };
     }),
 

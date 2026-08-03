@@ -13,7 +13,7 @@ export default function StatusBar() {
           <div className={`${styles.dot} ${isStreaming ? styles.dotStreaming : ""}`} />
           <span>{isStreaming ? "Thinking..." : "Ready"}</span>
         </div>
-        {model && <span>{model.name ?? `${model.provider?.id}/${model.id}`}</span>}
+        {model && <span>{model.name ?? `${model.provider}/${model.id}`}</span>}
         {thinkingLevel && thinkingLevel !== "off" && <span>Think: {thinkingLevel}</span>}
       </div>
       <div className={styles.right}>

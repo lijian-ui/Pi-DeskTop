@@ -87,6 +87,25 @@
   color: var(--text-default);
 }
 
+.expandOutput {
+  display: block;
+  width: 100%;
+  margin-top: var(--spacer-4);
+  padding: var(--spacer-6) var(--spacer-8);
+  background: var(--bg-overlay-l1);
+  border: 1px dashed var(--border-neutral-l1);
+  border-radius: var(--radius-4);
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.expandOutput:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
