@@ -5,6 +5,7 @@ release/
 
 # ── 发布脚本（含 Gitee/GitHub 令牌，严禁提交！）──
 scripts/publish.mjs
+scripts/
 
 # ── 内置 Node 绿色包 / 安装包（几十~上百 MB，不应入库）──
 node-v24.18.0-win-x64/
