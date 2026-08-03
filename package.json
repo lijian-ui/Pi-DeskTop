@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:electron": "tsc -p tsconfig.node.json && electron-builder",
+    "build:electron": "npm run build && tsc -p tsconfig.node.json && electron-builder",
     "publish": "node scripts/publish.mjs",
     "publish:gitee": "node scripts/publish-gitee.mjs",
     "publish:github": "node scripts/publish-github.mjs",

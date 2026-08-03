@@ -8,7 +8,6 @@ let quitting = false;
 // requestQuit()，而是触发 before-quit → app.quit() → 窗口 close 事件。
 // 必须在这里统一置位，否则 close 拦截会把它当"点 X 隐藏"吞掉，应用退不掉。
 app.on("before-quit", () => {
-  console.log("[tray] before-quit → quitting=true");
   quitting = true;
 });
 
