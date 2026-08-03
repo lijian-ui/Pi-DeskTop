@@ -23,6 +23,7 @@ publish:
   provider: generic
   url: https://gitee.com/rooky-top/pi-desk-top/releases/download/latest
 mac:
+  icon: resources/pi-logo.icns
   category: public.app-category.developer-tools
   target:
     - dmg

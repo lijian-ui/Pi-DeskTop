@@ -4,6 +4,13 @@ import path from "path";
 let tray: Tray | null = null;
 let quitting = false;
 
+// macOS: Dock 图标右键「退出」、Cmd+Q、菜单栏 Quit、系统注销等都不经过
+// requestQuit()，而是触发 before-quit → app.quit() → 窗口 close 事件。
+// 必须在这里统一置位，否则 close 拦截会把它当"点 X 隐藏"吞掉，应用退不掉。
+app.on("before-quit", () => {
+  quitting = true;
+});
+
 /** Whether the app is in a genuine quit flow (vs. close-to-tray). */
 export function isQuitting(): boolean {
   return quitting;
