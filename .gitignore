@@ -33,7 +33,8 @@ npm-debug.log*
 nul
 
 # ── 参考项目（仅本地分析用，不纳入版本）──
-参考项目/
+参考项目/dingtalk-openclaw-connector/
+参考项目/tencent-weixin-openclaw-weixin-2.4.3
 
 # ── 本地临时文件 ──
 *.tmp
