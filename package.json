@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:electron": "npm run build && tsc -p tsconfig.node.json && electron-builder",
+    "build:electron": "npm run build && tsc -p tsconfig.node.json && node scripts/build-electron.mjs",
     "publish": "node scripts/publish.mjs",
     "publish:gitee": "node scripts/publish-gitee.mjs",
     "publish:github": "node scripts/publish-github.mjs",
@@ -48,6 +48,7 @@
     "@vitejs/plugin-react": "^4.6.0",
     "electron": "^35.0.0",
     "electron-builder": "^25.1.8",
+    "electron-rebuild": "^3.2.9",
     "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",

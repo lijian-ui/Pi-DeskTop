@@ -8,9 +8,10 @@ asar: true
 asarUnpack:
   - "node_modules/node-pty/**/*"
 # node-pty ships prebuilt binaries (prebuilds/win32-x64/pty.node etc.) and is
-# N-API (ABI-stable), so it does NOT need to be rebuilt for Electron.
-# Without this, electron-builder runs @electron/rebuild → node-gyp → Python,
-# which fails on Python 3.12+ (distutils removed from stdlib).
+# N-API (ABI-stable), so it does NOT need to be rebuilt for Electron on Windows.
+# We keep npmRebuild:false here so electron-builder never runs node-gyp (which
+# fails on Python 3.12+ / machines without VS). macOS instead rebuilds node-pty
+# against the bundled Electron via scripts/build-electron.mjs (see build:electron).
 npmRebuild: false
 files:
   - dist/**/*
@@ -25,12 +26,6 @@ publish:
 mac:
   icon: resources/pi-logo.icns
   category: public.app-category.developer-tools
-  # Rebuild node-pty against THIS Electron on macOS. The npm-published darwin
-  # prebuild (N-API) loads but fails at spawn ("posix_spawnp failed") under
-  # Electron 35's Node 22 runtime; a local rebuild against the bundled Electron
-  # headers produces a compatible native binary. Windows keeps npmRebuild:false
-  # (no VS/Python there) — see the top-level setting.
-  npmRebuild: true
   target:
     - dmg
     - zip
