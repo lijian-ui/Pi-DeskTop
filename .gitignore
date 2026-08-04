@@ -4,8 +4,12 @@ dist/
 release/
 
 # ── 发布脚本（含 Gitee/GitHub 令牌，严禁提交！）──
+# 以下脚本含真实 token / 关联凭证，精确排除；不含密钥的 scripts/build-electron.mjs 正常入库
+# 注意：今后在 scripts/ 新增含 token 的脚本，须在此处补一行精确排除
+scripts/publish-lib.mjs
+scripts/publish-github.mjs
+scripts/publish-gitee.mjs
 scripts/publish.mjs
-scripts/
 
 # ── 内置 Node 绿色包 / 安装包（几十~上百 MB，不应入库）──
 node-v24.18.0-win-x64/
