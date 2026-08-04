@@ -1,5 +1,17 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+// Pi-ready signaling: the main process sends "pi:ready" once the (slow,
+// synchronous) SDK initialization completes. Buffer it so a late subscriber
+// (e.g. a React effect that runs after the event already fired) still gets
+// notified instead of waiting forever.
+let piReadyFired = false;
+const piReadyCallbacks: Array<() => void> = [];
+ipcRenderer.on("pi:ready", () => {
+  piReadyFired = true;
+  const cbs = piReadyCallbacks.splice(0, piReadyCallbacks.length);
+  for (const cb of cbs) cb();
+});
+
 const piAPI = {
   prompt: (text: string, images?: any[], cwd?: string, sessionPath?: string) =>
     ipcRenderer.invoke("pi:prompt", { text, images, cwd, sessionPath }),
@@ -144,6 +156,23 @@ const piAPI = {
     return () => ipcRenderer.removeListener("pi:showAbout", listener);
   },
 
+  // App version (read from package.json via app.getVersion), used by the About dialog
+  getAppVersion: () => ipcRenderer.invoke("pi:getAppVersion"),
+
+  // Fired once the main process finishes SDK initialization. Safe to call at
+  // any time — if the event already fired, the callback runs immediately.
+  onReady: (callback: () => void) => {
+    if (piReadyFired) {
+      callback();
+      return () => {};
+    }
+    piReadyCallbacks.push(callback);
+    return () => {
+      const i = piReadyCallbacks.indexOf(callback);
+      if (i >= 0) piReadyCallbacks.splice(i, 1);
+    };
+  },
+
   // Active tools (assistant settings)
   getActiveTools: () => ipcRenderer.invoke("pi:getActiveTools"),
   saveActiveTools: (tools: string[]) =>
@@ -166,7 +195,7 @@ const piAPI = {
   // Embedded terminal (node-pty in the main process)
   terminal: {
     create: (opts: {
-      shell: "gitbash" | "powershell" | "cmd";
+      shell: "gitbash" | "powershell" | "cmd" | "zsh" | "bash";
       cwd: string;
       cols?: number;
       rows?: number;
@@ -178,11 +207,11 @@ const piAPI = {
     kill: (id: string) => ipcRenderer.invoke("pi:terminal:kill", { id }),
     getAvailableShells: () =>
       ipcRenderer.invoke("pi:terminal:availableShells") as Promise<
-        ("gitbash" | "powershell" | "cmd")[]
+        ("gitbash" | "powershell" | "cmd" | "zsh" | "bash")[]
       >,
     getActive: () =>
       ipcRenderer.invoke("pi:terminal:getActive") as Promise<
-        "gitbash" | "powershell" | "cmd" | null
+        "gitbash" | "powershell" | "cmd" | "zsh" | "bash" | null
       >,
   },
   onTerminalOutput: (callback: (id: string, data: string) => void) => {

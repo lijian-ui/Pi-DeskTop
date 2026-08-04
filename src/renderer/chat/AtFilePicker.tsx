@@ -238,7 +238,12 @@ export default function AtFilePicker({ cwd, onConfirm, onClose }: AtFilePickerPr
   };
 
   return (
-    <div className={styles.overlay} onClick={onClose}>
+    <div
+      className={styles.overlay}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div
         className={styles.modal}
         onClick={(e) => e.stopPropagation()}

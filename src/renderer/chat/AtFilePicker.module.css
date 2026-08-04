@@ -14,7 +14,7 @@
   max-height: 76vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-base, #ffffff);
+  background: var(--bg-base-default);
   border: 1px solid var(--border-neutral-l2);
   border-radius: var(--radius-10);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);

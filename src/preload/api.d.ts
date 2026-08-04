@@ -51,6 +51,11 @@ export interface PiDeskAPI {
   onRunningState(callback: (state: { running: string[]; cwds: string[] }) => void): () => void;
   onRejected(callback: (info: { reason: string; cwd: string; sessionPath?: string }) => void): () => void;
   onShowAbout(callback: () => void): () => void;
+  /** App version read from package.json via app.getVersion(). */
+  getAppVersion(): Promise<string>;
+  /** Fired once the main process finishes SDK initialization. Safe to call at
+   *  any time — if the event already fired, the callback runs immediately. */
+  onReady(callback: () => void): () => void;
 
   // Active tools (assistant settings)
   getActiveTools(): Promise<string[]>;
@@ -228,7 +233,7 @@ export interface ProviderCatalog {
   customProviders: CustomProviderItem[];
 }
 
-export type TerminalShell = "gitbash" | "powershell" | "cmd";
+export type TerminalShell = "gitbash" | "powershell" | "cmd" | "zsh" | "bash";
 
 export interface DirEntry {
   name: string;

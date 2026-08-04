@@ -1,8 +1,20 @@
-import { ipcMain, dialog, BrowserWindow } from "electron";
+import { app, ipcMain, dialog, BrowserWindow } from "electron";
 import { basename, extname, join } from "node:path";
 import { readFile, readdir, stat } from "node:fs/promises";
 import type { PiDeskSessionManager } from "./pi/session-manager";
 import type { TerminalManager } from "./pi/terminal-manager";
+
+// Lazily-resolved Pi manager. registerIpcHandlers() is invoked BEFORE the SDK
+// finishes initializing (so handlers exist from the first millisecond and the
+// renderer never sees "No handler registered"), and the real manager is injected
+// here once initialization completes. Using a module variable (instead of the
+// old closure-captured `pmgr` parameter) avoids the stale-null pitfall:
+// handlers registered with `null` would otherwise keep seeing `null` forever.
+let pmgr: PiDeskSessionManager | null = null;
+
+export function setPiManagerForHandlers(p: PiDeskSessionManager | null): void {
+  pmgr = p;
+}
 
 /** Parent window for native dialogs. Prefers the live window — the window
  *  captured at registration time may have been destroyed and rebuilt (app
@@ -14,221 +26,222 @@ function dialogParent(mainWindow: BrowserWindow): BrowserWindow | undefined {
 
 export function registerIpcHandlers(
   mainWindow: BrowserWindow,
-  piManager: PiDeskSessionManager | null,
   terminalManager: TerminalManager
 ): void {
+  pmgr = null;
+  ipcMain.handle("pi:getAppVersion", () => app.getVersion());
   ipcMain.handle("pi:prompt", async (_, { text, images, cwd, sessionPath }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.prompt(text, images, cwd, sessionPath);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.prompt(text, images, cwd, sessionPath);
   });
 
   ipcMain.handle("pi:steer", async (_, { text, cwd, sessionPath }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.steer(text, cwd, sessionPath);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.steer(text, cwd, sessionPath);
   });
 
   ipcMain.handle("pi:followUp", async (_, { text, cwd, sessionPath }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.followUp(text, cwd, sessionPath);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.followUp(text, cwd, sessionPath);
   });
 
   ipcMain.handle("pi:abort", async (_, { cwd }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.abort(cwd);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.abort(cwd);
   });
 
   // ── Bash guard (permission prototype) ──
   ipcMain.handle("pi:bashApprovalResponse", async (_, { requestId, decision }) => {
-    piManager?.handleBashApprovalResponse({ requestId, decision });
+    pmgr?.handleBashApprovalResponse({ requestId, decision });
   });
 
   ipcMain.handle("pi:setBashGuardMode", async (_, { mode }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    piManager.setBashGuardMode(mode);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    pmgr.setBashGuardMode(mode);
   });
 
   ipcMain.handle("pi:getBashGuardConfig", async () => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    return piManager.getBashGuardConfig();
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    return pmgr.getBashGuardConfig();
   });
 
   ipcMain.handle("pi:saveBashGuardConfig", async (_, config) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.saveBashGuardConfig(config);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.saveBashGuardConfig(config);
   });
 
   ipcMain.handle("pi:getCompactionConfig", async () => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    return piManager.getCompactionConfig();
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    return pmgr.getCompactionConfig();
   });
 
   ipcMain.handle("pi:saveCompactionConfig", async (_, config) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.saveCompactionConfig(config);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.saveCompactionConfig(config);
   });
 
   // ── Soul / persona (assistant settings) ──
   ipcMain.handle("pi:getSoul", async () => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    return piManager.getSoul();
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    return pmgr.getSoul();
   });
 
   ipcMain.handle("pi:saveSoul", async (_, text) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.saveSoul(text);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.saveSoul(text);
   });
 
   // ── Active tools (assistant settings) ──
   ipcMain.handle("pi:getActiveTools", async () => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    return piManager.getActiveTools();
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    return pmgr.getActiveTools();
   });
 
   ipcMain.handle("pi:saveActiveTools", async (_, tools: string[]) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.saveActiveTools(tools);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.saveActiveTools(tools);
   });
 
   ipcMain.handle("pi:setModel", async (_, { provider, modelId }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.setModel(provider, modelId);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.setModel(provider, modelId);
   });
 
   ipcMain.handle("pi:cycleModel", async () => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.cycleModel();
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.cycleModel();
   });
 
   ipcMain.handle("pi:getAvailableModels", async () => {
-    if (!piManager) return [];
-    return await piManager.getAvailableModels();
+    if (!pmgr) return [];
+    return await pmgr.getAvailableModels();
   });
 
   ipcMain.handle("pi:newSession", async (_, { cwd }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    return await piManager.newSession(cwd);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    return await pmgr.newSession(cwd);
   });
 
   ipcMain.handle("pi:switchSession", async (_, { cwd, sessionPath }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.switchSession(cwd, sessionPath);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.switchSession(cwd, sessionPath);
   });
 
   ipcMain.handle("pi:compact", async (_, { customInstructions }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    return await piManager.compact(customInstructions);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    return await pmgr.compact(customInstructions);
   });
 
   ipcMain.handle("pi:getContextUsage", async () => {
-    if (!piManager) return undefined;
-    return piManager.getContextUsage();
+    if (!pmgr) return undefined;
+    return pmgr.getContextUsage();
   });
 
   ipcMain.handle("pi:getState", async (_, { cwd }) => {
-    if (!piManager) return null;
-    return piManager.getState(cwd);
+    if (!pmgr) return null;
+    return pmgr.getState(cwd);
   });
 
   ipcMain.handle("pi:setApiKey", async (_, { providerId, apiKey }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    const mr = piManager.getModelRuntime();
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    const mr = pmgr.getModelRuntime();
     if (!mr) throw new Error("ModelRuntime not available");
     await mr.setRuntimeApiKey(providerId, apiKey);
   });
 
   ipcMain.handle("pi:removeApiKey", async (_, { providerId }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    const mr = piManager.getModelRuntime();
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    const mr = pmgr.getModelRuntime();
     if (!mr) throw new Error("ModelRuntime not available");
     await mr.removeRuntimeApiKey(providerId);
   });
 
   ipcMain.handle("pi:saveApiKey", async (_, { providerId, apiKey }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.saveApiKey(providerId, apiKey);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.saveApiKey(providerId, apiKey);
   });
 
   ipcMain.handle("pi:deleteApiKey", async (_, { providerId }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.deleteApiKey(providerId);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.deleteApiKey(providerId);
   });
 
   ipcMain.handle("pi:registerProvider", async (_, { providerId, config }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    const mr = piManager.getModelRuntime();
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    const mr = pmgr.getModelRuntime();
     if (!mr) throw new Error("ModelRuntime not available");
     mr.registerProvider(providerId, config);
   });
 
   ipcMain.handle("pi:unregisterProvider", async (_, { providerId }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    const mr = piManager.getModelRuntime();
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    const mr = pmgr.getModelRuntime();
     if (!mr) throw new Error("ModelRuntime not available");
     mr.unregisterProvider(providerId);
   });
 
   ipcMain.handle("pi:getRegisteredProviderIds", async () => {
-    if (!piManager) return [];
-    const mr = piManager.getModelRuntime();
+    if (!pmgr) return [];
+    const mr = pmgr.getModelRuntime();
     if (!mr) return [];
     return mr.getRegisteredProviderIds();
   });
 
   ipcMain.handle("pi:getProviderAuthStatus", async (_, { providerId }) => {
-    if (!piManager) return null;
-    const mr = piManager.getModelRuntime();
+    if (!pmgr) return null;
+    const mr = pmgr.getModelRuntime();
     if (!mr) return null;
     return mr.getProviderAuthStatus(providerId);
   });
 
   ipcMain.handle("pi:getAllProviders", async () => {
-    if (!piManager) return [];
-    return piManager.getAllProvidersInfo();
+    if (!pmgr) return [];
+    return pmgr.getAllProvidersInfo();
   });
 
   ipcMain.handle("pi:listProvidersCatalog", async () => {
-    if (!piManager) return { apiKeyProviders: [], customProviders: [] };
-    return piManager.getProvidersCatalog();
+    if (!pmgr) return { apiKeyProviders: [], customProviders: [] };
+    return pmgr.getProvidersCatalog();
   });
 
   ipcMain.handle("pi:getCustomModelsJson", async () => {
-    if (!piManager) return {};
-    return piManager.getCustomModelsJson();
+    if (!pmgr) return {};
+    return pmgr.getCustomModelsJson();
   });
 
   ipcMain.handle("pi:saveCustomModelsJson", async (_, { data }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.saveCustomModelsJson(data ?? {});
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.saveCustomModelsJson(data ?? {});
   });
 
   ipcMain.handle("pi:saveCustomProvider", async (_, { providerId, config }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.saveCustomProvider(providerId, config);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.saveCustomProvider(providerId, config);
   });
 
   ipcMain.handle("pi:deleteCustomProvider", async (_, { providerId }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.deleteCustomProvider(providerId);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.deleteCustomProvider(providerId);
   });
 
   ipcMain.handle("pi:deleteCustomModel", async (_, { providerId, modelId }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.deleteCustomModel(providerId, modelId);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.deleteCustomModel(providerId, modelId);
   });
 
   // ── Session management ──
   ipcMain.handle("pi:listSessions", async () => {
-    if (!piManager) return [];
-    return piManager.listSessions();
+    if (!pmgr) return [];
+    return pmgr.listSessions();
   });
 
   ipcMain.handle("pi:getCurrentSession", async (_, args) => {
-    if (!piManager) return null;
-    return piManager.getCurrentSessionPath(args?.cwd) ?? null;
+    if (!pmgr) return null;
+    return pmgr.getCurrentSessionPath(args?.cwd) ?? null;
   });
 
   ipcMain.handle("pi:exportSession", async (_, { sessionPath }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
+    if (!pmgr) throw new Error("Pi SDK not initialized");
     const defaultName = `${basename(String(sessionPath)).replace(/\.jsonl$/i, "")}.html`;
     const { canceled, filePath } = await dialog.showSaveDialog(dialogParent(mainWindow)!, {
       title: "Export session as HTML",
@@ -236,34 +249,34 @@ export function registerIpcHandlers(
       filters: [{ name: "HTML", extensions: ["html"] }],
     });
     if (canceled || !filePath) return null;
-    return await piManager.exportSessionHtml(String(sessionPath), filePath);
+    return await pmgr.exportSessionHtml(String(sessionPath), filePath);
   });
 
   ipcMain.handle("pi:renameSession", async (_, { sessionPath, name }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.renameSession(String(sessionPath), String(name));
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.renameSession(String(sessionPath), String(name));
   });
 
   ipcMain.handle("pi:deleteSession", async (_, { sessionPath }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    await piManager.deleteSession(String(sessionPath));
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.deleteSession(String(sessionPath));
   });
 
   // ── Skill management ──
   ipcMain.handle("pi:listSkills", async () => {
-    if (!piManager) return [];
-    return piManager.listSkills();
+    if (!pmgr) return [];
+    return pmgr.listSkills();
   });
 
   ipcMain.handle("pi:importSkill", async () => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
+    if (!pmgr) throw new Error("Pi SDK not initialized");
     const { canceled, filePaths } = await dialog.showOpenDialog(dialogParent(mainWindow)!, {
       title: "Import skill (.zip)",
       properties: ["openFile"],
       filters: [{ name: "Skill Zip", extensions: ["zip"] }],
     });
     if (canceled || filePaths.length === 0) return null;
-    return await piManager.importSkillZip(filePaths[0]);
+    return await pmgr.importSkillZip(filePaths[0]);
   });
 
   ipcMain.handle("pi:readSkillFile", async (_, { filePath }) => {
@@ -278,8 +291,8 @@ export function registerIpcHandlers(
 
   // ── Workspace (cwd) management ──
   ipcMain.handle("pi:getCwd", async () => {
-    if (!piManager) return process.cwd();
-    return piManager.getCwd();
+    if (!pmgr) return process.cwd();
+    return pmgr.getCwd();
   });
 
   // ── File / folder picker (for @ references) ──
@@ -291,8 +304,8 @@ export function registerIpcHandlers(
     const base =
       dir && dir.trim()
         ? dir
-        : piManager
-          ? piManager.getCwd()
+        : pmgr
+          ? pmgr.getCwd()
           : process.cwd();
     let dirents;
     try {
@@ -372,7 +385,7 @@ export function registerIpcHandlers(
   ipcMain.handle(
     "pi:searchWorkspace",
     async (event, { query, maxResults }: { query: string; maxResults?: number }) => {
-      const root = piManager ? piManager.getCwd() : process.cwd();
+      const root = pmgr ? pmgr.getCwd() : process.cwd();
       const q = (query || "").toLowerCase().trim();
       const MAX = Math.min(Math.max(maxResults || 200, 1), 500);
       const MAX_DEPTH = 8;
@@ -434,24 +447,24 @@ export function registerIpcHandlers(
   );
 
   ipcMain.handle("pi:setCwd", async (_, { cwd }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
+    if (!pmgr) throw new Error("Pi SDK not initialized");
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid workspace path");
     }
-    await piManager.setCwd(cwd);
-    return piManager.getCwd();
+    await pmgr.setCwd(cwd);
+    return pmgr.getCwd();
   });
 
   // Bind a still-empty session to a real workspace directory (per-session
   // relocate; does NOT set the global cwd). Returns the new on-disk path.
   ipcMain.handle("pi:bindSessionToWorkspace", async (_, { sessionPath, workspaceCwd }) => {
-    if (!piManager) throw new Error("Pi SDK not initialized");
-    return await piManager.bindSessionToWorkspace(sessionPath, workspaceCwd);
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    return await pmgr.bindSessionToWorkspace(sessionPath, workspaceCwd);
   });
 
   ipcMain.handle("pi:getChatOnlyCwd", async () => {
-    if (!piManager) return "";
-    return piManager.getChatOnlyCwd();
+    if (!pmgr) return "";
+    return pmgr.getChatOnlyCwd();
   });
 
   ipcMain.handle("pi:pickWorkspace", async () => {
@@ -466,8 +479,8 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle("pi:getRecentWorkspaces", async () => {
-    if (!piManager) return [];
-    return piManager.getRecentCwds();
+    if (!pmgr) return [];
+    return pmgr.getRecentCwds();
   });
 
   // ── Embedded terminal (node-pty) ──
@@ -476,21 +489,21 @@ export function registerIpcHandlers(
   // failed to initialize.
   ipcMain.handle(
     "pi:terminal:create",
-    async (_, opts: { shell: "gitbash" | "powershell" | "cmd"; cwd: string; cols?: number; rows?: number }) => {
+    async (_, opts: { shell: "gitbash" | "powershell" | "cmd" | "zsh" | "bash"; cwd: string; cols?: number; rows?: number }) => {
       return terminalManager.create(opts);
     }
   );
 
   // Which shells are actually installed on this machine (Git Bash may be
   // absent). The renderer uses this to hide unavailable shell options.
-  ipcMain.handle("pi:terminal:availableShells", async (): Promise<("gitbash" | "powershell" | "cmd")[]> => {
+  ipcMain.handle("pi:terminal:availableShells", async (): Promise<("gitbash" | "powershell" | "cmd" | "zsh" | "bash")[]> => {
     return terminalManager.getAvailableShells();
   });
 
   // The shell of the currently live (persistent) terminal, or null. Lets the
   // renderer re-attach to the same running session instead of spawning a new
   // one when the terminal panel is reopened.
-  ipcMain.handle("pi:terminal:getActive", (): "gitbash" | "powershell" | "cmd" | null => {
+  ipcMain.handle("pi:terminal:getActive", (): "gitbash" | "powershell" | "cmd" | "zsh" | "bash" | null => {
     return terminalManager.getActive();
   });
 

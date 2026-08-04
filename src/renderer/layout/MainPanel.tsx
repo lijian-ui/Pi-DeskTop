@@ -22,9 +22,13 @@ export default function MainPanel() {
   // a running task keeps its output and survives close/open cycles.
   const [terminalMounted, setTerminalMounted] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
   useEffect(() => {
     if (terminalOpen) setTerminalMounted(true);
   }, [terminalOpen]);
+  useEffect(() => {
+    window.piDesk.getAppVersion().then(setAppVersion).catch(() => {});
+  }, []);
 
   useEffect(() => {
     return window.piDesk.onShowAbout(() => setAboutOpen(true));
@@ -70,7 +74,7 @@ export default function MainPanel() {
       <AboutDialog
         open={aboutOpen}
         appName="Pi Desktop"
-        version="0.1.0"
+        version={appVersion}
         onClose={() => setAboutOpen(false)}
       />
     </div>

@@ -48,7 +48,7 @@
   height: 36px;
   border-radius: var(--radius-full);
   border: 1px solid var(--border-neutral-l2);
-  background: var(--bg-base);
+  background: var(--bg-base-default);
   color: var(--text-secondary);
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);

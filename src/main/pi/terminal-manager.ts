@@ -5,7 +5,9 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import type { WebContents } from "electron";
 
-export type TerminalShell = "gitbash" | "powershell" | "cmd";
+const IS_WIN = process.platform === "win32";
+
+export type TerminalShell = "gitbash" | "powershell" | "cmd" | "zsh" | "bash";
 
 export interface CreateTerminalOptions {
   shell: TerminalShell;
@@ -22,27 +24,40 @@ interface TerminalHandle {
   cwd: string;
 }
 
-const GIT_BASH_CANDIDATES = [
+// Windows-only Git Bash locations.
+const GIT_BASH_CANDIDATES_WIN = [
   "C:\\Program Files\\Git\\bin\\bash.exe",
   "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
 ];
 
-/** True if `name` resolves on PATH (e.g. `where git-bash.exe`). */
+// macOS / Linux stock shells (always present on a normal desktop install).
+const UNIX_SHELL_PATHS: Record<"zsh" | "bash", string> = {
+  zsh: "/bin/zsh",
+  bash: "/bin/bash",
+};
+
+/** True if `name` resolves on PATH. Uses `where` on Windows, `command -v` on Unix. */
 function commandExistsAsync(name: string): Promise<boolean> {
+  const probe = IS_WIN ? `where ${name}` : `command -v ${name}`;
   return new Promise((resolve) => {
-    exec(`where ${name}`, { windowsHide: true, timeout: 5000 }, (err) => {
+    exec(probe, { windowsHide: true, timeout: 5000 }, (err) => {
       resolve(!err);
     });
   });
 }
 
-/** Git Bash is present if its launcher or bash binary is reachable. */
+/** Git Bash is only relevant on Windows (probed via launcher / bash / git). */
 async function hasGitBash(): Promise<boolean> {
+  if (!IS_WIN) return false;
   if (await commandExistsAsync("git-bash.exe")) return true;
-  if ((await commandExistsAsync("bash.exe")) && ((await commandExistsAsync("git.exe")) || GIT_BASH_CANDIDATES.some((p) => existsSync(p)))) {
+  if (
+    (await commandExistsAsync("bash.exe")) &&
+    ((await commandExistsAsync("git.exe")) ||
+      GIT_BASH_CANDIDATES_WIN.some((p) => existsSync(p)))
+  ) {
     return true;
   }
-  return GIT_BASH_CANDIDATES.some((p) => existsSync(p));
+  return GIT_BASH_CANDIDATES_WIN.some((p) => existsSync(p));
 }
 
 /**
@@ -72,8 +87,14 @@ export class TerminalManager {
     if (this.availableShellsCache) return this.availableShellsCache;
     const shells: TerminalShell[] = [];
     if (await hasGitBash()) shells.push("gitbash");
-    if (await commandExistsAsync("powershell.exe") || await commandExistsAsync("pwsh.exe")) shells.push("powershell");
-    if (await commandExistsAsync("cmd.exe")) shells.push("cmd");
+    if (IS_WIN) {
+      if (await commandExistsAsync("powershell.exe") || await commandExistsAsync("pwsh.exe")) shells.push("powershell");
+      if (await commandExistsAsync("cmd.exe")) shells.push("cmd");
+    } else {
+      // macOS / Linux: the two stock shells are always present.
+      if (existsSync(UNIX_SHELL_PATHS.zsh)) shells.push("zsh");
+      if (existsSync(UNIX_SHELL_PATHS.bash)) shells.push("bash");
+    }
     this.availableShellsCache = shells;
     return shells;
   }
@@ -84,12 +105,19 @@ export class TerminalManager {
         return { command: "powershell.exe", args: ["-NoLogo"] };
       case "cmd":
         return { command: "cmd.exe", args: [] };
+      case "bash":
+        return { command: IS_WIN ? "bash.exe" : UNIX_SHELL_PATHS.bash, args: ["--login", "-i"] };
+      case "zsh":
+        return { command: UNIX_SHELL_PATHS.zsh, args: [] };
       case "gitbash":
       default: {
-        for (const c of GIT_BASH_CANDIDATES) {
-          if (existsSync(c)) return { command: c, args: ["--login", "-i"] };
+        if (IS_WIN) {
+          for (const c of GIT_BASH_CANDIDATES_WIN) {
+            if (existsSync(c)) return { command: c, args: ["--login", "-i"] };
+          }
+          return { command: "bash", args: ["--login", "-i"] };
         }
-        return { command: "bash", args: ["--login", "-i"] };
+        return { command: UNIX_SHELL_PATHS.bash, args: ["--login", "-i"] };
       }
     }
   }

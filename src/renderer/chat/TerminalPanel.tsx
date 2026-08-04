@@ -10,9 +10,11 @@ import { useWorkspaceStore } from "../store/workspace-store";
 import { useTranslation } from "react-i18next";
 import styles from "./TerminalPanel.module.css";
 
-type Shell = "gitbash" | "powershell" | "cmd";
+type Shell = "gitbash" | "powershell" | "cmd" | "zsh" | "bash";
 
 const SHELL_OPTIONS: { value: Shell; label: string }[] = [
+  { value: "zsh", label: "Zsh" },
+  { value: "bash", label: "Bash" },
   { value: "gitbash", label: "Git Bash" },
   { value: "powershell", label: "PowerShell" },
   { value: "cmd", label: "Command Prompt" },
@@ -145,14 +147,16 @@ export default function TerminalPanel({ visible }: { visible: boolean }) {
         const initial =
           active && list.includes(active)
             ? active
-            : list.includes("gitbash")
-              ? "gitbash"
-              : (list[0] ?? "powershell");
+            : list.includes("zsh")
+              ? "zsh" // macOS default
+              : list.includes("gitbash")
+                ? "gitbash" // Windows default
+                : (list[0] ?? "bash");
         setShell(initial);
       })
       .catch(() => {
         // Detection failed: fall back to showing every option (old behavior).
-        if (!cancelled) setAvailable(["gitbash", "powershell", "cmd"]);
+        if (!cancelled) setAvailable(["gitbash", "powershell", "cmd", "zsh", "bash"]);
       });
     return () => {
       cancelled = true;

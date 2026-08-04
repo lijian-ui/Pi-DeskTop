@@ -111,6 +111,11 @@
 .permissionWrap {
   position: relative;
   display: inline-flex;
+  /* Keep the permission selector pinned to the right edge even when the
+     "选择工作空间" pill is hidden. Task sessions render only this element,
+     and a flex row with a single child + space-between collapses it to the
+     left; margin-left:auto absorbs the slack so it stays on the right. */
+  margin-left: auto;
 }
 
 .permissionMenu {
@@ -122,7 +127,7 @@
   flex-direction: column;
   gap: var(--spacer-2);
   padding: var(--spacer-6);
-  background: var(--bg-base, #ffffff);
+  background: var(--bg-base-default);
   border: 1px solid var(--border-neutral-l2);
   border-radius: var(--radius-8);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
@@ -180,7 +185,7 @@
 .yoloDialog {
   width: 420px;
   max-width: 90vw;
-  background: var(--bg-base, #ffffff);
+  background: var(--bg-base-default);
   border-radius: 20px;
   padding: var(--spacer-24);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);

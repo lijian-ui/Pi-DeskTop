@@ -1,6 +1,6 @@
 import { app, BrowserWindow } from "electron";
 import { createMainWindow, setPiManager, disposePi, getPiManager } from "./window";
-import { registerIpcHandlers } from "./ipc-handlers";
+import { registerIpcHandlers, setPiManagerForHandlers } from "./ipc-handlers";
 import { PiDeskSessionManager } from "./pi/session-manager";
 import { TerminalManager } from "./pi/terminal-manager";
 import { setupApplicationMenu } from "./menu";
@@ -24,15 +24,21 @@ app.whenReady().then(async () => {
   setupAutoUpdater();
   bindEventTargets(mainWindow);
 
+  // Register IPC handlers BEFORE the (slow, synchronous) SDK init so renderer
+  // process calls during startup hit a real handler instead of "No handler
+  // registered". pmgr stays null until initialization completes below.
+  registerIpcHandlers(mainWindow, terminalManager!);
+
   try {
     const piManager = new PiDeskSessionManager();
     await piManager.initialize();
     setPiManager(piManager);
+    setPiManagerForHandlers(piManager);
     piManager.setEventTarget(mainWindow.webContents);
-    registerIpcHandlers(mainWindow, piManager, terminalManager!);
+    mainWindow.webContents.send("pi:ready");
   } catch (err) {
     console.error("Pi SDK initialization failed:", err);
-    registerIpcHandlers(mainWindow, null, terminalManager!);
+    setPiManagerForHandlers(null);
   }
 });
 

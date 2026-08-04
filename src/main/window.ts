@@ -27,8 +27,12 @@ export function createMainWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      spellcheck: false,
     },
   });
+
+  // Disable the native Chromium spell-checker so inputs don't show red squiggles.
+  win.webContents.session.setSpellCheckerEnabled(false);
 
   win.once("ready-to-show", () => {
     win.show();
