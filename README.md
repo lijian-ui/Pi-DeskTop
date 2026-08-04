@@ -20,7 +20,7 @@ Pi Desktop 是 Pi AI 编程代理的桌面客户端。它不修改 Pi SDK 的任
 - **Soul 人格**：设置页编辑人格设定，注入到系统提示词最底部，每轮热加载
 - **安全中心**：bash 危险命令黑名单 / 白名单，敏感命令弹窗确认（按工作目录隔离）
 - **系统托盘**：点 X 最小化到托盘，托盘图标常驻；左键显隐、右键菜单退出
-- **自动更新**：electron-updater 以 Gitee 为版本检测源（`latest.yml` 指向 GitHub 下载地址）、GitHub 为安装包下载源，发布后用户端自动升级
+- **自动更新**：electron-updater 以 Gitee 为版本检测源、GitHub 为安装包下载源（下载 URL 经 `ghproxy.net` 等镜像加速，国内直连更快；可在 `scripts/publish-lib.mjs` 用 `GITHUB_MIRROR` 环境变量切换镜像），发布后用户端自动升级
 - **会话导出**：导出会话为独立 HTML 文件
 
 ## 技术栈
@@ -112,7 +112,7 @@ Pi SDK 与桌面壳共用配置目录（macOS 放在「文稿」下，Finder 直
 
 ### 安装
 
-从 [GitHub Releases](https://github.com/lijian-ui/Pi-DeskTop/releases) 下载安装包（版本检测走 Gitee，国内访问友好；安装包实际托管在 GitHub）。
+从 [GitHub Releases](https://github.com/lijian-ui/Pi-DeskTop/releases) 下载安装包（版本检测走 Gitee，国内访问友好；安装包实际托管在 GitHub，下载经镜像加速）。
 
 - **Windows NSIS 安装版**：双击 `.exe` → 安装向导
 - **macOS DMG**：双击 `.dmg` → 拖入 Applications
