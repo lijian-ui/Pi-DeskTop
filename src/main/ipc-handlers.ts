@@ -1,4 +1,4 @@
-import { app, ipcMain, dialog, BrowserWindow } from "electron";
+import { app, ipcMain, dialog, BrowserWindow, shell } from "electron";
 import { basename, extname, join } from "node:path";
 import { readFile, readdir, stat } from "node:fs/promises";
 import type { PiDeskSessionManager } from "./pi/session-manager";
@@ -30,6 +30,16 @@ export function registerIpcHandlers(
 ): void {
   pmgr = null;
   ipcMain.handle("pi:getAppVersion", () => app.getVersion());
+
+  // Open an external URL in the OS default browser (e.g. GitHub repo, docs).
+  // Renderer cannot do this safely on its own in Electron, so it asks the
+  // main process which uses shell.openExternal.
+  ipcMain.handle("pi:openExternal", async (_, { url }: { url: string }) => {
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+      throw new Error("Only http(s) URLs can be opened externally");
+    }
+    await shell.openExternal(url);
+  });
   ipcMain.handle("pi:prompt", async (_, { text, images, cwd, sessionPath }) => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
     await pmgr.prompt(text, images, cwd, sessionPath);

@@ -323,6 +323,30 @@ const zhMessages = {
   "theme.light": "亮色",
   "theme.dark": "暗色",
   "theme.system": "跟随系统",
+
+  // ── Help & Feedback (帮助与反馈) ──
+  "nav.help": "帮助与反馈",
+  "help.title": "帮助与反馈",
+  "help.intro.title": "Pi Desktop",
+  "help.intro.desc": "基于 Pi 编程代理的桌面客户端：内置对话、技能、自动化与集成终端，把 AI 编程能力带到一个熟悉的桌面界面。",
+  "help.repo.title": "项目仓库",
+  "help.repo.desc": "源码、版本发布与问题反馈全部托管在 GitHub。欢迎 Star、提交 Issue 或 PR。",
+  "help.repo.open": "在 GitHub 上打开",
+  "help.repo.star": "喜欢的话，点个 Star 支持一下 ⭐",
+  "help.faq.title": "常见问题",
+  "help.feedback.title": "反馈与建议",
+  "help.feedback.bug": "报告问题",
+  "help.feedback.bug.desc": "在 GitHub Issues 提交 Bug 或复现步骤",
+  "help.feedback.feature": "功能建议",
+  "help.feedback.feature.desc": "提交新功能或改进建议",
+  "help.feedback.community": "交流社区",
+  "help.feedback.community.desc": "与其他用户交流使用心得",
+  "help.resources.title": "资源与文档",
+  "help.resources.pi": "Pi 官方文档",
+  "help.resources.packages": "Pi Packages 扩展市场",
+  "help.resources.releases": "GitHub 版本发布",
+  "help.resources.desc": "了解更多关于 Pi 代理与扩展生态的官方资料。",
+  "help.back": "返回对话",
 };
 
 const enMessages: Record<string, string> = {
@@ -629,6 +653,30 @@ const enMessages: Record<string, string> = {
   "theme.light": "Light",
   "theme.dark": "Dark",
   "theme.system": "System",
+
+  // ── Help & Feedback ──
+  "nav.help": "Help & Feedback",
+  "help.title": "Help & Feedback",
+  "help.intro.title": "Pi Desktop",
+  "help.intro.desc": "A desktop client for the Pi coding agent — chat, skills, automation and an integrated terminal, all in a familiar desktop UI.",
+  "help.repo.title": "Project Repository",
+  "help.repo.desc": "Source code, releases and issue tracking live on GitHub. Star it, file an issue, or open a PR — all welcome.",
+  "help.repo.open": "Open on GitHub",
+  "help.repo.star": "If you like it, give it a Star ⭐",
+  "help.faq.title": "Frequently Asked Questions",
+  "help.feedback.title": "Feedback & Suggestions",
+  "help.feedback.bug": "Report an issue",
+  "help.feedback.bug.desc": "File a bug report or repro steps on GitHub Issues",
+  "help.feedback.feature": "Request a feature",
+  "help.feedback.feature.desc": "Suggest a new feature or improvement",
+  "help.feedback.community": "Community",
+  "help.feedback.community.desc": "Chat with other users about how you use it",
+  "help.resources.title": "Resources & Docs",
+  "help.resources.pi": "Pi official docs",
+  "help.resources.packages": "Pi Packages marketplace",
+  "help.resources.releases": "GitHub releases",
+  "help.resources.desc": "Learn more about the Pi agent and its extension ecosystem.",
+  "help.back": "Back to chat",
 };
 
 i18n.use(initReactI18next).init({

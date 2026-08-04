@@ -27,7 +27,7 @@ interface UIState {
   composerText: string;
   /** Structured code references injected from the file-preview panel. */
   codeAttachments: CodeAttachment[];
-  mainView: "chat" | "settings" | "skills" | "automate";
+  mainView: "chat" | "settings" | "skills" | "automate" | "help";
   terminalOpen: boolean;
   terminalWidth: number;
 

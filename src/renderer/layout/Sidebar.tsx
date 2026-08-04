@@ -18,6 +18,7 @@ import {
   ChevronRight,
   ListTree,
   Loader2,
+  HelpCircle,
 } from "lucide-react";
 import { useUIStore } from "../store/ui-store";
 import { useTranslation } from "react-i18next";
@@ -26,7 +27,7 @@ import FileManagerPanel from "./FileManagerPanel";
 import ConfirmDialog from "../sidebar/ConfirmDialog";
 import styles from "./Sidebar.module.css";
 
-type NavKey = "chat" | "agents" | "projects" | "skills" | "automate" | "settings";
+type NavKey = "chat" | "agents" | "projects" | "skills" | "automate" | "settings" | "help";
 
 interface NavItem {
   key: NavKey;
@@ -37,6 +38,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { key: "skills", icon: Sparkles, labelKey: "nav.skills" },
   { key: "automate", icon: Wrench, labelKey: "nav.automate" },
+  { key: "help", icon: HelpCircle, labelKey: "nav.help" },
   { key: "settings", icon: Settings, labelKey: "nav.settings" },
 ];
 
@@ -147,6 +149,8 @@ export default function Sidebar() {
       setMainView("skills");
     } else if (key === "automate") {
       setMainView("automate");
+    } else if (key === "help") {
+      setMainView("help");
     } else {
       setMainView("chat");
     }

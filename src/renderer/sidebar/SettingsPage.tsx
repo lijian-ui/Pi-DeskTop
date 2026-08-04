@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   X, Settings as SystemIcon, Palette, Brain, Cpu,
-  Bot as AssistantIcon, Database, Keyboard, Shield, HelpCircle, Languages,
+  Bot as AssistantIcon, Database, Keyboard, Shield, Languages,
   Layers, Wrench,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -26,7 +26,6 @@ type SettingsSection =
   | "shortcuts"
   | "security"
   | "context"
-  | "help"
   | "language";
 
 interface NavItem {
@@ -47,7 +46,6 @@ const NAV_ITEMS: NavItem[] = [
   { key: "personalization", icon: Palette, labelKey: "settings.personalization" },
   { key: "shortcuts", icon: Keyboard, labelKey: "settings.shortcuts" },
   { key: "data", icon: Database, labelKey: "settings.data" },
-  { key: "help", icon: HelpCircle, labelKey: "settings.help" },
 ];
 
 export default function SettingsPage() {

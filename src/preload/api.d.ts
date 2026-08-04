@@ -51,6 +51,10 @@ export interface PiDeskAPI {
   onRunningState(callback: (state: { running: string[]; cwds: string[] }) => void): () => void;
   onRejected(callback: (info: { reason: string; cwd: string; sessionPath?: string }) => void): () => void;
   onShowAbout(callback: () => void): () => void;
+  /** Open an external http(s) URL in the OS default browser (main process). */
+  openExternal(url: string): Promise<void>;
+  /** Native app-menu "帮助与反馈" → switch to the help page. */
+  onShowHelp(callback: () => void): () => void;
   /** App version read from package.json via app.getVersion(). */
   getAppVersion(): Promise<string>;
   /** Fired once the main process finishes SDK initialization. Safe to call at

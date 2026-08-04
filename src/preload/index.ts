@@ -156,6 +156,16 @@ const piAPI = {
     return () => ipcRenderer.removeListener("pi:showAbout", listener);
   },
 
+  // Open an external URL (GitHub repo, docs, …) in the OS default browser.
+  openExternal: (url: string) => ipcRenderer.invoke("pi:openExternal", { url }),
+
+  // Native app-menu "帮助与反馈" entry → switch the renderer to the help page.
+  onShowHelp: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on("pi:showHelp", listener);
+    return () => ipcRenderer.removeListener("pi:showHelp", listener);
+  },
+
   // App version (read from package.json via app.getVersion), used by the About dialog
   getAppVersion: () => ipcRenderer.invoke("pi:getAppVersion"),
 
