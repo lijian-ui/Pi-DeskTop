@@ -1,8 +1,9 @@
 import { spawn, type IPty } from "node-pty";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { exec } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
+import { homedir } from "node:os";
 import type { WebContents } from "electron";
 
 const IS_WIN = process.platform === "win32";
@@ -108,7 +109,7 @@ export class TerminalManager {
       case "bash":
         return { command: IS_WIN ? "bash.exe" : UNIX_SHELL_PATHS.bash, args: ["--login", "-i"] };
       case "zsh":
-        return { command: UNIX_SHELL_PATHS.zsh, args: [] };
+        return { command: UNIX_SHELL_PATHS.zsh, args: ["-l", "-i"] };
       case "gitbash":
       default: {
         if (IS_WIN) {
@@ -122,9 +123,28 @@ export class TerminalManager {
     }
   }
 
+  /**
+   * Resolve a spawn cwd that is guaranteed to be an existing directory.
+   * node-pty fails at spawn time (macOS: "posix_spawnp failed") if the cwd
+   * does not exist — which happens on a cross-platform machine when a stale
+   * Windows-style workspace path ("E:\\...") is still in the store, or when
+   * the renderer sends an empty/null cwd. Fall back to $HOME in that case so
+   * the PTY always spawns.
+   */
+  private resolveCwd(cwd?: string): string {
+    const candidate = cwd && cwd.trim().length > 0 ? cwd.trim() : process.cwd();
+    try {
+      const abs = resolve(candidate);
+      if (existsSync(abs) && statSync(abs).isDirectory()) return abs;
+    } catch {
+      /* fall through to home */
+    }
+    return homedir();
+  }
+
   create(opts: CreateTerminalOptions): { id: string; pid: number } {
     const { command, args } = this.resolveShell(opts.shell);
-    const cwd = resolve(opts.cwd || process.cwd());
+    const cwd = this.resolveCwd(opts.cwd);
 
     // Reuse the live terminal only if it runs the requested shell AND was
     // spawned in the same directory. Reusing across cwds would silently leave
@@ -153,15 +173,25 @@ export class TerminalManager {
 
     const cols = opts.cols ?? 80;
     const rows = opts.rows ?? 30;
-    const term: IPty = spawn(command, args, {
-      name: "xterm-256color",
-      cols,
-      rows,
-      cwd,
-      // Merge with the host env and advertise a 256-color terminal so tools
-      // like `ls --color`, git diff, etc. render nicely.
-      env: { ...process.env, TERM: "xterm-256color", FORCE_COLOR: "1" },
-    });
+    let term: IPty;
+    try {
+      term = spawn(command, args, {
+        name: "xterm-256color",
+        cols,
+        rows,
+        cwd,
+        // Merge with the host env and advertise a 256-color terminal so tools
+        // like `ls --color`, git diff, etc. render nicely.
+        env: { ...process.env, TERM: "xterm-256color", FORCE_COLOR: "1" },
+      });
+    } catch (err) {
+      // Surface a diagnostic that names the exact command/cwd so a spawn
+      // failure (e.g. a still-incompatible native build) is actionable.
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `terminal spawn failed [command=${command} args=${JSON.stringify(args)} cwd=${cwd}]: ${msg}`
+      );
+    }
 
     const id = randomUUID();
     term.onData((data) => {

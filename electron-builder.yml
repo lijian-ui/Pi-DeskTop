@@ -25,6 +25,12 @@ publish:
 mac:
   icon: resources/pi-logo.icns
   category: public.app-category.developer-tools
+  # Rebuild node-pty against THIS Electron on macOS. The npm-published darwin
+  # prebuild (N-API) loads but fails at spawn ("posix_spawnp failed") under
+  # Electron 35's Node 22 runtime; a local rebuild against the bundled Electron
+  # headers produces a compatible native binary. Windows keeps npmRebuild:false
+  # (no VS/Python there) — see the top-level setting.
+  npmRebuild: true
   target:
     - dmg
     - zip
