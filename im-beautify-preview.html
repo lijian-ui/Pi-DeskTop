@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>IM 接入页 · 美化预览（悬停只阴影不抬升）</title>
+<style>
+  :root {
+    --radius-2: 2px; --radius-4: 4px; --radius-6: 6px; --radius-8: 8px;
+    --radius-10: 10px; --radius-12: 12px; --radius-14: 14px; --radius-full: 9999px;
+    --spacer-4: 4px; --spacer-6: 6px; --spacer-8: 8px; --spacer-10: 10px;
+    --spacer-12: 12px; --spacer-14: 14px; --spacer-16: 16px; --spacer-18: 18px;
+    --spacer-20: 20px; --spacer-24: 24px;
+    --font-weight-medium: 500; --font-weight-strong: 600;
+    --body-xs-font-size: 10px; --body-sm-font-size: 11px; --body-base-font-size: 13px;
+    --bg-base-default: #25282E; --bg-base-secondary: #30343B;
+    --bg-overlay-l1: rgba(224,226,242,0.04); --bg-overlay-l2: rgba(224,226,242,0.06);
+    --bg-overlay-l3: rgba(224,226,242,0.08); --bg-overlay-l4: rgba(224,226,242,0.12);
+    --bg-brand: #32F08C; --bg-brand-hover: #0FDC78; --bg-brand-popup: rgba(50,240,140,0.12);
+    --text-default: #D1D3DB; --text-secondary: #9599A6; --text-tertiary: #666B75;
+    --text-onbrand: #0C0C0D; --text-brand: #32F08C;
+    --icon-default: #D1D3DB; --icon-secondary: #9599A6; --icon-tertiary: #666B75;
+    --border-neutral-l1: rgba(224,226,242,0.1); --border-neutral-l2: rgba(224,226,242,0.16);
+    --border-brand: #32F08C;
+    --status-success-default: #33C192; --status-alert-default: #D29D00; --status-error-default: #F65A5A;
+    --status-error-surface-l1: rgba(246,70,70,0.18);
+  }
+  [data-theme="light"] {
+    --bg-base-default: #FFFFFF; --bg-base-secondary: #F4F5F7;
+    --bg-overlay-l1: rgba(15,23,42,0.04); --bg-overlay-l2: rgba(15,23,42,0.06);
+    --bg-overlay-l3: rgba(15,23,42,0.08); --bg-overlay-l4: rgba(15,23,42,0.12);
+    --bg-brand: #14C46A; --bg-brand-hover: #0FB35F; --bg-brand-popup: rgba(20,196,106,0.12);
+    --text-default: #1A1B1D; --text-secondary: #5B606B; --text-tertiary: #8A8F99;
+    --text-onbrand: #FFFFFF; --text-brand: #0E9E54;
+    --icon-default: #3A3D44; --icon-secondary: #5B606B; --icon-tertiary: #8A8F99;
+    --border-neutral-l1: rgba(15,23,42,0.08); --border-neutral-l2: rgba(15,23,42,0.12);
+    --border-brand: #14C46A;
+    --status-success-default: #1FA97A; --status-alert-default: #B8860B; --status-error-default: #DC3D3D;
+    --status-error-surface-l1: rgba(220,61,61,0.12);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: "SF Pro Text","Segoe UI",system-ui,-apple-system,sans-serif;
+    background: var(--bg-base-default); color: var(--text-default);
+    -webkit-font-smoothing: antialiased;
+  }
+  .themebar {
+    position: fixed; top: 14px; right: 16px; z-index: 500;
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 12px; border-radius: var(--radius-8);
+    background: var(--bg-overlay-l3); border: 1px solid var(--border-neutral-l2);
+    color: var(--text-secondary); font-size: 12px; cursor: pointer;
+  }
+  .hint { position: fixed; top: 14px; left: 16px; z-index: 500; color: var(--text-tertiary); font-size: 11px; }
+
+  .page { display: flex; flex-direction: column; min-height: 100vh; max-width: 760px; margin: 0 auto; }
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 24px; border-bottom: 1px solid var(--border-neutral-l2);
+    background: linear-gradient(180deg, var(--bg-overlay-l1), transparent);
+  }
+  .titleRow { display: flex; align-items: center; gap: 10px; }
+  .title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; margin: 0; color: var(--text-default); }
+  .countBadge {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px;
+    padding: 0 7px; border-radius: 999px; background: var(--bg-overlay-l3); color: var(--text-secondary);
+    font-size: 11px; font-weight: 600;
+  }
+  .addBtn {
+    display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 15px;
+    border: none; border-radius: var(--radius-8); background: var(--bg-brand); color: var(--text-onbrand);
+    font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.18);
+    transition: background 0.14s ease, box-shadow 0.14s ease;
+  }
+  .addBtn:hover { background: var(--bg-brand-hover); box-shadow: 0 4px 14px var(--bg-brand-popup); }
+
+  .body { flex: 1; padding: 24px; display: flex; flex-direction: column; gap: 14px; }
+  .channelList { display: flex; flex-direction: column; gap: 10px; }
+  .channelCard {
+    display: flex; align-items: center; gap: 14px; padding: 14px 16px;
+    background: var(--bg-overlay-l1); border: 1px solid var(--border-neutral-l1); border-radius: var(--radius-10);
+    transition: border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+  }
+  .channelCard:hover {
+    border-color: var(--border-brand); background: var(--bg-overlay-l2);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.22);
+  }
+  .channelIcon {
+    display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px;
+    border-radius: var(--radius-10); background: var(--bg-brand-popup); color: var(--text-brand); flex-shrink: 0;
+  }
+  .channelInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .channelNameRow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .channelName { font-size: 13px; font-weight: 600; color: var(--text-default); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .channelSub { font-size: 11px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .channelWorkspace { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-brand); }
+  .channelWorkspace::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .badge {
+    display: inline-flex; align-items: center; font-size: 10px; line-height: 1; padding: 3px 9px 3px 7px;
+    border-radius: 999px; border: 1px solid transparent; font-weight: 600;
+  }
+  .badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; margin-right: 5px; }
+  .badge_off, .badge_error { color: var(--status-error-default); border-color: rgba(246,70,70,0.35); background: rgba(246,70,70,0.08); }
+  .badge_connecting { color: var(--status-alert-default); border-color: rgba(210,157,0,0.35); background: rgba(210,157,0,0.08); }
+  .badge_connected { color: var(--status-success-default); border-color: rgba(51,193,146,0.35); background: rgba(51,193,146,0.08); }
+  .badge_connected::before { animation: dotPulse 2s ease-in-out infinite; }
+  @keyframes dotPulse {
+    0%,100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+    50% { box-shadow: 0 0 0 3px transparent; opacity: 0.65; }
+  }
+  .channelActions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  .iconBtn {
+    display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px;
+    border: none; border-radius: var(--radius-6); background: transparent; color: var(--text-tertiary);
+    cursor: pointer; transition: background 0.12s ease, color 0.12s ease;
+  }
+  .iconBtn:hover { background: var(--bg-overlay-l3); color: var(--text-default); }
+  .dangerBtn:hover { color: var(--status-error-default); background: rgba(246,70,70,0.1); }
+  .toggleBtn { position: relative; width: 36px; height: 21px; border: none; border-radius: 999px; background: var(--border-neutral-l2); cursor: pointer; padding: 0; transition: background 0.15s ease; }
+  .toggleKnob { position: absolute; left: 2px; top: 2px; width: 17px; height: 17px; border-radius: 50%; background: var(--bg-base-default); box-shadow: 0 1px 2px rgba(0,0,0,0.25); transition: left 0.15s ease; }
+  .toggleOn { background: var(--bg-brand); }
+  .toggleOn .toggleKnob { left: 17px; }
+
+  /* Modal */
+  .overlay {
+    position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.5); padding: var(--spacer-24); animation: fadeIn 0.15s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .modal {
+    display: flex; flex-direction: column; width: 520px; max-width: 100%; max-height: 90vh;
+    background: var(--bg-base-default); border: 1px solid var(--border-neutral-l2); border-top: 2px solid var(--bg-brand);
+    border-radius: var(--radius-14); overflow: hidden;
+    box-shadow: 0 20px 48px rgba(0,0,0,0.36), 0 4px 12px rgba(0,0,0,0.2);
+    animation: slideIn 0.2s cubic-bezier(0.16,1,0.3,1);
+  }
+  @keyframes slideIn { from { opacity: 0; transform: translateY(10px) scale(0.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  .mHeader { display: flex; align-items: center; gap: 8px; padding: 16px 18px; border-bottom: 1px solid var(--border-neutral-l1); }
+  .mTitle { flex: 1; font-size: 16px; font-weight: 600; color: var(--text-default); margin: 0; }
+  .mClose { width: 28px; height: 28px; border: none; background: transparent; color: var(--icon-secondary); cursor: pointer; border-radius: var(--radius-6); }
+  .mClose:hover { background: var(--bg-overlay-l2); color: var(--icon-default); }
+  .mBody { flex: 1; overflow-y: auto; padding: 20px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .fieldLabel { font-size: 10px; color: var(--text-secondary); font-weight: 600; }
+  .fieldInput {
+    height: 40px; padding: 0 12px; background: var(--bg-overlay-l2); border: 1px solid var(--border-neutral-l2);
+    border-radius: var(--radius-8); color: var(--text-default); font-size: 11px; outline: none;
+    transition: border-color 0.12s ease, background 0.12s ease;
+  }
+  .fieldInput:focus { border-color: var(--border-brand); background: var(--bg-overlay-l3); box-shadow: 0 0 0 3px var(--bg-brand-popup); }
+  .mFooter { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--border-neutral-l1); }
+  .btnGhost { height: 36px; padding: 0 16px; background: transparent; color: var(--text-secondary); border: 1px solid var(--border-neutral-l2); border-radius: var(--radius-8); cursor: pointer; font-size: 11px; }
+  .btnGhost:hover { background: var(--bg-overlay-l2); color: var(--text-default); }
+  .btnPrimary {
+    display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 18px; background: var(--bg-brand);
+    color: var(--text-onbrand); border: none; border-radius: var(--radius-8); cursor: pointer; font-size: 11px;
+    font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.18); transition: background 0.12s ease, box-shadow 0.12s ease;
+  }
+  .btnPrimary:hover { background: var(--bg-brand-hover); box-shadow: 0 4px 14px var(--bg-brand-popup); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <div class="hint">悬停下方卡片/按钮 → 仅阴影、不抬升</div>
+  <button class="themebar" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark')">切换 暗 / 亮 主题</button>
+
+  <div class="page">
+    <div class="header">
+      <div class="titleRow">
+        <h2 class="title">IM 接入</h2>
+        <span class="countBadge">3</span>
+      </div>
+      <button class="addBtn" onclick="document.getElementById('modal').classList.remove('hidden')">+ 添加渠道</button>
+    </div>
+    <div class="body">
+      <div class="channelList">
+        <!-- 已连接 -->
+        <div class="channelCard">
+          <div class="channelIcon">🤖</div>
+          <div class="channelInfo">
+            <div class="channelNameRow"><span class="channelName">测试机器人</span><span class="badge badge_connected">已连接</span></div>
+            <div class="channelSub">钉钉 · AppKey ding****a3f9</div>
+            <div class="channelWorkspace">~/.pi/agent/projects/demo-web</div>
+          </div>
+          <div class="channelActions">
+            <button class="toggleBtn toggleOn"><span class="toggleKnob"></span></button>
+            <button class="iconBtn" onclick="document.getElementById('modal').classList.remove('hidden')">✏️</button>
+            <button class="iconBtn dangerBtn">🗑️</button>
+          </div>
+        </div>
+        <!-- 已停用 -->
+        <div class="channelCard">
+          <div class="channelIcon">🤖</div>
+          <div class="channelInfo">
+            <div class="channelNameRow"><span class="channelName">销售助手</span><span class="badge badge_off">已停用</span></div>
+            <div class="channelSub">钉钉 · AppKey ding****7b21</div>
+            <div class="channelWorkspace">~/.pi/agent/projects/crm-sync</div>
+          </div>
+          <div class="channelActions">
+            <button class="toggleBtn"><span class="toggleKnob"></span></button>
+            <button class="iconBtn" onclick="document.getElementById('modal').classList.remove('hidden')">✏️</button>
+            <button class="iconBtn dangerBtn">🗑️</button>
+          </div>
+        </div>
+        <!-- 连接错误 -->
+        <div class="channelCard">
+          <div class="channelIcon">🤖</div>
+          <div class="channelInfo">
+            <div class="channelNameRow"><span class="channelName">客服 Bot</span><span class="badge badge_error">连接错误</span></div>
+            <div class="channelSub">钉钉 · AppKey 无效或网络不可达</div>
+            <div class="channelWorkspace">~/.pi/agent/chat/im/dingtalk</div>
+          </div>
+          <div class="channelActions">
+            <button class="toggleBtn"><span class="toggleKnob"></span></button>
+            <button class="iconBtn" onclick="document.getElementById('modal').classList.remove('hidden')">✏️</button>
+            <button class="iconBtn dangerBtn">🗑️</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay hidden" id="modal" onclick="if(event.target===this)this.classList.add('hidden')">
+    <div class="modal">
+      <div class="mHeader">
+        <h3 class="mTitle">编辑渠道 · 测试机器人</h3>
+        <button class="mClose" onclick="document.getElementById('modal').classList.add('hidden')">✕</button>
+      </div>
+      <div class="mBody">
+        <div class="field">
+          <label class="fieldLabel">渠道名称</label>
+          <input class="fieldInput" value="测试机器人" />
+        </div>
+        <div class="field">
+          <label class="fieldLabel">AppKey</label>
+          <input class="fieldInput" value="ding****a3f9" />
+        </div>
+        <div class="field">
+          <label class="fieldLabel">默认工作区</label>
+          <input class="fieldInput" value="~/.pi/agent/projects/demo-web" />
+        </div>
+      </div>
+      <div class="mFooter">
+        <button class="btnGhost" onclick="document.getElementById('modal').classList.add('hidden')">取消</button>
+        <button class="btnPrimary" onclick="document.getElementById('modal').classList.add('hidden')">保存</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

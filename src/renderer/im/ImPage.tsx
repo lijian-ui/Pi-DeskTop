@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { X, Plus, Pencil, Trash2, Loader2, FolderSync, Plug } from "lucide-react";
+import { X, Plus, Pencil, Trash2, Loader2, FolderSync } from "lucide-react";
 import { useUIStore } from "../store/ui-store";
 import { useSessionStore } from "../store/session-store";
 import type { ImConfig, ImChannelInstance } from "../../preload/api";
@@ -26,6 +26,7 @@ export default function ImPage() {
   const [status, setStatus] = useState<StatusMap>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ImChannelInstance | null>(null);
@@ -42,6 +43,7 @@ export default function ImPage() {
     ]);
     setConfig(cfg);
     setStatus(st);
+    setLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -170,27 +172,17 @@ export default function ImPage() {
       </div>
 
       <div className={styles.body}>
-        {error && <div className={styles.error}>{error}</div>}
-        {notice && <div className={styles.notice}>{notice}</div>}
+        {!loaded ? (
+          <div className={styles.loading}>{t("loading")}</div>
+        ) : (
+          <>
+            {error && <div className={styles.error}>{error}</div>}
+            {notice && <div className={styles.notice}>{notice}</div>}
 
-        {/* Channel cards */}
-        {channels.length === 0 ? (
+            {/* Channel cards */}
+            {channels.length === 0 ? (
           <div className={styles.empty}>
-            <div className={styles.emptyIcon}>
-              <Plug size={24} />
-            </div>
             <p className={styles.emptyText}>{t("im.empty")}</p>
-            <button
-              type="button"
-              className={styles.emptyAction}
-              onClick={() => {
-                setEditing(null);
-                setModalOpen(true);
-              }}
-            >
-              <Plus size={15} />
-              <span>{t("im.addChannel")}</span>
-            </button>
           </div>
         ) : (
           <div className={styles.channelList}>
@@ -281,7 +273,9 @@ export default function ImPage() {
                 </div>
               );
             })}
-          </div>
+            </div>
+          )}
+          </>
         )}
       </div>
 
