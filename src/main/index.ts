@@ -3,11 +3,32 @@ import { createMainWindow, setPiManager, disposePi, getPiManager } from "./windo
 import { registerIpcHandlers, setPiManagerForHandlers } from "./ipc-handlers";
 import { PiDeskSessionManager } from "./pi/session-manager";
 import { TerminalManager } from "./pi/terminal-manager";
+import { ImGateway, startGatewayFromConfig } from "./im/im-gateway";
 import { setupApplicationMenu } from "./menu";
 import { createTray } from "./tray";
 import { setupAutoUpdater, disposeAutoUpdater } from "./app-updater";
 
 let terminalManager: TerminalManager | null = null;
+let imGateway: ImGateway | null = null;
+
+/** Create + init the IM gateway (DingTalk etc.) bound to the pi manager. */
+async function startImGateway(
+  piManager: PiDeskSessionManager,
+  win: BrowserWindow,
+): Promise<void> {
+  imGateway = new ImGateway(piManager);
+  imGateway.onStatusChange((status) => {
+    const wc = win.webContents;
+    if (!wc.isDestroyed()) wc.send("pi:imStatus", status);
+  });
+  await imGateway.init();
+  await startGatewayFromConfig(imGateway);
+}
+
+/** Expose the gateway for IPC handlers (module-level singleton access). */
+export function getImGateway(): ImGateway | null {
+  return imGateway;
+}
 
 /** Point the terminal + Pi event streams at a (re)created window's WebContents.
  *  TerminalManager is a process-wide singleton so it survives window rebuilds. */
@@ -35,6 +56,10 @@ app.whenReady().then(async () => {
     setPiManager(piManager);
     setPiManagerForHandlers(piManager);
     piManager.setEventTarget(mainWindow.webContents);
+    // Start the IM gateway (DingTalk etc.) from persisted config.
+    startImGateway(piManager, mainWindow).catch((err) =>
+      console.error("IM gateway init failed:", err),
+    );
     mainWindow.webContents.send("pi:ready");
   } catch (err) {
     console.error("Pi SDK initialization failed:", err);

@@ -44,6 +44,7 @@ import XiaomiMiMoIcon from "@lobehub/icons/es/XiaomiMiMo/components/Mono";
 import ZAIIcon from "@lobehub/icons/es/ZAI/components/Mono";
 import LmStudioMonoIcon from "@lobehub/icons/es/LmStudio/components/Mono";
 import OllamaMonoIcon from "@lobehub/icons/es/Ollama/components/Mono";
+import AgnesAIMonoIcon from "@lobehub/icons/es/AgnesAI/components/Mono";
 
 type IconComponent = ComponentType<{
   size?: number | string;
@@ -101,6 +102,7 @@ const PROVIDER_ICONS: Record<string, IconEntry> = {
   grok: { Icon: GrokIcon, hasColor: false },
   "lm-studio": { Icon: LmStudioMonoIcon, hasColor: false },
   ollama: { Icon: OllamaMonoIcon, hasColor: false },
+  agnesai: { Icon: AgnesAIMonoIcon, hasColor: false },
 };
 
 export default function ProviderIcon({

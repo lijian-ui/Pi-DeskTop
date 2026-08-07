@@ -1,10 +1,11 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import type { Message } from "../store/agent-store";
 import type { CodeAttachment } from "../store/ui-store";
 import SkillInvocation from "./SkillInvocation";
 import Markdown from "./Markdown";
 import { Code2, SquareTerminal } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toDataUrl } from "../utils/image";
 import styles from "./UserMessage.module.css";
 
 /** Map a file path to a (best-effort) highlight.js language id for the fence. */
@@ -86,8 +87,12 @@ interface Props {
 }
 
 function UserMessage({ message, highlight }: Props) {
+  const { t } = useTranslation();
   const parsed = parseSkillBlock(message.content);
   const attachments = message.attachments;
+  const images = message.images;
+  // Full-size preview overlay for a clicked thumbnail (null = closed).
+  const [zoomed, setZoomed] = useState<string | null>(null);
 
   return (
     <div
@@ -111,11 +116,33 @@ function UserMessage({ message, highlight }: Props) {
                   ))}
                 </div>
               )}
+              {images && images.length > 0 && (
+                <div className={styles.imageList}>
+                  {images.map((img) => {
+                    const url = toDataUrl(img.mimeType, img.data);
+                    return (
+                      <img
+                        key={img.id}
+                        className={styles.messageImage}
+                        src={url}
+                        alt={img.name ?? t("chat.image")}
+                        title={img.name ?? t("chat.image")}
+                        onClick={() => setZoomed(url)}
+                      />
+                    );
+                  })}
+                </div>
+              )}
               {message.content.trim() && <Markdown content={message.content} />}
             </>
           )}
         </div>
       </div>
+      {zoomed && (
+        <div className={styles.lightbox} onClick={() => setZoomed(null)}>
+          <img src={zoomed} alt={t("chat.image")} />
+        </div>
+      )}
     </div>
   );
 }
@@ -131,6 +158,7 @@ function areEqual(prev: Props, next: Props): boolean {
   return (
     a.content === b.content &&
     a.attachments === b.attachments &&
+    a.images === b.images &&
     a.timestamp === b.timestamp &&
     prev.highlight === next.highlight
   );

@@ -1,0 +1,535 @@
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--spacer-16) var(--spacer-12) 64px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-12);
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  margin: 0;
+  font-size: 18px;
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--text-default);
+}
+
+.desc {
+  margin: var(--spacer-8) 0 var(--spacer-16);
+  color: var(--text-tertiary);
+  font-size: var(--body-sm-font-size);
+  line-height: 1.5;
+}
+
+/* ── Task list ── */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-10);
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacer-32);
+  color: var(--text-tertiary);
+  font-size: var(--body-sm-font-size);
+  border: 1px dashed var(--border-neutral-l2);
+  border-radius: var(--radius-10);
+}
+
+.card {
+  display: flex;
+  align-items: stretch;
+  gap: var(--spacer-8);
+  padding: 12px 16px;
+  min-height: 56px;
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-10);
+  background: var(--bg-base-secondary);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.card:hover {
+  border-color: var(--border-neutral-l2);
+  background: var(--bg-overlay-l1);
+}
+
+.cardBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cardTitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+}
+
+.cardName {
+  font-size: 14px;
+  font-weight: var(--font-weight-medium);
+  color: var(--text-default);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A paused task stays fully readable but visibly recedes. The toggle itself is
+   excluded so it never looks disabled — it's the way back. */
+.cardOff .cardBody {
+  opacity: 0.55;
+}
+
+.cardSub {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+}
+
+.cardPrompt {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+}
+
+.metaSep {
+  opacity: 0.5;
+}
+
+/* A window that elapsed while the app was closed — informational, not an error. */
+.cardWarn {
+  margin-top: 3px;
+  font-size: var(--body-xs-font-size);
+  color: var(--text-warning, #b8860b);
+}
+
+.cardActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.actionSep {
+  width: 1px;
+  height: 18px;
+  margin: 0 var(--spacer-6);
+  background: var(--border-neutral-l1);
+}
+
+.actionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--icon-tertiary);
+  border-radius: var(--radius-6);
+  cursor: pointer;
+}
+
+.actionBtn:hover {
+  background: var(--bg-overlay-l3);
+  color: var(--icon-default);
+}
+
+.actionDanger:hover {
+  background: rgba(229, 72, 77, 0.12);
+  color: #e5484d;
+}
+
+/* Status dot (shared language with the sidebar). */
+.statusDot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.status_never {
+  background: var(--text-tertiary);
+}
+
+.status_success {
+  background: #30a46c;
+}
+
+.status_error {
+  background: #e5484d;
+}
+
+.status_running {
+  background: var(--text-brand);
+  animation: sched-spin 0.9s linear infinite;
+}
+
+@keyframes sched-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── Buttons ── */
+.primaryBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  height: 32px;
+  padding: 0 var(--spacer-14);
+  border: none;
+  border-radius: var(--radius-6);
+  background: var(--bg-brand, #3b82f6);
+  color: #fff;
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+}
+
+.primaryBtn:hover {
+  filter: brightness(1.05);
+}
+
+.primaryBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.btnGhost {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 var(--spacer-14);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-6);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+}
+
+.btnGhost:hover {
+  background: var(--bg-overlay-l2);
+}
+
+/* ── Editor modal ── */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  padding: var(--spacer-16);
+}
+
+.modal {
+  width: 520px;
+  max-width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--bg-base-default);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-12);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacer-14) var(--spacer-16);
+  border-bottom: 1px solid var(--border-neutral-l1);
+}
+
+.modalHeader h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--text-default);
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--icon-tertiary);
+  border-radius: var(--radius-6);
+  cursor: pointer;
+}
+
+.iconBtn:hover {
+  background: var(--bg-overlay-l3);
+  color: var(--icon-default);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-14);
+  padding: var(--spacer-16);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fieldRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-8);
+}
+
+.label {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+}
+
+.err {
+  color: #e5484d;
+  font-style: normal;
+  font-size: var(--body-xs-font-size);
+}
+
+.input,
+.textarea {
+  width: 100%;
+  font-size: var(--body-sm-font-size);
+  color: var(--text-default);
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-6);
+  padding: 8px 10px;
+  outline: none;
+  font-family: inherit;
+}
+
+.input:focus,
+.textarea:focus {
+  border-color: var(--border-brand, #3b82f6);
+}
+
+.textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.cwdRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+}
+
+.cwdRow .input {
+  flex: 1;
+}
+
+.browseBtn {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 var(--spacer-12);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-6);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+}
+
+.browseBtn:hover {
+  background: var(--bg-overlay-l2);
+}
+
+.unit {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* Per-task execution controls docked at the bottom of the prompt box,
+   mirroring the chat composer's model/permission pills. */
+.promptToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacer-8);
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-neutral-l2);
+}
+
+.toolbarGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.toolbarLabel {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.toolbarSelect {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  font-size: var(--body-xs-font-size);
+  color: var(--text-default);
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-6);
+  outline: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.toolbarSelect:focus {
+  border-color: var(--border-brand, #3b82f6);
+}
+
+/* Segmented control for schedule type — six options wrap to a second row
+   inside the 520px modal rather than overflowing. */
+.seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-overlay-l2);
+  border-radius: var(--radius-8);
+}
+
+.segBtn {
+  flex: 1 1 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  padding: 6px 12px;
+  border-radius: var(--radius-6);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* Weekday picker (multi-select). */
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacer-6);
+}
+
+.chip {
+  min-width: 38px;
+  height: 30px;
+  padding: 0 var(--spacer-8);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-6);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.chip:hover {
+  background: var(--bg-overlay-l2);
+}
+
+.chipActive {
+  background: var(--bg-brand, #3b82f6);
+  border-color: var(--bg-brand, #3b82f6);
+  color: #fff;
+}
+
+.hint {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+
+.segActive {
+  background: var(--bg-base-default);
+  color: var(--text-default);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+/* Toggle switch for enabled — lives on each list row so a task can be paused
+   without opening the editor. */
+.switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: var(--border-neutral-l2);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s ease;
+}
+
+.switchOn {
+  background: var(--bg-brand, #3b82f6);
+}
+
+.switchKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+
+.switchOn .switchKnob {
+  transform: translateX(18px);
+}
+
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacer-8);
+  padding: var(--spacer-14) var(--spacer-16);
+  border-top: 1px solid var(--border-neutral-l1);
+}

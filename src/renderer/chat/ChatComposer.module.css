@@ -642,6 +642,24 @@
   position: relative;
 }
 
+/* Transient error bubble under the workspace pill (e.g. IM migration failed) */
+.workspaceError {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  max-width: 420px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #ef4444;
+  background: var(--bg-base-default);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: var(--radius-6);
+  padding: 4px 8px;
+  white-space: pre-wrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
 .workspacePill {
   display: inline-flex;
   align-items: center;
@@ -955,4 +973,63 @@
 .attachRemove:hover {
   background: rgba(246, 90, 90, 0.16);
   color: var(--status-error-default);
+}
+
+/* ── Image attachments (paste / picker / drag&drop) ── */
+.imageStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacer-6);
+  width: 100%;
+}
+
+.imagePill {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  overflow: hidden;
+  background: var(--bg-base-tertiary);
+}
+
+.imageThumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.imageRemove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.imagePill:hover .imageRemove {
+  opacity: 1;
+}
+
+.imageRemove:hover {
+  background: var(--status-error-default);
+}
+
+/* Drag-over affordance for dropping images onto the composer. */
+.composerInnerDrag {
+  border-color: var(--border-brand);
+  border-style: dashed;
 }

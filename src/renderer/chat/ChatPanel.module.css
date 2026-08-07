@@ -79,3 +79,59 @@
   color: var(--text-default);
   border-color: var(--border-brand);
 }
+
+/* ── Read-only bar (scheduled-task log viewer, replaces the composer) ── */
+.readonlyBar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  margin: var(--spacer-8) var(--spacer-24) var(--spacer-16);
+  padding: var(--spacer-8) var(--spacer-12);
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+}
+
+.readonlyIcon {
+  color: var(--icon-secondary, var(--text-tertiary));
+  flex-shrink: 0;
+}
+
+.readonlyLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readonlyBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  padding: 4px var(--spacer-8);
+  background: transparent;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.readonlyBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+  border-color: var(--border-brand);
+}
+
+.spin {
+  animation: readonlySpin 1.1s linear infinite;
+}
+
+@keyframes readonlySpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

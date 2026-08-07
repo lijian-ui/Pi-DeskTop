@@ -23,6 +23,7 @@ async function loadInitialData(): Promise<void> {
     const state = await window.piDesk.getState();
     if (state?.model) useAgentStore.getState().setModel(state.model);
     if (state?.thinkingLevel) useAgentStore.getState().setThinkingLevel(state.thinkingLevel);
+    if (state?.commands) useAgentStore.getState().setCommands(state.commands);
   } catch (err) {
     console.error("Initial data load failed (will retry on pi:ready):", err);
   }

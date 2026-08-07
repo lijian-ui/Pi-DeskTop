@@ -3,7 +3,8 @@ import ChatPanel from "../chat/ChatPanel";
 import SettingsPage from "../sidebar/SettingsPage";
 import SkillsPage from "../skills/SkillsPage";
 import AutomatePage from "../automate/AutomatePage";
-import HelpFeedbackPage from "../help/HelpFeedbackPage";
+import PackagesPage from "../packages/PackagesPage";
+import ImPage from "../im/ImPage";
 import TerminalPanel from "../chat/TerminalPanel";
 import FilePreviewPanel from "../chat/FilePreviewPanel";
 import AboutDialog from "../sidebar/AboutDialog";
@@ -35,10 +36,6 @@ export default function MainPanel() {
     return window.piDesk.onShowAbout(() => setAboutOpen(true));
   }, []);
 
-  useEffect(() => {
-    return window.piDesk.onShowHelp(() => useUIStore.getState().setMainView("help"));
-  }, []);
-
   return (
     <div className={styles.mainPanel}>
       {!sidebarVisible && (
@@ -68,8 +65,10 @@ export default function MainPanel() {
             <SkillsPage />
           ) : mainView === "automate" ? (
             <AutomatePage />
-          ) : mainView === "help" ? (
-            <HelpFeedbackPage />
+          ) : mainView === "packages" ? (
+            <PackagesPage />
+          ) : mainView === "im" ? (
+            <ImPage />
           ) : null}
         </div>
         {/* File preview column (opened from the sidebar file manager).

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useImageSettingsStore } from "./settings-store";
 
 /**
  * A code reference captured from the file-preview panel. The user picks a
@@ -21,13 +22,37 @@ export interface CodeAttachment {
   content: string;
 }
 
+/**
+ * An image queued in the composer (clipboard paste, file picker or drag&drop).
+ * `data` is raw base64 *without* the `data:` prefix so it can be handed to the
+ * SDK as an `ImageContent` verbatim; the UI rebuilds the data-URL for <img>.
+ */
+export interface ImageAttachment {
+  id: string;
+  mimeType: string;
+  /** base64 image bytes, no `data:` prefix (matches SDK ImageContent.data). */
+  data: string;
+  /** Original file name, or a localized "clipboard image" label. */
+  name?: string;
+  /** Original byte size (pre-base64), used for the size guard. */
+  size?: number;
+}
+
 interface UIState {
   sidebarVisible: boolean;
   activeItem: "sessions" | "files" | "settings";
   composerText: string;
   /** Structured code references injected from the file-preview panel. */
   codeAttachments: CodeAttachment[];
-  mainView: "chat" | "settings" | "skills" | "automate" | "help";
+  /** Images staged in the composer, sent with the next prompt. */
+  imageAttachments: ImageAttachment[];
+  mainView: "chat" | "settings" | "skills" | "automate" | "packages" | "im";
+  /** When true, the Automate page opens the "new scheduled task" editor right
+   *  away (deep-link from the sidebar "+"). Consumed on mount, then cleared. */
+  pendingScheduledNew: boolean;
+  /** Bumped whenever the custom provider/model catalog changes (add/edit/delete
+   *  in the Models page). The composer listens and reloads the model list. */
+  modelsVersion: number;
   terminalOpen: boolean;
   terminalWidth: number;
 
@@ -52,7 +77,13 @@ interface UIState {
   addCodeAttachment: (att: Omit<CodeAttachment, "id">) => void;
   removeCodeAttachment: (id: string) => void;
   clearCodeAttachments: () => void;
+  /** Returns false when the per-message image cap is already reached. */
+  addImageAttachment: (img: Omit<ImageAttachment, "id">) => boolean;
+  removeImageAttachment: (id: string) => void;
+  clearImageAttachments: () => void;
   setMainView: (view: UIState["mainView"]) => void;
+  setPendingScheduledNew: (pending: boolean) => void;
+  bumpModelsVersion: () => void;
   toggleTerminal: () => void;
   setTerminalOpen: (open: boolean) => void;
   setTerminalWidth: (w: number) => void;
@@ -73,12 +104,15 @@ interface UIState {
   setPreviewWidth: (w: number) => void;
 }
 
-export const useUIStore = create<UIState>((set) => ({
+export const useUIStore = create<UIState>((set, get) => ({
   sidebarVisible: true,
   activeItem: "sessions",
   composerText: "",
   codeAttachments: [],
+  imageAttachments: [],
   mainView: "chat",
+  pendingScheduledNew: false,
+  modelsVersion: 0,
   terminalOpen: false,
   terminalWidth: 460,
 
@@ -117,7 +151,23 @@ export const useUIStore = create<UIState>((set) => ({
       codeAttachments: state.codeAttachments.filter((a) => a.id !== id),
     })),
   clearCodeAttachments: () => set({ codeAttachments: [] }),
+  addImageAttachment: (img) => {
+    const maxCount = useImageSettingsStore.getState().image.maxCount;
+    if (get().imageAttachments.length >= maxCount) return false;
+    const id = `img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    set((state) => ({
+      imageAttachments: [...state.imageAttachments, { ...img, id }],
+    }));
+    return true;
+  },
+  removeImageAttachment: (id) =>
+    set((state) => ({
+      imageAttachments: state.imageAttachments.filter((a) => a.id !== id),
+    })),
+  clearImageAttachments: () => set({ imageAttachments: [] }),
   setMainView: (view) => set({ mainView: view }),
+  setPendingScheduledNew: (pending) => set({ pendingScheduledNew: pending }),
+  bumpModelsVersion: () => set((s) => ({ modelsVersion: s.modelsVersion + 1 })),
   toggleTerminal: () => set((state) => ({ terminalOpen: !state.terminalOpen })),
   setTerminalOpen: (open) => set({ terminalOpen: open }),
   setTerminalWidth: (w) => set({ terminalWidth: w }),

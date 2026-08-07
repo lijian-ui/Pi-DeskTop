@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { CodeAttachment } from "./ui-store";
+import type { CodeAttachment, ImageAttachment } from "./ui-store";
 
 export interface ToolExecution {
   id: string;
@@ -16,6 +16,8 @@ export interface Message {
   content: string;
   /** Code references attached from the file-preview panel (rendered as cards). */
   attachments?: CodeAttachment[];
+  /** Images sent along with this message (rendered as thumbnails). */
+  images?: ImageAttachment[];
   thinking?: string;
   toolExecutions?: ToolExecution[];
   isStreaming?: boolean;
@@ -27,6 +29,8 @@ export interface Message {
 export interface QueuedMessage {
   id: string;
   content: string;
+  /** Images staged with the queued message; forwarded when the queue drains. */
+  images?: ImageAttachment[];
 }
 
 export interface ModelInfo {
@@ -47,6 +51,8 @@ interface AgentState {
   isRetrying: boolean;
   model: ModelInfo | null;
   thinkingLevel: string;
+  /** 当前会话已注册的斜杠命令（内置 /compact + 扩展包注册的 /命令）。 */
+  commands: Array<{ name: string; description: string }>;
   /** Messages queued while a reply is still streaming; auto-sent in order once idle. */
   messageQueue: QueuedMessage[];
   contextUsage: {
@@ -71,6 +77,7 @@ interface AgentState {
   setRetrying: (v: boolean) => void;
   setModel: (model: ModelInfo | null) => void;
   setThinkingLevel: (level: string) => void;
+  setCommands: (commands: Array<{ name: string; description: string }>) => void;
   setContextUsage: (usage: {
     tokens: number | null;
     contextWindow: number;
@@ -83,7 +90,7 @@ interface AgentState {
   setError: (error: string | null) => void;
 
   // ── Message queue (streaming-time send) ──
-  enqueueMessage: (content: string) => void;
+  enqueueMessage: (content: string, images?: ImageAttachment[]) => void;
   updateQueuedMessage: (id: string, content: string) => void;
   removeQueuedMessage: (id: string) => void;
   clearQueue: () => void;
@@ -111,6 +118,7 @@ export const useAgentStore = create<AgentState>((set) => ({
   isRetrying: false,
   model: null,
   thinkingLevel: "off",
+  commands: [],
   messageQueue: [],
   contextUsage: null,
   error: null,
@@ -195,17 +203,22 @@ export const useAgentStore = create<AgentState>((set) => ({
   setRetrying: (v) => set({ isRetrying: v }),
   setModel: (model) => set({ model }),
   setThinkingLevel: (level) => set({ thinkingLevel: level }),
+  setCommands: (commands) => set({ commands }),
   setContextUsage: (usage) => set({ contextUsage: usage }),
   clearMessages: () => set({ messages: [] }),
   setMessages: (messages) => set({ messages }),
   setError: (error) => set({ error }),
 
   // ── Message queue ──
-  enqueueMessage: (content) =>
+  enqueueMessage: (content, images) =>
     set((state) => ({
       messageQueue: [
         ...state.messageQueue,
-        { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, content },
+        {
+          id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          content,
+          images: images?.length ? images : undefined,
+        },
       ],
     })),
   updateQueuedMessage: (id, content) =>

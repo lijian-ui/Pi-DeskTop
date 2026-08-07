@@ -293,6 +293,33 @@
 }
 .fieldInput::placeholder { color: var(--text-tertiary); }
 
+/* ── Vision (supports images) checkbox row ── */
+.checkRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacer-10, 10px);
+  margin-top: var(--spacer-4);
+  cursor: pointer;
+}
+.checkbox {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--border-brand, #4f7cff);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.checkStack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.checkLabel {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-default);
+  font-weight: var(--font-weight-medium);
+}
+
 .formError {
   font-size: var(--body-xs-font-size);
   color: var(--status-error-default);

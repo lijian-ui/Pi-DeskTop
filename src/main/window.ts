@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, shell } from "electron";
 import path from "path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -33,6 +33,31 @@ export function createMainWindow(): BrowserWindow {
 
   // Disable the native Chromium spell-checker so inputs don't show red squiggles.
   win.webContents.session.setSpellCheckerEnabled(false);
+
+  // ── 外部链接一律交给系统默认浏览器 ──
+  // target="_blank" / window.open（如详情页 npm/GitHub/主页链接、README 里的
+  // 链接）不再打开应用内新窗口，而是走系统浏览器；并拒绝创建任何新窗口。
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) {
+      shell.openExternal(url);
+    }
+    return { action: "deny" };
+  });
+
+  // 拦截应用内导航：同源（dev HMR 重载）放行，其余外部地址交系统浏览器。
+  win.webContents.on("will-navigate", (event, url) => {
+    try {
+      const current = new URL(win.webContents.getURL());
+      const target = new URL(url);
+      if (target.origin === current.origin) return; // dev server / reload
+    } catch {
+      // fall through to block below
+    }
+    event.preventDefault();
+    if (/^https?:/.test(url)) {
+      shell.openExternal(url);
+    }
+  });
 
   win.once("ready-to-show", () => {
     win.show();

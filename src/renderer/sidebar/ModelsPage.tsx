@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Plus, ChevronRight, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useUIStore } from "../store/ui-store";
 import ProviderIcon from "./ProviderIcon";
 import AddProviderPicker from "./AddProviderPicker";
 import ConfirmDialog from "./ConfirmDialog";
@@ -105,6 +106,7 @@ export default function ModelsPage() {
       } else {
         await window.piDesk.deleteApiKey(row.id);
       }
+      useUIStore.getState().bumpModelsVersion();
       await load();
     } catch (err) {
       console.error("Failed to remove provider:", err);

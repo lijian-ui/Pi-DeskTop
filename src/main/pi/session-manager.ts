@@ -12,15 +12,33 @@ import {
   type AgentSessionRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { readFile, writeFile, mkdir, unlink, readdir } from "node:fs/promises";
-import { existsSync, statSync, watch, mkdirSync, readdirSync, type FSWatcher } from "node:fs";
+import { existsSync, statSync, watch, mkdirSync, readdirSync, readFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 import extract from "extract-zip";
 import type { WebContents } from "electron";
 import { BrowserWindow } from "electron";
 import { exportSessionToHtmlFile } from "./session-export";
 import { readSoul, writeSoul } from "./soul";
 import { soulExtension } from "./soul-extension";
+import { computeCacheWaste, CACHE_TTL_MS } from "./cache-stats";
+import { readRules, writeRules, deleteRulesFile } from "./rules";
+import { rulesExtension } from "./rules-extension";
+import { TaskScheduler } from "./scheduler";
+import { createScheduledTaskExtension } from "./scheduled-task-extension";
+import {
+  readScheduledTasks,
+  saveScheduledTask as writeScheduledTask,
+  deleteScheduledTask as deleteScheduledTaskFile,
+  setTaskSessionPath,
+  appendRun,
+  updateRun,
+  deleteRun,
+  reconcileStaleRuns,
+  type ScheduledTask,
+  type ScheduledTasksData,
+} from "./scheduled-tasks";
 
 // ── Agent data directory (per-platform) ──────────────────────────────────
 // Pi SDK defaults to ~/.pi/agent, a hidden folder macOS Finder hides. On macOS
@@ -82,6 +100,16 @@ function authJsonPath(): string {
  */
 function chatOnlyCwd(): string {
   return join(getAgentDir(), "chat");
+}
+
+/**
+ * Fallback working directory for scheduled tasks that have no workspace bound.
+ * Scheduled sessions are stored under `~/.pi/agent/sessions/<encoded-cron>/`
+ * (discoverable by listAll), so the sidebar can treat them as normal sessions
+ * and route them into the 定时任务 group via their path.
+ */
+function cronCwd(): string {
+  return join(getAgentDir(), "cron");
 }
 
 async function readAuthJson(): Promise<Record<string, any>> {
@@ -474,6 +502,99 @@ async function readSettingsJson(): Promise<Record<string, any>> {
   }
 }
 
+/** 规则与记忆 → 导入设置：AGENTS.md / CLAUDE.md 导入开关。 */
+export interface ContextFilesConfig {
+  /** Include AGENTS.md (per directory + ancestor chain). */
+  agents: boolean;
+  /** Include CLAUDE.md AND CLAUDE.local.md (per directory + ancestor chain). */
+  claude: boolean;
+}
+
+const DEFAULT_CONTEXT_FILES_CONFIG: ContextFilesConfig = {
+  // Both import families default to OFF — the user opts in via the
+  // 导入设置 switches. A fresh install injects no AGENTS/CLAUDE context
+  // until explicitly enabled.
+  agents: false,
+  claude: false,
+};
+
+/**
+ * Sync read of the import toggles (agentsFilesOverride is a SYNCHRONOUS hook,
+ * so no async read here). Missing/partial config: everything off.
+ */
+function readContextFilesConfigSync(): ContextFilesConfig {
+  try {
+    const settings = JSON.parse(readFileSync(settingsJsonPath(), "utf-8"));
+    const c = settings.contextFiles ?? {};
+    return {
+      agents: c.agents === true,
+      claude: c.claude === true,
+    };
+  } catch {
+    return { ...DEFAULT_CONTEXT_FILES_CONFIG };
+  }
+}
+
+/**
+ * agentsFilesOverride factory: makes AGENTS.md / CLAUDE.md import follow the
+ * 规则与记忆 toggles, and — when both are on — injects BOTH files from the
+ * same directory (the SDK itself loads at most one per directory). CLAUDE.md
+ * being enabled also pulls in the sibling CLAUDE.local.md.
+ */
+function createContextFilesOverride() {
+  return (base: {
+    agentsFiles: Array<{ path: string; content: string }>;
+  }): { agentsFiles: Array<{ path: string; content: string }> } => {
+    const cfg = readContextFilesConfigSync();
+    const out: Array<{ path: string; content: string }> = [];
+    const seen = new Set<string>();
+    const isAgentsName = (n: string) => /^AGENTS\.(md|MD)$/.test(n);
+    const isClaudeName = (n: string) => /^CLAUDE\.(md|MD)$/.test(n);
+    const isLocalClaudeName = (n: string) => /^CLAUDE\.local\.(md|MD)$/i.test(n);
+    const SIBLING_NAMES = [
+      "AGENTS.md",
+      "AGENTS.MD",
+      "CLAUDE.md",
+      "CLAUDE.MD",
+      "CLAUDE.local.md",
+      "CLAUDE.local.MD",
+    ];
+    const readIfFile = (
+      p: string,
+    ): { path: string; content: string } | null => {
+      if (seen.has(p)) return null;
+      try {
+        if (!existsSync(p) || !statSync(p).isFile()) return null;
+      } catch {
+        return null;
+      }
+      seen.add(p);
+      return { path: p, content: readFileSync(p, "utf-8") };
+    };
+
+    for (const f of base.agentsFiles) {
+      const name = basename(f.path);
+      if (isAgentsName(name) && !cfg.agents) continue;
+      if (isClaudeName(name) && !cfg.claude) continue;
+      out.push(f);
+      seen.add(f.path);
+      // Pull siblings from the SAME directory: the other family (when its
+      // toggle is on) plus CLAUDE.local.md (when CLAUDE is on).
+      const dir = dirname(f.path);
+      for (const n of SIBLING_NAMES) {
+        if (n === name) continue;
+        const otherAgents = isAgentsName(n);
+        const otherClaude = isClaudeName(n) || isLocalClaudeName(n);
+        if (otherAgents && !cfg.agents) continue;
+        if (otherClaude && !cfg.claude) continue;
+        const extra = readIfFile(join(dir, n));
+        if (extra) out.push(extra);
+      }
+    }
+    return { agentsFiles: out };
+  };
+}
+
 async function readCompactionConfig(): Promise<CompactionConfig> {
   const settings = await readSettingsJson();
   const c = settings.compaction ?? {};
@@ -572,6 +693,12 @@ export class PiDeskSessionManager {
   private modelRuntime: ModelRuntime | null = null;
   private webContents: WebContents | null = null;
   /**
+   * IM gateway hook: when set, unit events whose session lives under chat/im/
+   * are handed here first; returning true consumes the event (it is NOT
+   * broadcast to the desktop UI). Set by ImGateway.init().
+   */
+  imForwarder: ((sessionPath: string, event: AgentSessionEvent) => boolean) | null = null;
+  /**
    * Current workspace (cwd). `null` means the user has NOT yet chosen a
    * workspace — on first launch we deliberately leave this null (no default
    * directory is auto-captured) and the renderer shows a picker. Only an
@@ -602,6 +729,8 @@ export class PiDeskSessionManager {
     * racing and running the expensive build twice.
     */
    private servicesByCwd: Map<string, Promise<any>> = new Map();
+  /** In-process scheduler for user-defined scheduled tasks. */
+  private scheduler?: TaskScheduler;
   /**
    * Watchers for AGENTS.md/CLAUDE.md context files. The SDK reads these files
    * ONCE when services are created (resourceLoader.reload() snapshot), so a
@@ -713,6 +842,19 @@ export class PiDeskSessionManager {
     if (this.cwd) {
       await this.ensureUnit(this.cwd);
     }
+    // Start the scheduled-task scheduler. It ticks every 30s; tasks run in
+    // isolated SDK sessions and never touch the user's active conversation.
+    // The first tick only fires a task if its due-window happens to be open,
+    // so starting here is safe before setEventTarget() is called (emitScheduled
+    // falls back to findLiveWebContents()).
+    // Any run still marked "running" belongs to a process that no longer
+    // exists (crash / force-quit) — fail it before the scheduler can add new
+    // ones, otherwise the sidebar shows a task as perpetually busy.
+    await reconcileStaleRuns().catch((err) =>
+      console.error("Failed to reconcile stale scheduled runs:", err),
+    );
+    this.scheduler = new TaskScheduler((task) => this.runScheduledTask(task));
+    this.scheduler.start();
   }
 
   /**
@@ -769,7 +911,8 @@ export class PiDeskSessionManager {
         cwd,
         modelRuntime: this.modelRuntime!,
         resourceLoaderOptions: {
-          extensionFactories: [soulExtension],
+          extensionFactories: [soulExtension, rulesExtension],
+          agentsFilesOverride: createContextFilesOverride(),
         },
       });
       this.servicesByCwd.set(cwd, servicesPromise);
@@ -815,6 +958,7 @@ export class PiDeskSessionManager {
     this.applyUnitActiveTools(unit);
     this.subscribeToUnit(unit);
     this.installContextWatchersFor(cwd);
+
     return unit;
   }
 
@@ -933,6 +1077,13 @@ export class PiDeskSessionManager {
       const wc = this.webContents && !this.webContents.isDestroyed()
         ? this.webContents
         : this.findLiveWebContents();
+      // IM-gateway hook: sessions under chat/im/ are consumed by the gateway
+      // for reply routing. The event is ALSO broadcast to the desktop UI —
+      // the renderer routes by sessionPath and accumulates background sessions
+      // in their buffer, so clicking the IM session later shows the full
+      // history including the streaming part (same as scheduled-task sessions).
+      const sp = unit.activePath;
+      if (this.imForwarder && sp) this.imForwarder(sp, event);
       wc?.send("pi:event", {
         sessionPath: unit.activePath,
         cwd: unit.cwd,
@@ -961,6 +1112,15 @@ export class PiDeskSessionManager {
     // extension hook. Runs on init, newSession, switchSession, and setCwd
     // (all route through subscribeToUnit). Idempotent per unit.
     this.installToolGuardOn(unit);
+  }
+
+  /** Session paths currently mid-run (across every cwd unit). */
+  getRunningSessions(): string[] {
+    const running: string[] = [];
+    for (const u of this.units.values()) {
+      if (u.runningPath) running.push(u.runningPath);
+    }
+    return running;
   }
 
   /** Broadcast which sessions are currently running (per cwd) to the renderer. */
@@ -1297,10 +1457,17 @@ export class PiDeskSessionManager {
           path: "bash-guard-internal",
           handlers: new Map<string, any>([["tool_call", [this.makeToolCallHandler(unit)]]]),
           tools: new Map(),
+          commands: new Map(),
           flags: new Map(),
           shortcuts: new Map(),
           messageRenderers: new Map(),
         });
+      }
+      // Ensure no extension in the runner has missing commands Map (defensive)
+      for (const ext of runner.extensions) {
+        if (!ext.commands || !(ext.commands instanceof Map)) {
+          ext.commands = new Map();
+        }
       }
       unit.toolGuardTimer = null;
       return;
@@ -1315,6 +1482,105 @@ export class PiDeskSessionManager {
         this.installToolGuardOn(unit, retries - 1);
       }, 50);
     }
+  }
+
+  /**
+   * Same `beforeToolCall` bash guard as the main session, but scoped to a single
+   * scheduled-task run and keyed off the task's OWN permission mode — not the
+   * global `bashMode`. This keeps unattended tasks safe without ever touching
+   * the user's interactive session settings. The danger blacklist is always
+   * enforced (hard security floor); `mode === "yolo"` allows everything else,
+   * `mode === "ask"` allows only whitelisted commands (a popup is impossible
+   * because nobody is there to approve).
+   */
+  private async installScheduledToolGuard(
+    session: AgentSession,
+    mode: "yolo" | "ask",
+  ): Promise<void> {
+    const runner = await this.waitForExtensionRunner(session);
+    const target = runner ?? (session as any)?.extensionRunner;
+    if (!target || !Array.isArray(target.extensions)) return;
+    if (target.extensions.some((e: any) => e?.path === "bash-guard-scheduled")) {
+      return;
+    }
+    const blacklistRx = this.bashBlacklistRx;
+    const whitelistRx = this.bashWhitelistRx;
+    target.extensions.push({
+      path: "bash-guard-scheduled",
+      handlers: new Map<string, any>([
+        [
+          "tool_call",
+          [
+            async (event: any) => {
+              if (!event || event.toolName !== "bash") return undefined;
+              const command =
+                typeof event.input?.command === "string"
+                  ? event.input.command
+                  : "";
+              const trimmed = command.trim();
+              const segments = PiDeskSessionManager.splitCommandChain(trimmed);
+              const hitsBlacklist = (s: string) =>
+                blacklistRx.some((rx: RegExp) => rx.test(s));
+              if (hitsBlacklist(trimmed) || segments.some(hitsBlacklist)) {
+                return {
+                  block: true,
+                  reason:
+                    "⛔ 该 bash 命令匹配「危险命令黑名单」，已被系统安全策略明确禁止执行（定时任务 bash 权限控制）。请勿以任何形式重试该命令或等价命令。",
+                };
+              }
+              if (mode === "yolo") return undefined;
+              // ask mode — unattended: only whitelisted commands pass.
+              if (whitelistRx.some((rx: RegExp) => rx.test(trimmed))) {
+                return undefined;
+              }
+              return {
+                block: true,
+                reason:
+                  "⛔ 该定时任务的执行权限为「询问」模式，无人值守时会话不允许执行非白名单 bash 命令。如需执行，请将该任务的执行权限设为 YOLO。",
+              };
+            },
+          ],
+        ],
+      ]),
+      tools: new Map(),
+      commands: new Map(),
+      flags: new Map(),
+      shortcuts: new Map(),
+      messageRenderers: new Map(),
+    });
+    // Ensure no extension has missing commands (defensive, par with installToolGuardOn)
+    for (const ext of target.extensions) {
+      if (!ext.commands || !(ext.commands instanceof Map)) {
+        ext.commands = new Map();
+      }
+    }
+  }
+
+  /**
+   * The SDK binds the ExtensionRunner shortly after the session is created.
+   * Poll (briefly) until it is available so we can push the scheduled-task
+   * guard before the agent's first tool call. Returns null on timeout.
+   */
+  private waitForExtensionRunner(
+    session: AgentSession,
+    timeoutMs = 2000,
+  ): Promise<any> {
+    return new Promise((resolve) => {
+      const deadline = Date.now() + timeoutMs;
+      const poll = () => {
+        const runner = (session as any)?.extensionRunner;
+        if (runner && Array.isArray(runner.extensions)) {
+          resolve(runner);
+          return;
+        }
+        if (Date.now() >= deadline) {
+          resolve((session as any)?.extensionRunner);
+          return;
+        }
+        setTimeout(poll, 25);
+      };
+      poll();
+    });
   }
 
   private makeToolCallHandler(unit: RuntimeUnit) {
@@ -1438,13 +1704,15 @@ export class PiDeskSessionManager {
     });
   }
 
-  async setModel(provider: string, modelId: string): Promise<void> {
+  async setModel(provider: string, modelId: string, cwd?: string): Promise<void> {
     if (!this.modelRuntime) throw new Error("ModelRuntime not available");
     const model = this.modelRuntime.getModel(provider, modelId);
     if (!model) throw new Error(`Model "${modelId}" not found for provider "${provider}"`);
-    // Resolve the effective cwd (chat-only fallback) so a model can be chosen
-    // even before any workspace is picked. Target the unit's live session.
-    const targetCwd = this.resolveCwd();
+    // Target the unit that backs the FOCUSED session. Without an explicit cwd
+    // this falls back to the chat-only cwd — which is WRONG for IM sessions
+    // (cwd = chat/im/<channel>): their model would never change. The renderer
+    // passes the focused session's cwd so the right unit is picked.
+    const targetCwd = this.resolveCwd(cwd);
     const unit = await this.ensureUnit(targetCwd);
     // Remember the choice for this unit so it survives session switches and
     // "new task" clicks (those create fresh sessions that would otherwise
@@ -1496,7 +1764,17 @@ export class PiDeskSessionManager {
     const session = unit.runtime?.session;
     if (!session) return;
     readActiveTools()
-      .then((tools) => session.setActiveToolsByName(tools))
+      .then((builtinTools) => {
+        // getAllTools() returns everything (built-in + extension), even
+        // tools that aren't currently active. Filter out built-in names
+        // (they come from the user's config) and keep the rest (extension).
+        const allNames = (session as any).getAllTools?.()
+          ?.map((t: any) => t.name) ?? [];
+        const extNames = allNames.filter(
+          (n: string) => !ALL_BUILTIN_TOOLS.includes(n),
+        );
+        session.setActiveToolsByName([...builtinTools, ...extNames]);
+      })
       .catch(() => {});
   }
 
@@ -1517,6 +1795,61 @@ export class PiDeskSessionManager {
     }
     for (const unit of this.units.values()) {
       unit.runtime?.session?.setActiveToolsByName(valid);
+    }
+  }
+
+  /** 规则与记忆 → 导入设置：AGENTS.md / CLAUDE.md 导入开关。 */
+  async getContextFilesConfig(): Promise<ContextFilesConfig> {
+    return readContextFilesConfigSync();
+  }
+
+  /**
+   * Persist the import toggles to settings.json, then invalidate every cached
+   * services build (each one captured the OLD override) and best-effort reload
+   * live sessions so the current conversation picks the change up too.
+   */
+  async saveContextFilesConfig(cfg: ContextFilesConfig): Promise<void> {
+    const next: ContextFilesConfig = {
+      agents: cfg.agents !== false,
+      claude: cfg.claude !== false,
+    };
+    try {
+      const settings = await readSettingsJson();
+      settings.contextFiles = next;
+      await writeJsonFile(settingsJsonPath(), settings);
+    } catch {
+      // Non-fatal: the cache invalidation below still applies on next build.
+    }
+    this.servicesByCwd.clear();
+    for (const unit of this.units.values()) {
+      Promise.resolve(unit.runtime?.session?.reload?.()).catch(() => {});
+    }
+  }
+
+  // ── Rules (规则): single rules.md file, injected at system-prompt bottom ──
+  /** Read the rules text ("" when the file does not exist). */
+  async getRulesContent(): Promise<string> {
+    return readRules();
+  }
+
+  /** Persist the rules text. Hot-applies on the next message (per-turn read). */
+  async saveRulesContent(content: string): Promise<void> {
+    await writeRules(String(content ?? ""));
+  }
+
+  /** Delete the rules file. */
+  async removeRulesFile(): Promise<void> {
+    await deleteRulesFile();
+  }
+
+  /**
+   * Invalidate cached services after a package install/remove so the next
+   * services build re-resolves packages (downloads/loads the new set).
+   */
+  async invalidatePackageServices(): Promise<void> {
+    this.servicesByCwd.clear();
+    for (const unit of this.units.values()) {
+      Promise.resolve(unit.runtime?.session?.reload?.()).catch(() => {});
     }
   }
 
@@ -1548,9 +1881,21 @@ export class PiDeskSessionManager {
     return unit.activePath;
   }
 
-  async switchSession(cwd: string, sessionPath: string): Promise<void> {
-    const unit = await this.ensureUnit(cwd);
-    if (unit.activePath === sessionPath) return;
+  async switchSession(
+    cwd: string,
+    sessionPath: string,
+    force = false,
+  ): Promise<void> {
+    // resolveCwd (not the raw arg): the renderer sends "" whenever the session
+    // it wants to open has no known workspace (e.g. a scheduled-task log that
+    // listSessions() never surfaces). ensureUnit("") throws, which used to
+    // reject the IPC call and make the click look like a no-op.
+    const unit = await this.ensureUnit(this.resolveCwd(cwd));
+    // Same-path guard: clicking the already-open session is a no-op. `force`
+    // re-opens it anyway — used after a scheduled run appends to the file, so
+    // the fresh content is re-read from disk (SDK switchSession re-opens the
+    // file via SessionManager.open()).
+    if (!force && unit.activePath === sessionPath) return;
     unit.unsubscribe?.();
     await unit.runtime.switchSession(sessionPath);
     unit.activePath = sessionPath;
@@ -1655,6 +2000,195 @@ export class PiDeskSessionManager {
     const m = basename(sessionPath).match(/_(.+)\.jsonl$/);
     const sid = m?.[1] ?? "";
     if (sid) await deleteContextUsage(sid).catch(() => {});
+    // Drop any scheduled-task run records that point at this deleted session
+    // so the sidebar "定时任务" group count stays accurate.
+    await deleteRun(sessionPath).catch(() => {});
+  }
+
+  // ── Scheduled tasks ──────────────────────────────────────────────────────
+
+  /**
+   * Dedicated directory for scheduled-task sessions. Kept OUTSIDE the default
+   * `sessions/` scan so `PiSessionManager.listAll()` (which feeds the main
+   * chat/space sidebar) never surfaces a scheduled run as an ordinary
+   * conversation — the 定时任务 group owns those sessions exclusively.
+   */
+  // Scheduled-task sessions live under ~/.pi/agent/sessions/scheduled-sessions/
+  // so they sit beside the normal session store. They must NEVER surface in the
+  // normal session list: listAll() scans one level into sessions/ and loads any
+  // .jsonl it finds directly. So each task gets its OWN subdir
+  // (scheduled-sessions/<taskId>/...jsonl) — then scheduled-sessions/ holds only
+  // task-id directories (not .jsonl files), and listAll() skips it.
+  /**
+   * Run a scheduled task to completion in a fully isolated SDK session. The
+   * task session carries NO <personality> (soulExtension is deliberately NOT
+   * registered) and its system prompt ends with a <scheduled_task> block.
+   * Runs in the background — callers should not await it for long.
+   */
+  async runScheduledTask(task: ScheduledTask): Promise<void> {
+    if (!this.modelRuntime) throw new Error("Model runtime not ready");
+
+    // A "once" task disables itself the moment it runs so it never replays
+    // (even across a restart). The scheduler also flips this flag, but the
+    // manual "run now" path goes through here too.
+    if (task.schedule.type === "once" && task.enabled) {
+      await writeScheduledTask({ ...task, enabled: false });
+    }
+
+    // A scheduled task runs in its bound workspace (cwd), or — when none is
+    // bound — in the dedicated cron fallback dir. The session is stored by the
+    // SDK under `~/.pi/agent/sessions/<encoded-cwd>/`, which listAll() scans,
+    // so the renderer can open it as a normal session (no read-only hack).
+    const cwd = task.cwd && task.cwd.trim() ? task.cwd.trim() : cronCwd();
+    if (cwd === cronCwd()) mkdirSync(cwd, { recursive: true });
+
+    // Dedicated services: only the scheduled-task extension, no soul. NOT
+    // cached in servicesByCwd — that cache feeds the user's main session for
+    // a given cwd, and polluting it would strip soulExtension from the live
+    // conversation in that workspace.
+    const services = await createAgentSessionServices({
+      cwd,
+      modelRuntime: this.modelRuntime,
+      resourceLoaderOptions: {
+        extensionFactories: [createScheduledTaskExtension(task), rulesExtension],
+        agentsFilesOverride: createContextFilesOverride(),
+      },
+    });
+
+    // One session per task: every execution appends to the SAME file, so the
+    // sidebar opens a single conversation holding the full run history. We
+    // reuse the persisted path only when it already lives in a discoverable
+    // (sessions/) location; stale paths under the old hidden dir are dropped
+    // so the session is recreated where listAll() can find it.
+    const existing =
+      task.sessionPath &&
+      existsSync(task.sessionPath) &&
+      !task.sessionPath.includes(join("sessions", "scheduled-sessions"))
+        ? task.sessionPath
+        : null;
+    const sm = existing
+      ? PiSessionManager.open(existing)
+      : PiSessionManager.create(cwd);
+    const sessionPath = sm.getSessionFile();
+    if (!sessionPath) {
+      throw new Error("Failed to resolve scheduled-task session file");
+    }
+    if (!existing) {
+      // Persist so subsequent runs and the sidebar resolve the same file.
+      await setTaskSessionPath(task.id, sessionPath);
+    }
+
+    const taskModel = task.model
+      ? this.modelRuntime?.getModel(task.model.provider, task.model.modelId)
+      : undefined;
+    const { session } = await createAgentSessionFromServices({
+      services,
+      sessionManager: sm,
+      ...(taskModel ? { model: taskModel } : {}),
+    });
+
+    // Per-task bash guard. It is independent of the global bashMode (set via
+    // setBashGuardMode) so a scheduled task can never leak its setting into the
+    // user's live conversation. The danger blacklist is ALWAYS enforced, even
+    // in YOLO mode. A task set to "ask" runs unattended, so non-whitelisted
+    // commands are simply blocked (no approval dialog can pop up).
+    await this.installScheduledToolGuard(
+      session,
+      task.permissionMode ?? "yolo",
+    );
+
+    // Feed the run's events into the SAME pi:event channel normal sessions
+    // use, tagged with the task's sessionPath. The renderer then routes them
+    // into messagesByPath exactly like any background session — live content
+    // accumulation with zero special-case reload logic.
+    const forwardEvents = (event: AgentSessionEvent) => {
+      const wc = this.webContents && !this.webContents.isDestroyed()
+        ? this.webContents
+        : this.findLiveWebContents();
+      wc?.send("pi:event", { sessionPath, cwd, event });
+    };
+    const unsubscribeEvents = session.subscribe(forwardEvents);
+
+    // Register the run BEFORE sending, so the sidebar can show it immediately.
+    // Each run gets a unique id: the same session accumulates every execution,
+    // so sessionPath is shared and cannot identify a run.
+    const runId = randomUUID();
+    await appendRun({
+      id: runId,
+      taskId: task.id,
+      sessionPath,
+      startedAt: new Date().toISOString(),
+      status: "running",
+    });
+    this.emitScheduled("started", { taskId: task.id, sessionPath });
+
+    try {
+      // The trigger message is just a trigger — the real task lives in the
+      // system prompt's <scheduled_task> block.
+      await session.prompt("请开始执行本次定时任务。");
+      await updateRun(runId, {
+        finishedAt: new Date().toISOString(),
+        status: "success",
+      });
+    } catch (err) {
+      await updateRun(runId, {
+        finishedAt: new Date().toISOString(),
+        status: "error",
+      });
+      throw err;
+    } finally {
+      unsubscribeEvents();
+      session.dispose();
+      this.emitScheduled("completed", { taskId: task.id, sessionPath });
+    }
+  }
+
+  /**
+   * Fire a task immediately (management-page "run now" button). Reads the task
+   * from disk and dispatches it; the run is fire-and-forget so the IPC call
+   * returns instantly.
+   */
+  async runScheduledTaskNow(taskId: string): Promise<void> {
+    const { tasks } = await readScheduledTasks();
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) throw new Error("Scheduled task not found");
+    // Route through the scheduler's re-entrancy guard so a manual run can't
+    // stack on top of an in-flight scheduled run. A manual run deliberately
+    // leaves lastRunAt/nextRunAt untouched — it must not shift the cadence.
+    if (this.scheduler) {
+      if (!this.scheduler.runExclusive(task)) {
+        throw new Error("Scheduled task is already running");
+      }
+      return;
+    }
+    this.runScheduledTask(task).catch((err) =>
+      console.error(`Manual run of "${task.name}" failed:`, err),
+    );
+  }
+
+  getScheduledTasks(): Promise<ScheduledTasksData> {
+    return readScheduledTasks();
+  }
+
+  async saveScheduledTask(task: ScheduledTask): Promise<void> {
+    await writeScheduledTask(task);
+  }
+
+  async deleteScheduledTask(taskId: string): Promise<void> {
+    await deleteScheduledTaskFile(taskId);
+  }
+
+  /** Broadcast a scheduled-task lifecycle event to the renderer, with a
+   *  stale-webContents fallback (window may be hidden-to-tray or rebuilt). */
+  private emitScheduled(
+    kind: "started" | "completed",
+    payload: { taskId: string; sessionPath: string },
+  ): void {
+    const wc =
+      this.webContents && !this.webContents.isDestroyed()
+        ? this.webContents
+        : this.findLiveWebContents();
+    wc?.send(`scheduledTask:${kind}`, payload);
   }
 
   /**
@@ -1750,7 +2284,8 @@ export class PiDeskSessionManager {
    * and the renderer must reset its `isCompacting` flag itself.
    */
   async compact(
-    customInstructions?: string
+    customInstructions?: string,
+    cwd?: string
   ): Promise<
     | { ok: true }
     | {
@@ -1759,8 +2294,10 @@ export class PiDeskSessionManager {
         message?: string;
       }
   > {
+    const targetCwd = this.resolveCwd(cwd);
+    const session = this.units.get(targetCwd)?.runtime.session ?? null;
     try {
-      await this.session?.compact(customInstructions);
+      await session?.compact(customInstructions);
       return { ok: true };
     } catch (err: any) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1780,7 +2317,7 @@ export class PiDeskSessionManager {
    * Delegates to SDK AgentSession.getContextUsage().
    * Returns undefined if no model is set or contextWindow is unknown.
    */
-  async getContextUsage(): Promise<
+  async getContextUsage(cwd?: string): Promise<
     | {
         tokens: number | null;
         contextWindow: number;
@@ -1788,9 +2325,15 @@ export class PiDeskSessionManager {
       }
     | undefined
   > {
-    const sdk = this.session?.getContextUsage();
+    // `this.session` resolves via this.cwd which is NULL in the per-session
+    // workspace model (users chat without ever picking a workspace), so it
+    // always looked up units.get("") → never found. Resolve the unit from the
+    // explicit cwd the renderer sends instead, falling back to chat dir.
+    const key = cwd && cwd.trim().length > 0 ? cwd.trim() : this.cwd ?? chatOnlyCwd();
+    const session = this.units.get(key)?.runtime.session;
+    const sdk = session?.getContextUsage();
     if (!sdk) return undefined;
-    const sid = this.session?.sessionId;
+    const sid = session?.sessionId;
 
     // Real computed value — persist it (idempotent; overwrites any prior
     // approximation/estimate for this session) and return as-is.
@@ -1825,6 +2368,40 @@ export class PiDeskSessionManager {
     const approx = Math.min(kr + COMPACTION_SUMMARY_OVERHEAD_TOKENS, sdk.contextWindow);
     const percent = Math.min(100, (approx / sdk.contextWindow) * 100);
     return { tokens: approx, contextWindow: sdk.contextWindow, percent };
+  }
+
+  /**
+   * Cumulative prompt-cache waste for the focused session (port of the SDK's
+   * cache-stats algorithm — not exported from the package entry). Returns how
+   * many prompt tokens were re-billed (should have been cache reads) plus the
+   * extra cost, so the UI can surface cache efficiency.
+   */
+  async getCacheStats(cwd?: string) {
+    const key = cwd && cwd.trim().length > 0 ? cwd.trim() : this.cwd ?? chatOnlyCwd();
+    const session = this.units.get(key)?.runtime.session;
+    const entries: any[] = session?.sessionManager?.getEntries?.() ?? [];
+    const totals = computeCacheWaste(entries, this.modelRuntime!);
+    // Aggregate the session's raw cache buckets for context. `input` IS the
+    // cache-missed part (the provider re-bills fresh prompt tokens as input),
+    // so cacheMiss = Σusage.input — do NOT derive it from the SDK's
+    // missedTokens, which drops anything below its 1024-token noise floor.
+    let cacheRead = 0;
+    let cacheWrite = 0;
+    let cacheMiss = 0;
+    for (const entry of entries) {
+      if (entry.type === "message" && entry.message?.usage) {
+        cacheRead += entry.message.usage.cacheRead ?? 0;
+        cacheWrite += entry.message.usage.cacheWrite ?? 0;
+        cacheMiss += entry.message.usage.input ?? 0;
+      }
+    }
+    return {
+      ...totals,
+      cacheRead,
+      cacheWrite,
+      cacheMiss,
+      ttlMs: CACHE_TTL_MS,
+    };
   }
 
   async saveApiKey(providerId: string, apiKey: string): Promise<void> {
@@ -1989,7 +2566,28 @@ export class PiDeskSessionManager {
       isStreaming: session?.isStreaming ?? false,
       sessionId: session?.sessionId ?? null,
       messages: session?.messages ?? [],
+      commands: this.getRegisteredCommands(unit),
     };
+  }
+
+  /** All slash commands the unit's session runtime has registered. */
+  private getRegisteredCommands(unit?: RuntimeUnit) {
+    try {
+      const runner = unit?.runtime?.session?.extensionRunner as any;
+      const exts: any[] = runner?.extensions ?? [];
+      const cmds: any[] = [];
+      for (const ext of exts) {
+        for (const cmd of ext.commands?.values() ?? []) {
+          cmds.push(cmd);
+        }
+      }
+      // Diagnostic: compare direct read vs SDK method
+      return cmds
+        .map((c: any) => ({ name: c.invocationName ?? c.name, description: c.description ?? "" }))
+        .filter((c: any) => c.name);
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -2187,6 +2785,8 @@ export class PiDeskSessionManager {
   }
 
   dispose(): void {
+    this.scheduler?.stop();
+    this.scheduler = undefined;
     // Reject every pending bash approval so the agent loop doesn't hang on a
     // resolve() that will never come (renderer gone / app quitting). Clear the
     // timeout timers first so they can't fire after the resolve.

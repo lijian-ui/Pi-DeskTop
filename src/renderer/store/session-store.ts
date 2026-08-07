@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { useAgentStore, type Message } from "./agent-store";
 import { useWorkspaceStore } from "./workspace-store";
-import { extractText, extractThinking } from "../utils/content-utils";
+import { extractText, extractThinking, extractImages } from "../utils/content-utils";
+import type { ScheduledTasksData } from "../../preload/api";
 
 export interface SessionInfo {
   path: string;
@@ -65,6 +66,12 @@ function convertMessages(raw: any[]): Message[] {
     const content = extractText(m.content);
     const thinking =
       m.role === "assistant" ? extractThinking(m.content) : "";
+    // Images the user attached are persisted in the session file — restore
+    // them so reopening a conversation still shows the thumbnails.
+    const images =
+      m.role === "user"
+        ? extractImages(m.content, m.id ?? `h${out.length}`)
+        : [];
 
     // Build toolExecutions for assistant messages
     let toolExecutions: any[] | undefined;
@@ -119,6 +126,7 @@ function convertMessages(raw: any[]): Message[] {
       id: m.id ?? `msg-${out.length}-${Date.now()}`,
       role: m.role,
       content,
+      images: images.length ? images : undefined,
       thinking: thinking || undefined,
       toolExecutions,
       isStreaming: false,
@@ -150,6 +158,7 @@ async function reloadMessages(cwd?: string): Promise<void> {
   const agent = useAgentStore.getState();
   if (state?.model) agent.setModel(state.model);
   if (state?.thinkingLevel) agent.setThinkingLevel(state.thinkingLevel);
+  if (state?.commands) agent.setCommands(state.commands);
 }
 
 interface SessionStoreState {
@@ -200,6 +209,16 @@ interface SessionStoreState {
   messagesByPath: Map<string, Message[]>;
   /** Transient message shown when a prompt is rejected (e.g. cwd busy). */
   rejectedMessage: string | null;
+  /** Scheduled tasks + their run history, surfaced in the sidebar. */
+  scheduledRuns: ScheduledTasksData;
+  /** Re-fetch scheduled tasks/runs only (used by event-driven refresh). */
+  refreshScheduledTasks: () => Promise<void>;
+  /**
+   * Lightweight session-list refresh (listSessions only — no currentPath /
+   * currentCwd side effects). Used when a scheduled run creates a new session
+   * file so the sidebar picks it up without a full page reload.
+   */
+  refreshSessions: () => Promise<void>;
   load: () => Promise<void>;
   selectSession: (path: string) => Promise<void>;
   createNew: (cwd?: string) => Promise<void>;
@@ -254,14 +273,18 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   runningPaths: new Set<string>(),
   messagesByPath: new Map<string, Message[]>(),
   rejectedMessage: null,
+  scheduledRuns: { tasks: [], runs: [], states: {} },
 
   load: async () => {
     set({ loading: true });
     try {
-      const [sessions, workspaceCwd, chatOnlyCwd] = await Promise.all([
+      const [sessions, workspaceCwd, chatOnlyCwd, scheduled] = await Promise.all([
         window.piDesk.listSessions(),
         window.piDesk.getCwd(),
         window.piDesk.getChatOnlyCwd(),
+        window.piDesk
+          .getScheduledTasks()
+          .catch(() => ({ tasks: [], runs: [], states: {} })),
       ]);
       const current = await window.piDesk.getCurrentSession(
         get().currentCwd || workspaceCwd || undefined,
@@ -322,6 +345,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         currentCwd,
         pendingPath,
         chatOnlyCwd,
+        scheduledRuns: scheduled,
       });
     } catch (err) {
       console.error("Failed to load sessions:", err);
@@ -330,10 +354,37 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
   },
 
+  refreshScheduledTasks: async () => {
+    try {
+      const scheduled = await window.piDesk.getScheduledTasks();
+      set({ scheduledRuns: scheduled });
+    } catch (err) {
+      console.error("Failed to load scheduled tasks:", err);
+    }
+  },
+
+  refreshSessions: async () => {
+    try {
+      const sessions = await window.piDesk.listSessions();
+      set({ sessions });
+    } catch (err) {
+      console.error("Failed to refresh sessions:", err);
+    }
+  },
+
   selectSession: async (path: string) => {
     const session = get().sessions.find((s) => s.path === path);
-    const cwd = session?.cwd || useWorkspaceStore.getState().cwd;
-    await window.piDesk.switchSession(cwd, path);
+    // Never pass "" — the main process would try to build a unit for an empty
+    // cwd and throw, turning the click into a silent no-op.
+    const cwd =
+      session?.cwd || useWorkspaceStore.getState().cwd || get().chatOnlyCwd;
+    // Scheduled-task sessions are written externally (each run appends from an
+    // isolated SDK session), so their unit copy can go stale. Always re-open
+    // them from disk instead of letting switchSession short-circuit.
+    const isScheduled = get().scheduledRuns.tasks.some(
+      (t) => t.sessionPath === path,
+    );
+    await window.piDesk.switchSession(cwd, path, isScheduled);
     set({ currentPath: path, currentCwd: cwd });
     // Background sessions accumulate their output live in messagesByPath, so
     // if the buffer already exists we just mirror it — no reload needed and
@@ -373,6 +424,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const st = await window.piDesk.getState(effectiveCwd);
     if (st?.model) agent.setModel(st.model);
     if (st?.thinkingLevel) agent.setThinkingLevel(st.thinkingLevel);
+    if (st?.commands) agent.setCommands(st.commands);
     await get().load();
   },
 
@@ -394,6 +446,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const st = await window.piDesk.getState(cwd);
     if (st?.model) agent.setModel(st.model);
     if (st?.thinkingLevel) agent.setThinkingLevel(st.thinkingLevel);
+    if (st?.commands) agent.setCommands(st.commands);
     await get().load();
   },
 

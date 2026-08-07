@@ -76,6 +76,23 @@
   color: var(--text-default);
 }
 
+/* ── Elegant divider between the top nav/actions and the session groups ──
+   A 1px line that fades out at both ends via a gradient, with comfortable
+   vertical breathing room — reads as a refined separator, not a hard rule. */
+.navDivider {
+  height: 1px;
+  margin: 8px 16px;
+  border: 0;
+  flex-shrink: 0;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--border-neutral-l2) 16%,
+    var(--border-neutral-l2) 84%,
+    transparent
+  );
+}
+
 /* ── New session (primary action) ── */
 .newChatBtn {
   display: flex;
@@ -339,6 +356,8 @@
 
 .sessionItem:hover .sessionMenuBtn,
 .sessionItem:focus-within .sessionMenuBtn,
+.scheduledItem:hover .sessionMenuBtn,
+.scheduledItem:focus-within .sessionMenuBtn,
 .sessionMenuBtnOpen {
   opacity: 1;
   pointer-events: auto;
@@ -446,4 +465,138 @@
 .sessionSparkle {
   color: var(--text-brand);
   font-size: 11px;
+}
+
+/* ── Scheduled tasks section ── */
+.scheduledAddBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--icon-tertiary);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-4);
+}
+
+.scheduledAddBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+}
+
+.scheduledItem {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  width: 100%;
+  padding: 5px var(--spacer-8);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-4);
+}
+
+.scheduledItem:hover {
+  background: var(--bg-overlay-l1);
+}
+
+/* Currently open in the read-only log viewer. */
+.scheduledItemActive {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+  font-weight: var(--font-weight-medium);
+}
+
+/* The clickable area that opens the latest run (or the editor). */
+.scheduledMain {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.scheduledMeta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.scheduledName {
+  font-size: 13px;
+  color: var(--text-default);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scheduledSub {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scheduledToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-4);
+}
+
+.toggleOn {
+  color: var(--text-brand);
+}
+
+.toggleOff {
+  color: var(--text-tertiary);
+}
+
+.scheduledToggle:hover {
+  background: var(--bg-overlay-l3);
+}
+
+/* Status dot showing the last (or current) run state. */
+.statusDot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.status_never {
+  background: var(--text-tertiary);
+}
+
+.status_success {
+  background: #30a46c;
+}
+
+.status_error {
+  background: #e5484d;
+}
+
+.status_running {
+  background: var(--text-brand);
+  animation: session-spin 0.9s linear infinite;
 }

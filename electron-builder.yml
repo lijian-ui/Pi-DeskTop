@@ -29,6 +29,11 @@ mac:
   target:
     - dmg
     - zip
+  # 按架构分别打包（Apple Silicon + Intel 各一个安装包）：
+  #   node scripts/build-electron.mjs --mac --arm64 --x64
+  # 脚本会对两个架构各重编一次 node-pty 并放入 prebuilds/（node-pty 运行时按
+  # 机器架构自动选择），产出 *-arm64.dmg / *-x64.dmg；electron-updater 会按
+  # 用户机器架构自动下载对应包。必须在 macOS 本机构建。
 win:
   icon: resources/pi-logo.ico
   target:

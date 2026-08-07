@@ -48,13 +48,6 @@ export function setupApplicationMenu(): void {
       label: "帮助",
       submenu: [
         {
-          label: "帮助与反馈",
-          click: () => {
-            const win = BrowserWindow.getFocusedWindow();
-            if (win) win.webContents.send("pi:showHelp");
-          },
-        },
-        {
           label: `关于 ${appName}`,
           click: () => {
             const win = BrowserWindow.getFocusedWindow();

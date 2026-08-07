@@ -1,6 +1,7 @@
 import { X, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUIStore } from "../store/ui-store";
+import ScheduledTasksPage from "./ScheduledTasksPage";
 import styles from "./AutomatePage.module.css";
 
 export default function AutomatePage() {
@@ -25,7 +26,7 @@ export default function AutomatePage() {
         </button>
       </header>
       <div className={styles.body}>
-        <span className={styles.placeholder}>{t("automate.placeholder")}</span>
+        <ScheduledTasksPage />
       </div>
     </div>
   );

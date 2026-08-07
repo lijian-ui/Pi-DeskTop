@@ -18,16 +18,18 @@ import {
   ChevronRight,
   ListTree,
   Loader2,
-  HelpCircle,
+  MessageSquare,
+  Package,
 } from "lucide-react";
 import { useUIStore } from "../store/ui-store";
 import { useTranslation } from "react-i18next";
 import { useSessionStore, type SessionInfo } from "../store/session-store";
 import FileManagerPanel from "./FileManagerPanel";
 import ConfirmDialog from "../sidebar/ConfirmDialog";
+import { latestRunFor } from "../utils/scheduled";
 import styles from "./Sidebar.module.css";
 
-type NavKey = "chat" | "agents" | "projects" | "skills" | "automate" | "settings" | "help";
+type NavKey = "chat" | "agents" | "projects" | "skills" | "automate" | "packages" | "im" | "settings";
 
 interface NavItem {
   key: NavKey;
@@ -38,7 +40,8 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { key: "skills", icon: Sparkles, labelKey: "nav.skills" },
   { key: "automate", icon: Wrench, labelKey: "nav.automate" },
-  { key: "help", icon: HelpCircle, labelKey: "nav.help" },
+  { key: "packages", icon: Package, labelKey: "nav.packages" },
+  { key: "im", icon: MessageSquare, labelKey: "nav.im" },
   { key: "settings", icon: Settings, labelKey: "nav.settings" },
 ];
 
@@ -149,8 +152,10 @@ export default function Sidebar() {
       setMainView("skills");
     } else if (key === "automate") {
       setMainView("automate");
-    } else if (key === "help") {
-      setMainView("help");
+    } else if (key === "packages") {
+      setMainView("packages");
+    } else if (key === "im") {
+      setMainView("im");
     } else {
       setMainView("chat");
     }
@@ -196,8 +201,12 @@ export default function Sidebar() {
             <Icon size={16} />
             <span>{t(labelKey)}</span>
           </button>
-        ))}
+        )        )}
       </div>
+
+      {/* ── Elegant divider: separates the top nav/actions from the session
+          groups below (任务 / 空间 / 定时任务). ── */}
+      <div className={styles.navDivider} />
 
       {/* ── Content area: session list, or the file manager panel when a
           folder's file-manager icon was clicked (replaces the whole list) ── */}
@@ -229,6 +238,7 @@ function SessionsSection({
   const exportSession = useSessionStore((s) => s.exportSession);
   const renameSession = useSessionStore((s) => s.renameSession);
   const openFileManager = useUIStore((s) => s.openFileManager);
+  const scheduled = useSessionStore((s) => s.scheduledRuns);
 
   // A session is a "task" (no workspace) when it has no cwd or its cwd is the
   // chat-only fallback directory. Precompute the normalized chat-only cwd so
@@ -242,13 +252,36 @@ function SessionsSection({
       !s.cwd || normalizeCwd(s.cwd) === normalizedChatOnlyCwd,
     [normalizedChatOnlyCwd],
   );
+  // A session is "scheduled" when it is the accumulated run log of a scheduled
+  // task (its path is stamped on the task config). Grouped separately, and
+  // excluded from both 任务 and 空间 — this works for ANY bound workspace cwd.
+  const scheduledPaths = useMemo(
+    () =>
+      new Set(
+        scheduled.tasks
+          .map((t) => t.sessionPath)
+          .filter((p): p is string => !!p),
+      ),
+    [scheduled.tasks],
+  );
+  const isScheduled = useCallback(
+    (s: SessionInfo): boolean => scheduledPaths.has(s.path),
+    [scheduledPaths],
+  );
+  // 任务 = isTask AND NOT scheduled — a scheduled session whose cwd happens to
+  // be empty/chat-only (e.g. legacy tasks created with the chat default) must
+  // never also surface under 任务.
   const taskSessions = useMemo(
-    () => sessions.filter(isTask),
-    [sessions, isTask],
+    () => sessions.filter((s) => isTask(s) && !isScheduled(s)),
+    [sessions, isTask, isScheduled],
+  );
+  const scheduledSessions = useMemo(
+    () => sessions.filter(isScheduled),
+    [sessions, isScheduled],
   );
   const spaceSessions = useMemo(
-    () => sessions.filter((s) => !isTask(s)),
-    [sessions, isTask],
+    () => sessions.filter((s) => !isTask(s) && !isScheduled(s)),
+    [sessions, isTask, isScheduled],
   );
   const spaceGroups = useMemo(
     () => groupSessions(spaceSessions, t("sessions.ungrouped")),
@@ -268,6 +301,24 @@ function SessionsSection({
   const [editingPath, setEditingPath] = useState<string | null>(null);
   // Which session is pending delete confirmation. null = none.
   const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(null);
+
+  // Scheduled tasks: refresh the sidebar when a run starts/completes. The run
+  // creates (or appends to) a session file that listAll must re-scan, so the
+  // session list is refreshed together with the task registry — otherwise the
+  // new item would only appear after a manual reload.
+  useEffect(() => {
+    const onRun = () => {
+      const store = useSessionStore.getState();
+      store.refreshScheduledTasks();
+      store.refreshSessions();
+    };
+    const offStart = window.piDesk.onScheduledTaskStarted(onRun);
+    const offDone = window.piDesk.onScheduledTaskCompleted(onRun);
+    return () => { offStart(); offDone(); };
+  }, []);
+
+  // Scheduled-tasks UI state (collapse only — management lives in the 自动化 page)
+  const [schedCollapsed, setSchedCollapsed] = useState(false);
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
@@ -314,6 +365,13 @@ function SessionsSection({
     setEditingPath(null);
     await renameSession(path, name);
   };
+
+  // ── Scheduled tasks (monitoring only) ──
+  // The 自动化 page owns all management (create / edit / enable / delete /
+  // run-now). This group is a pure run-history viewer: every session that a
+  // scheduled task owns shows once (one task = one accumulating session).
+  // Clicking opens it as a NORMAL session (the file lives under sessions/ and
+  // is discoverable by listAll), so follow-up questions just work.
 
   // Create a new session inside a specific folder (= cwd group).
   const handleNewInFolder = async (e: React.MouseEvent, group: SessionGroup) => {
@@ -426,6 +484,141 @@ function SessionsSection({
 
   return (
     <div className={styles.spacesSection}>
+      {/* 定时任务 — 运行历史监控：每个已运行的任务显示一项，点击打开其累计会话。
+          列在最上方，作为用户查看定时任务产出的第一入口。 */}
+      <div className={styles.spacesHeader}>
+        <button
+          className={styles.spacesTitleBtn}
+          onClick={() => setSchedCollapsed((v) => !v)}
+          title={t("scheduled.title")}
+        >
+          <span className={styles.spacesTitle}>
+            {t("scheduled.title")} ({scheduledSessions.length})
+          </span>
+          {schedCollapsed ? (
+            <ChevronRight size={14} className={styles.spaceChevron} />
+          ) : (
+            <ChevronDown size={14} className={styles.spaceChevron} />
+          )}
+        </button>
+      </div>
+
+      {!schedCollapsed && (
+        <div className={styles.spacesList}>
+          {scheduledSessions.map((s) => {
+            const task = scheduled.tasks.find((t) => t.sessionPath === s.path);
+            const last = task
+              ? latestRunFor(scheduled.runs, task.id)
+              : undefined;
+            const isRunning = scheduled.runs.some(
+              (r) => r.sessionPath === s.path && r.status === "running",
+            );
+            const isActive = currentPath === s.path;
+            const isEditing = editingPath === s.path;
+            const isMenuOpen = menuOpenPath === s.path;
+            // A custom rename wins; otherwise fall back to the task's name.
+            const displayName = s.name || task?.name || s.path;
+            return (
+              <div
+                key={s.path}
+                className={`${styles.scheduledItem} ${
+                  isActive ? styles.scheduledItemActive : ""
+                }`}
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  selectSession(s.path);
+                  onReturnToChat();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    selectSession(s.path);
+                    onReturnToChat();
+                  }
+                }}
+                title={displayName}
+              >
+                {isEditing ? (
+                  <RenameInput
+                    initialValue={s.name ?? ""}
+                    onSave={(val) => submitRename(s.path, val)}
+                    onCancel={() => setEditingPath(null)}
+                  />
+                ) : (
+                  <div className={styles.scheduledMeta}>
+                    <span className={styles.scheduledName}>
+                      {displayName}
+                    </span>
+                    {last?.startedAt && (
+                      <span className={styles.scheduledSub}>
+                        {t("scheduled.lastRun")} {formatTime(last.startedAt)}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {isRunning && (
+                  <Loader2 size={13} className={styles.sessionSpinner} />
+                )}
+                <button
+                  className={`${styles.sessionMenuBtn} ${
+                    isMenuOpen ? styles.sessionMenuBtnOpen : ""
+                  }`}
+                  title={t("sessions.more")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpenPath(isMenuOpen ? null : s.path);
+                  }}
+                >
+                  <MoreVertical size={14} />
+                </button>
+                {isMenuOpen && (
+                  <>
+                    <div
+                      className={styles.menuOverlay}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuOpenPath(null);
+                      }}
+                    />
+                    <div
+                      className={styles.sessionMenu}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        className={styles.sessionMenuItem}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startRename(s.path);
+                        }}
+                      >
+                        <Pencil size={13} />
+                        <span>{t("sessions.rename")}</span>
+                      </button>
+                      <button
+                        className={styles.sessionMenuItem}
+                        onClick={(e) => handleExport(e, s.path)}
+                      >
+                        <Download size={13} />
+                        <span>{t("sessions.export")}</span>
+                      </button>
+                      <button
+                        className={`${styles.sessionMenuItem} ${styles.sessionMenuItemDanger}`}
+                        onClick={(e) => handleDelete(e, s.path)}
+                      >
+                        <Trash2 size={13} />
+                        <span>{t("sessions.delete")}</span>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 任务分组 — 无工作空间的会话（纯对话） */}
       <div className={styles.spacesHeader}>
         <button
           className={styles.spacesTitleBtn}

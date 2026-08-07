@@ -73,6 +73,7 @@ export default function SettingsPanel() {
   const [formName, setFormName] = useState("");
   const [formBaseUrl, setFormBaseUrl] = useState("");
   const [formApiKey, setFormApiKey] = useState("");
+  const [formSupportsImages, setFormSupportsImages] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   /** Provider awaiting delete confirmation (two-step removal). */
@@ -93,7 +94,7 @@ export default function SettingsPanel() {
 
   const openDialog = () => {
     setSelectedProvider("");
-    setFormName(""); setFormBaseUrl(""); setFormApiKey("");
+    setFormName(""); setFormBaseUrl(""); setFormApiKey(""); setFormSupportsImages(false);
     setError(""); setShowDialog(true);
   };
 
@@ -127,7 +128,8 @@ export default function SettingsPanel() {
           apiKey: formApiKey.trim(),
           models: [
             ...existingModels.filter((m) => String(m?.id) !== modelId),
-            { id: modelId, name: formName.trim(), reasoning: false, input: ["text"],
+            { id: modelId, name: formName.trim(), reasoning: false,
+              input: formSupportsImages ? ["text", "image"] : ["text"],
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 128000, maxTokens: 16384 },
           ],
@@ -222,6 +224,8 @@ export default function SettingsPanel() {
           setFormBaseUrl={setFormBaseUrl}
           formApiKey={formApiKey}
           setFormApiKey={setFormApiKey}
+          formSupportsImages={formSupportsImages}
+          setFormSupportsImages={setFormSupportsImages}
           saving={saving}
           error={error}
           onSave={handleSave}
@@ -251,6 +255,7 @@ interface AddModelDialogProps {
   formName: string; setFormName: (v: string) => void;
   formBaseUrl: string; setFormBaseUrl: (v: string) => void;
   formApiKey: string; setFormApiKey: (v: string) => void;
+  formSupportsImages: boolean; setFormSupportsImages: (v: boolean) => void;
   saving: boolean;
   error: string;
   onSave: () => void;
@@ -293,6 +298,18 @@ function AddModelDialog(props: AddModelDialogProps) {
                   <input className={styles.fieldInput} type="url"
                     placeholder="http://localhost:1234/v1"
                     value={props.formBaseUrl} onChange={(e) => props.setFormBaseUrl(e.target.value)} />
+                </div>
+              </div>
+              <div className={styles.checkRow}>
+                <input
+                  type="checkbox"
+                  className={styles.checkbox}
+                  checked={props.formSupportsImages}
+                  onChange={(e) => props.setFormSupportsImages(e.target.checked)}
+                />
+                <div className={styles.checkStack}>
+                  <span className={styles.checkLabel}>{t("models.supportsImages")}</span>
+                  <span className={styles.fieldHint}>{t("models.supportsImagesHint")}</span>
                 </div>
               </div>
             </>

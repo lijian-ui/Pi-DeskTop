@@ -4,7 +4,6 @@ import {
   Square,
   Pencil,
   X,
-  Plus,
   ChevronDown,
   Shield,
   Mic,
@@ -16,10 +15,15 @@ import {
   AlertCircle,
   Code2,
   SquareTerminal,
+  ImagePlus,
 } from "lucide-react";
 import { useAgentStore } from "../store/agent-store";
-import { useUIStore } from "../store/ui-store";
+import {
+  useUIStore,
+} from "../store/ui-store";
 import type { CodeAttachment } from "../store/ui-store";
+import { fileToBase64, toDataUrl, formatBytes, compressImage, compressedByteLength } from "../utils/image";
+import { useImageSettingsStore } from "../store/settings-store";
 import { useSkillStore } from "../store/skill-store";
 import { useWorkspaceStore } from "../store/workspace-store";
 import { useSessionStore } from "../store/session-store";
@@ -29,6 +33,7 @@ import { useBashGuardStore, type BashMode } from "../store/bashGuard-store";
 import BashApprovalModal from "./BashApprovalModal";
 import AtFilePicker, { toRelative } from "./AtFilePicker";
 import { preloadDir } from "./atFileCache";
+import CacheHitBadge from "./CacheHitBadge";
 import styles from "./ChatComposer.module.css";
 
 interface ModelItem {
@@ -197,29 +202,15 @@ export default function ChatComposer() {
   // ── Context usage (tokens / contextWindow / percent) ──
   const contextUsage = useAgentStore((s) => s.contextUsage);
   const setContextUsage = useAgentStore((s) => s.setContextUsage);
-
-  /** Fetch current context usage from the SDK and push to store. */
-  const refreshContextUsage = useCallback(async () => {
-    try {
-      const res = await window.piDesk.getContextUsage();
-      setContextUsage(res ?? null);
-    } catch {
-      // Silently ignore — not critical if a fetch fails.
-    }
-  }, [setContextUsage]);
-
-  // Poll on mount + whenever streaming ends (assistant has replied → fresh usage).
-  useEffect(() => {
-    refreshContextUsage();
-  }, [refreshContextUsage]);
-
-  useEffect(() => {
-    if (!isStreaming) {
-      // Small delay to let the SDK finalize its internal state.
-      const timer = setTimeout(refreshContextUsage, 300);
-      return () => clearTimeout(timer);
-    }
-  }, [isStreaming, refreshContextUsage]);
+  const [cacheStats, setCacheStats] = useState<{
+    missedTokens: number;
+    missedCost: number;
+    missCount: number;
+    cacheRead: number;
+    cacheWrite: number;
+    cacheMiss: number;
+    ttlMs: number;
+  } | null>(null);
 
   // Re-fetch context usage whenever the active session changes (switch /
   // new / fork). contextUsage is global state, so without this the ring would
@@ -237,6 +228,34 @@ export default function ChatComposer() {
   const trackedCwd = useSessionStore((s) => s.currentCwd);
   const currentCwd =
     sessions.find((s) => s.path === currentPath)?.cwd || trackedCwd || workspaceCwd;
+
+  /** Fetch current context usage from the SDK and push to store. */
+  const refreshContextUsage = useCallback(async () => {
+    try {
+      const [usage, cache] = await Promise.all([
+        window.piDesk.getContextUsage(currentCwd),
+        window.piDesk.getCacheStats(currentCwd).catch(() => undefined),
+      ]);
+      setContextUsage(usage ?? null);
+      setCacheStats(cache ?? null);
+    } catch {
+      // Silently ignore — not critical if a fetch fails.
+    }
+  }, [setContextUsage, currentCwd]);
+
+  // Poll on mount + whenever streaming ends (assistant has replied → fresh usage).
+  useEffect(() => {
+    refreshContextUsage();
+  }, [refreshContextUsage]);
+
+  useEffect(() => {
+    if (!isStreaming) {
+      // Small delay to let the SDK finalize its internal state.
+      const timer = setTimeout(refreshContextUsage, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [isStreaming, refreshContextUsage]);
+
   useEffect(() => {
     if (currentPath) {
       setContextUsage(null);
@@ -272,6 +291,14 @@ export default function ChatComposer() {
   const codeAttachments = useUIStore((s) => s.codeAttachments);
   const removeCodeAttachment = useUIStore((s) => s.removeCodeAttachment);
   const clearCodeAttachments = useUIStore((s) => s.clearCodeAttachments);
+  // Images staged for the next prompt (clipboard paste / picker / drag&drop).
+  const imageAttachments = useUIStore((s) => s.imageAttachments);
+  const removeImageAttachment = useUIStore((s) => s.removeImageAttachment);
+  const clearImageAttachments = useUIStore((s) => s.clearImageAttachments);
+  // Bumped by the Models page after add/edit/delete → triggers model re-fetch.
+  const modelsVersion = useUIStore((s) => s.modelsVersion);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
 
   // Workspace store (recents dropdown only — there is no global cwd anymore).
   // Anything that needs "the directory the agent is actually working in" must
@@ -328,8 +355,9 @@ export default function ChatComposer() {
     return () => {
       cancelled = true;
     };
-    // Model list is global — independent of cwd.
-  }, []);
+    // Model list is global — independent of cwd, but re-fetch when the Models
+    // page adds/edits/deletes a provider (ui-store.modelsVersion bump).
+  }, [modelsVersion]);
 
   // Apply a skill command / suggestion dropped into the composer from
   // elsewhere (e.g. the Skills panel "click to invoke" action, or an empty-state
@@ -356,6 +384,30 @@ export default function ChatComposer() {
   // ── Workspace selector state ──
   const [workspaceDropdownOpen, setWorkspaceDropdownOpen] = useState(false);
   const workspaceDropdownRef = useRef<HTMLDivElement>(null);
+  // True when the focused session belongs to an IM conversation (DingTalk…).
+  // For IM sessions the workspace selector stays available even after the
+  // first message: picking a folder MIGRATES that conversation to the new cwd.
+  const [isImSession, setIsImSession] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    if (!currentPath) {
+      setIsImSession(false);
+      return;
+    }
+    window.piDesk
+      .imIsSession(currentPath)
+      .then((v) => {
+        if (alive) setIsImSession(v);
+      })
+      .catch(() => {
+        if (alive) setIsImSession(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [currentPath]);
 
   // The focused session, and whether it is a still-empty "task" (chat) session
   // that may be bound to a real workspace. Once a task has messages it is
@@ -374,9 +426,10 @@ export default function ChatComposer() {
     !!focusedSession && focusedSession.messageCount === 0;
   // After the first message the workspace choice is locked: hide the selector
   // entirely for chat sessions, or show a static (non-interactive) workspace
-  // label for already-bound workspace sessions.
+  // label for already-bound workspace sessions. IM conversations are the
+  // exception — their cwd may be re-targeted at any time (migrate).
   const showWorkspaceSelector =
-    !focusedSession || focusedSession.messageCount === 0;
+    !focusedSession || focusedSession.messageCount === 0 || isImSession;
 
   // The workspace shown in the pill belongs to the FOCUSED session, not to a
   // global cwd (there is none by design).
@@ -395,9 +448,25 @@ export default function ChatComposer() {
     [recents, effectiveWorkspace]
   );
 
-  // Route a chosen directory: bind the empty session to it (per-session, never
-  // a global cwd). With no session focused at all, start a new one there.
+  // Route a chosen directory: for an IM conversation, MIGRATE it to the new
+  // cwd (history + identity preserved). Otherwise bind the empty session to it
+  // (per-session, never a global cwd); with no session focused at all, start a
+  // new one there.
   const routeWorkspace = async (picked: string) => {
+    setWorkspaceError("");
+    if (isImSession && currentPath) {
+      const res = await window.piDesk.imMigrateSession(currentPath, picked);
+      if (!res.ok) {
+        setWorkspaceError(res.error ?? t("im.migrateFailed"));
+        return;
+      }
+      // The session file moved — re-point the focused path and refresh.
+      const sess = useSessionStore.getState();
+      sess.setCurrentPath(res.newPath ?? currentPath, picked);
+      await sess.refreshCurrent(picked);
+      await sess.refreshSessions();
+      return;
+    }
     if (canBindWorkspace && currentPath) {
       await bindSession(currentPath, picked);
     } else {
@@ -482,9 +551,12 @@ export default function ChatComposer() {
   type SkillEntry = { kind: "skill"; info: SkillInfo };
   type SlashEntry = CommandEntry | SkillEntry;
 
-  // Built-in slash commands (e.g. /compact). Extend this list to add commands.
+  // 内置斜杠命令 + 当前会话已注册的扩展命令（来自 getState → agent-store）。
+  // 执行由 SDK 处理（prompt() 里以 / 开头的文本会先查扩展命令），这里只负责展示。
+  const extensionCommands = useAgentStore((s) => s.commands);
   const COMMANDS: { name: string; description: string }[] = [
     { name: "compact", description: t("slash.compactDesc") },
+    ...extensionCommands.filter((c) => c.name && c.name !== "compact"),
   ];
 
   const commandEntries: CommandEntry[] = COMMANDS.filter((c) =>
@@ -561,15 +633,119 @@ export default function ChatComposer() {
     textareaRef.current?.focus();
   }, [setMentionOpen]);
 
+  /**
+   * Shared intake for every image source (clipboard, file picker, drag&drop).
+   * Validates type / size / count, then converts to base64 and stages it.
+   */
+  const ingestImageFiles = useCallback(
+    async (files: File[]) => {
+      const store = useUIStore.getState();
+      const img = useImageSettingsStore.getState().image;
+      for (const file of files) {
+        if (!file.type.startsWith("image/")) continue;
+        if (file.size > img.maxBytes) {
+          setError(
+            t("chat.imageTooLarge", {
+              name: file.name || t("chat.clipboardImage"),
+              max: Math.round(img.maxBytes / 1024 / 1024),
+            })
+          );
+          continue;
+        }
+        if (store.imageAttachments.length >= img.maxCount) {
+          setError(t("chat.imageTooMany", { max: img.maxCount }));
+          break;
+        }
+        try {
+          const data = await fileToBase64(file);
+          // Compress before storing (when enabled) so the preview, the payload
+          // sent to the LLM, and the persisted session file all share the
+          // smaller version. When compression is off, keep the original.
+          let outData = data;
+          let outMime = file.type;
+          let outSize = file.size;
+          if (img.compressionEnabled) {
+            const c = await compressImage(data, file.type, img.compressionMaxSide, img.compressionQuality);
+            outData = c.data;
+            outMime = c.mimeType;
+            outSize = compressedByteLength(c.data);
+          }
+          store.addImageAttachment({
+            mimeType: outMime,
+            data: outData,
+            name: file.name || t("chat.clipboardImage"),
+            size: outSize,
+          });
+        } catch (err: any) {
+          setError(err?.message ?? t("chat.imageReadFailed"));
+        }
+      }
+    },
+    [setError, t]
+  );
+
+  /** Grab images out of a paste; plain-text pastes fall through untouched. */
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          const f = item.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length === 0) return;
+      // Only swallow the paste when it really carries an image, so normal
+      // Ctrl+V of text keeps working.
+      e.preventDefault();
+      void ingestImageFiles(files);
+    },
+    [ingestImageFiles]
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      const files = Array.from(e.dataTransfer?.files ?? []).filter((f) =>
+        f.type.startsWith("image/")
+      );
+      setDragOver(false);
+      if (files.length === 0) return;
+      e.preventDefault();
+      void ingestImageFiles(files);
+    },
+    [ingestImageFiles]
+  );
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+    e.preventDefault();
+    setDragOver(true);
+  }, []);
+
   const handleSend = () => {
-    if (!text.trim() && codeAttachments.length === 0) return;
+    if (!text.trim() && codeAttachments.length === 0 && imageAttachments.length === 0)
+      return;
     setError(null);
     const body = text.trim();
     // Snapshot attachments, then clear them so the composer resets regardless
     // of which send path we take below.
     const attachments = [...codeAttachments];
+    const stagedImages = [...imageAttachments];
     setText("");
     clearCodeAttachments();
+    clearImageAttachments();
+
+    // SDK ImageContent[]: base64 payload + mime, no `data:` prefix.
+    const images = stagedImages.length
+      ? stagedImages.map((a) => ({
+          type: "image" as const,
+          data: a.data,
+          mimeType: a.mimeType,
+        }))
+      : undefined;
 
     // The real payload sent to the LLM: the user's text plus each code
     // reference expanded into a fenced block. The composer itself only shows
@@ -607,10 +783,10 @@ export default function ChatComposer() {
     // session is currently running in the background (cwd-level concurrency),
     // so a queued send is used even right after focusing a running task.
     if (isStreaming || (currentPath ? runningPaths.has(currentPath) : false)) {
-      enqueueMessage(fullBody);
+      enqueueMessage(fullBody, stagedImages);
       return;
     }
-    window.piDesk.prompt(fullBody, undefined, currentCwd, currentPath ?? undefined).catch((err: any) => {
+    window.piDesk.prompt(fullBody, images, currentCwd, currentPath ?? undefined).catch((err: any) => {
       setError(err?.message ?? t("chat.failedToSend"));
     });
   };
@@ -689,12 +865,18 @@ export default function ChatComposer() {
 
   const handleSelectModel = async (provider: string, modelId: string) => {
     try {
-      await window.piDesk.setModel(provider, modelId);
+      // Pass the focused session's cwd — without it, IM sessions (cwd =
+      // chat/im/<channel>) would get their model set on the wrong unit and
+      // the change would never apply.
+      await window.piDesk.setModel(provider, modelId, currentCwd);
       setDropdownOpen(false);
-      // Refresh store from state
-      const state = await window.piDesk.getState();
+      // Refresh store from state (same cwd so the right unit is read)
+      const state = await window.piDesk.getState(currentCwd);
       if (state?.model) {
         useAgentStore.getState().setModel(state.model);
+      }
+      if (state?.commands) {
+        useAgentStore.getState().setCommands(state.commands);
       }
     } catch (err) {
       console.error("Failed to set model:", err);
@@ -751,7 +933,18 @@ export default function ChatComposer() {
           )}
         </div>
       )}
-      <div className={styles.composerInner}>
+      <div
+        className={`${styles.composerInner}${dragOver ? ` ${styles.composerInnerDrag}` : ""}`}
+        onDragOver={handleDragOver}
+        onDragLeave={(e) => {
+          // Ignore leaves that just move onto a child element, otherwise the
+          // dashed outline flickers while dragging across the composer.
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+            setDragOver(false);
+          }
+        }}
+        onDrop={handleDrop}
+      >
         {slashOpen && (
           <div className={styles.slashBox}>
             <div className={styles.slashHint}>
@@ -887,10 +1080,38 @@ export default function ChatComposer() {
             ))}
           </div>
         )}
+        {imageAttachments.length > 0 && (
+          <div className={styles.imageStrip}>
+            {imageAttachments.map((img) => (
+              <div
+                className={styles.imagePill}
+                key={img.id}
+                title={`${img.name ?? t("chat.image")}${
+                  img.size ? ` · ${formatBytes(img.size)}` : ""
+                }`}
+              >
+                <img
+                  className={styles.imageThumb}
+                  src={toDataUrl(img.mimeType, img.data)}
+                  alt={img.name ?? t("chat.image")}
+                />
+                <button
+                  type="button"
+                  className={styles.imageRemove}
+                  onClick={() => removeImageAttachment(img.id)}
+                  title={t("chat.removeImage")}
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           className={styles.textarea}
           value={text}
+          onPaste={handlePaste}
           onChange={(e) => {
             const newText = e.target.value;
             const caret = e.target.selectionStart ?? newText.length;
@@ -910,14 +1131,32 @@ export default function ChatComposer() {
         />
         <div className={styles.toolbar}>
           <div className={styles.toolbarLeft}>
-            <button className={styles.iconBtn} title={t("chat.attach")}>
-              <Plus size={16} />
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                void ingestImageFiles(files);
+                // Reset so picking the same file twice still fires onChange.
+                e.target.value = "";
+              }}
+            />
+            <button
+              className={styles.iconBtn}
+              title={t("chat.attachImage")}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <ImagePlus size={16} />
             </button>
           </div>
           <div className={styles.toolbarRight}>
             {contextUsage && contextUsage.contextWindow > 0 && (
               <ContextRing usage={contextUsage} />
             )}
+            <CacheHitBadge stats={cacheStats} />
             <div className={styles.modelSelector} ref={dropdownRef}>
               <button
                 className={styles.modelPill}
@@ -972,7 +1211,11 @@ export default function ChatComposer() {
               <button
                 className={styles.sendBtn}
                 onClick={handleSend}
-                disabled={!text.trim() && codeAttachments.length === 0}
+                disabled={
+                  !text.trim() &&
+                  codeAttachments.length === 0 &&
+                  imageAttachments.length === 0
+                }
                 title={t("chat.send")}
               >
                 <Send size={16} />
@@ -993,6 +1236,9 @@ export default function ChatComposer() {
               <span className={styles.workspaceLabel}>{workspaceLabel}</span>
               <ChevronDown size={10} />
             </button>
+            {workspaceError && (
+              <div className={styles.workspaceError}>{workspaceError}</div>
+            )}
             {workspaceDropdownOpen && (
               <div className={styles.workspaceDropdown}>
                 <button
@@ -1004,8 +1250,7 @@ export default function ChatComposer() {
                   <span className={styles.workspaceOptionLabel}>
                     {t("workspace.pick")}
                   </span>
-                </button>
-                {otherRecents.length > 0 && (
+                </button>                {otherRecents.length > 0 && (
                   <div className={styles.workspaceGroupLabel}>
                     {t("workspace.recent")}
                   </div>

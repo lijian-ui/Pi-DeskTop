@@ -14,6 +14,7 @@ interface ContentBlock {
   text?: string;
   thinking?: string;
   data?: string;
+  mimeType?: string;
 }
 
 /**
@@ -30,6 +31,30 @@ export function extractText(content: unknown): string {
       .join("\n");
   }
   return "";
+}
+
+/**
+ * Extract image blocks (`{ type:"image", data, mimeType }`) from a message's
+ * content. The SDK persists images inside the session file, so this is what
+ * makes attached images survive a reload / session switch — not just the live
+ * optimistic bubble. `idPrefix` keeps React keys stable across re-renders.
+ */
+export function extractImages(
+  content: unknown,
+  idPrefix = "img"
+): { id: string; mimeType: string; data: string }[] {
+  if (!Array.isArray(content)) return [];
+  const out: { id: string; mimeType: string; data: string }[] = [];
+  content.forEach((b: ContentBlock, i: number) => {
+    if (b && b.type === "image" && typeof b.data === "string" && b.data) {
+      out.push({
+        id: `${idPrefix}-${i}`,
+        mimeType: b.mimeType || "image/png",
+        data: b.data,
+      });
+    }
+  });
+  return out;
 }
 
 /**

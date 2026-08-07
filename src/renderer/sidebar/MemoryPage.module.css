@@ -1,0 +1,296 @@
+/* 规则与记忆 → 导入设置卡片 + 规则配置块的样式。 */
+
+/* ── 导入设置 / 规则 卡片 ── */
+
+.card {
+  background: var(--bg-overlay-l1);
+  border-radius: var(--border-radius-md);
+  /* No overflow:hidden here — it would clip the absolutely-positioned
+     gear dropdown (ruleMenu). Rounded corners are safe: the background lives
+     on this element and children are transparent with their own padding. */
+}
+
+.cardRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacer-10);
+  padding: 12px 14px;
+}
+
+.cardText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.cardDesc {
+  font-size: var(--body-xs-font-size, 12px);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.cardDivider {
+  height: 1px;
+  background: var(--border-tertiary);
+  margin: 0 14px;
+}
+
+/* ── 规则区块 ── */
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-4);
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--icon-tertiary);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.iconBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-4);
+  padding: 12px 14px 8px;
+}
+
+.createBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-brand, #3b82f6);
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--text-brand);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.createBtn:hover {
+  background: var(--bg-brand-alpha, rgba(59, 130, 246, 0.1));
+}
+
+.createBtnIcon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.ruleRow {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacer-6);
+  padding: 8px 14px 12px;
+  border-top: 1px solid var(--border-tertiary);
+}
+
+.ruleIcon {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--icon-tertiary);
+}
+
+.rulePreview {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--body-xs-font-size, 12px);
+  color: var(--text-secondary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+
+.ruleDeleteBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--icon-tertiary);
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.55;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.ruleRow:hover .ruleDeleteBtn {
+  opacity: 1;
+}
+
+.ruleDeleteBtn:hover {
+  background: rgba(229, 72, 77, 0.12);
+  color: #e5484d;
+}
+
+.ruleEmpty {
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--border-tertiary);
+  font-size: var(--body-xs-font-size, 12px);
+  color: var(--text-tertiary);
+}
+
+.savedMsg {
+  margin-top: var(--spacer-4);
+  font-size: var(--body-xs-font-size, 12px);
+  color: var(--text-success, #1d9e75);
+}
+
+/* ── 规则编辑器 Modal ── */
+
+.editorOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 24px;
+}
+
+.editorModal {
+  width: 560px;
+  max-width: 100%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  background: var(--bg-base-default);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.editorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-tertiary);
+}
+
+.editorTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-default);
+}
+
+.editorTextarea {
+  flex: 1;
+  min-height: 240px;
+  padding: 12px 16px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-default);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  resize: none;
+}
+
+.editorFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacer-4);
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-tertiary);
+}
+
+.editorBtnGhost {
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--text-default);
+  font-size: 12px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.editorBtnGhost:hover {
+  background: var(--bg-overlay-l1);
+}
+
+.editorBtnPrimary {
+  border: none;
+  border-radius: var(--radius-4);
+  background: var(--bg-brand, #3b82f6);
+  color: #fff;
+  font-size: 12px;
+  padding: 6px 18px;
+  cursor: pointer;
+}
+
+.editorBtnPrimary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ── 导入设置滑块 ── */
+
+.switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: var(--border-neutral-l2);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s ease;
+}
+
+.switchRight {
+  margin-left: auto;
+  margin-top: 2px;
+}
+
+.switchOn {
+  background: var(--bg-brand, #3b82f6);
+}
+
+.switchKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+
+.switchOn .switchKnob {
+  transform: translateX(18px);
+}

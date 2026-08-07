@@ -3,6 +3,17 @@ import { basename, extname, join } from "node:path";
 import { readFile, readdir, stat } from "node:fs/promises";
 import type { PiDeskSessionManager } from "./pi/session-manager";
 import type { TerminalManager } from "./pi/terminal-manager";
+import { getImGateway } from "./index";
+import { readImConfig, writeImConfig, type ImConfig } from "./im/im-config";
+import {
+  searchNpmPackages,
+  getInstalledPackages,
+  installPackage,
+  removePackage,
+  getPackageDetail,
+  checkForPackageUpdates,
+  updatePackage,
+} from "./pi/package-manager";
 
 // Lazily-resolved Pi manager. registerIpcHandlers() is invoked BEFORE the SDK
 // finishes initializing (so handlers exist from the first millisecond and the
@@ -101,6 +112,24 @@ export function registerIpcHandlers(
     await pmgr.saveSoul(text);
   });
 
+  // ── Scheduled tasks ──
+  ipcMain.handle("pi:getScheduledTasks", async () => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    return pmgr.getScheduledTasks();
+  });
+  ipcMain.handle("pi:saveScheduledTask", async (_, { task }) => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.saveScheduledTask(task);
+  });
+  ipcMain.handle("pi:deleteScheduledTask", async (_, { taskId }) => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.deleteScheduledTask(taskId);
+  });
+  ipcMain.handle("pi:runScheduledTaskNow", async (_, { taskId }) => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.runScheduledTaskNow(taskId);
+  });
+
   // ── Active tools (assistant settings) ──
   ipcMain.handle("pi:getActiveTools", async () => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
@@ -112,9 +141,93 @@ export function registerIpcHandlers(
     await pmgr.saveActiveTools(tools);
   });
 
-  ipcMain.handle("pi:setModel", async (_, { provider, modelId }) => {
+  // ── Context-file import toggles (规则与记忆 → 导入设置) ──
+  ipcMain.handle("pi:getContextFilesConfig", async () => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
-    await pmgr.setModel(provider, modelId);
+    return pmgr.getContextFilesConfig();
+  });
+
+  ipcMain.handle("pi:setContextFilesConfig", async (_, cfg) => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.saveContextFilesConfig(cfg);
+  });
+
+  // ── Rules (规则) ──
+  ipcMain.handle("pi:getRulesContent", async () => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    return pmgr.getRulesContent();
+  });
+
+  ipcMain.handle("pi:saveRulesContent", async (_, content: string) => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.saveRulesContent(String(content ?? ""));
+  });
+
+  ipcMain.handle("pi:deleteRulesFile", async () => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.removeRulesFile();
+  });
+
+  // ── Pi Packages（扩展商店） ──
+  ipcMain.handle("pi:searchPackages", async (_, { keyword, from, size, category }) => {
+    try {
+      const { packages, total } = await searchNpmPackages(
+        keyword,
+        from ?? 0,
+        size ?? 50,
+        category,
+      );
+      return { ok: true, packages, total };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) };
+    }
+  });
+
+  ipcMain.handle("pi:getPackageDetail", async (_, { name }) => {
+    try {
+      return { ok: true, detail: await getPackageDetail(name) };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) };
+    }
+  });
+
+  ipcMain.handle("pi:getInstalledPackages", async () => {
+    try {
+      return { ok: true, packages: await getInstalledPackages() };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) };
+    }
+  });
+
+  ipcMain.handle("pi:installPackage", async (_, { source }) => {
+    const result = await installPackage(source);
+    if (result.ok && pmgr) await pmgr.invalidatePackageServices();
+    return result;
+  });
+
+  ipcMain.handle("pi:removePackage", async (_, { source }) => {
+    const result = await removePackage(source);
+    if (result.ok && pmgr) await pmgr.invalidatePackageServices();
+    return result;
+  });
+
+  ipcMain.handle("pi:checkPackageUpdates", async () => {
+    try {
+      return { ok: true, updates: await checkForPackageUpdates() };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) };
+    }
+  });
+
+  ipcMain.handle("pi:updatePackage", async (_, { source }) => {
+    const result = await updatePackage(source);
+    if (result.ok && pmgr) await pmgr.invalidatePackageServices();
+    return result;
+  });
+
+  ipcMain.handle("pi:setModel", async (_, { provider, modelId, cwd }) => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.setModel(provider, modelId, cwd);
   });
 
   ipcMain.handle("pi:cycleModel", async () => {
@@ -132,20 +245,67 @@ export function registerIpcHandlers(
     return await pmgr.newSession(cwd);
   });
 
-  ipcMain.handle("pi:switchSession", async (_, { cwd, sessionPath }) => {
+  ipcMain.handle("pi:switchSession", async (_, { cwd, sessionPath, force }) => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
-    await pmgr.switchSession(cwd, sessionPath);
+    await pmgr.switchSession(cwd, sessionPath, Boolean(force));
   });
 
-  ipcMain.handle("pi:compact", async (_, { customInstructions }) => {
+  ipcMain.handle("pi:compact", async (_, { customInstructions, cwd }) => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
-    return await pmgr.compact(customInstructions);
+    return await pmgr.compact(customInstructions, cwd);
   });
 
-  ipcMain.handle("pi:getContextUsage", async () => {
+  ipcMain.handle("pi:getContextUsage", async (_, { cwd }: { cwd?: string } = {}) => {
     if (!pmgr) return undefined;
-    return pmgr.getContextUsage();
+    return pmgr.getContextUsage(cwd);
   });
+
+  ipcMain.handle("pi:getCacheStats", async (_, { cwd }: { cwd?: string } = {}) => {
+    if (!pmgr) return undefined;
+    return pmgr.getCacheStats(cwd);
+  });
+
+  // ── IM gateway (DingTalk etc.) ──
+  ipcMain.handle("pi:imGetConfig", async () => {
+    return readImConfig();
+  });
+  ipcMain.handle("pi:imSaveConfig", async (_, cfg: ImConfig) => {
+    await writeImConfig(cfg);
+    const gateway = getImGateway();
+    if (gateway) {
+      await gateway.applyConfig(cfg);
+      return { ok: true };
+    }
+    return { ok: false, error: "IM gateway not initialized" };
+  });
+  ipcMain.handle("pi:imGetStatus", async () => {
+    const gateway = getImGateway();
+    return gateway?.getStatus() ?? {};
+  });
+  ipcMain.handle("pi:imIsSession", async (_, sessionPath: string) => {
+    const gateway = getImGateway();
+    return gateway?.isSession(sessionPath) ?? false;
+  });
+  ipcMain.handle(
+    "pi:imMigrateSession",
+    async (_, payload: { sessionPath: string; newCwd: string }) => {
+      const gateway = getImGateway();
+      if (!gateway) {
+        return { ok: false, error: "IM gateway not initialized" };
+      }
+      return gateway.migrateSession(payload.sessionPath, payload.newCwd);
+    },
+  );
+  ipcMain.handle(
+    "pi:imMigrateChannelSessions",
+    async (_, instanceId: string) => {
+      const gateway = getImGateway();
+      if (!gateway) {
+        return { migrated: [], skipped: [], failed: [], error: "IM gateway not initialized" };
+      }
+      return gateway.migrateChannelSessions(instanceId);
+    },
+  );
 
   ipcMain.handle("pi:getState", async (_, { cwd }) => {
     if (!pmgr) return null;
@@ -242,7 +402,23 @@ export function registerIpcHandlers(
   // ── Session management ──
   ipcMain.handle("pi:listSessions", async () => {
     if (!pmgr) return [];
-    return pmgr.listSessions();
+    const sessions = await pmgr.listSessions();
+    // IM conversations show their channel name in the sidebar title, e.g.
+    // "[测试机器人] 你好，你是谁". The prefix comes from the channel instance
+    // name; it is applied read-only here (never written to the session file),
+    // so repeated listings can't accumulate duplicates.
+    const gateway = getImGateway();
+    if (gateway && Array.isArray(sessions)) {
+      for (const s of sessions) {
+        if (!s || typeof s.firstMessage !== "string") continue;
+        if (s.firstMessage === "(no messages)") continue; // SDK empty placeholder
+        const prefix = gateway.displayPrefix(s.path);
+        if (prefix && !s.firstMessage.startsWith(prefix)) {
+          s.firstMessage = prefix + s.firstMessage;
+        }
+      }
+    }
+    return sessions;
   });
 
   ipcMain.handle("pi:getCurrentSession", async (_, args) => {

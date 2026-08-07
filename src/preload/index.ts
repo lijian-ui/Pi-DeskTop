@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { ContextFilesConfig } from "./api";
 
 // Pi-ready signaling: the main process sends "pi:ready" once the (slow,
 // synchronous) SDK initialization completes. Buffer it so a late subscriber
@@ -45,19 +46,36 @@ const piAPI = {
   getSoul: () => ipcRenderer.invoke("pi:getSoul"),
   saveSoul: (text: string) => ipcRenderer.invoke("pi:saveSoul", text),
 
-  setModel: (provider: string, modelId: string) =>
-    ipcRenderer.invoke("pi:setModel", { provider, modelId }),
+  setModel: (provider: string, modelId: string, cwd?: string) =>
+    ipcRenderer.invoke("pi:setModel", { provider, modelId, cwd }),
   cycleModel: () => ipcRenderer.invoke("pi:cycleModel"),
   getAvailableModels: () => ipcRenderer.invoke("pi:getAvailableModels"),
 
   newSession: (cwd?: string) =>
     ipcRenderer.invoke("pi:newSession", { cwd }),
-  switchSession: (cwd: string, sessionPath: string) =>
-    ipcRenderer.invoke("pi:switchSession", { cwd, sessionPath }),
+  switchSession: (cwd: string, sessionPath: string, force?: boolean) =>
+    ipcRenderer.invoke("pi:switchSession", { cwd, sessionPath, force }),
   compact: (customInstructions?: string) =>
     ipcRenderer.invoke("pi:compact", { customInstructions }),
 
-  getContextUsage: () => ipcRenderer.invoke("pi:getContextUsage"),
+  getContextUsage: (cwd?: string) => ipcRenderer.invoke("pi:getContextUsage", { cwd }),
+  getCacheStats: (cwd?: string) => ipcRenderer.invoke("pi:getCacheStats", { cwd }),
+
+  // IM gateway (DingTalk etc.)
+  imGetConfig: () => ipcRenderer.invoke("pi:imGetConfig"),
+  imSaveConfig: (cfg: any) => ipcRenderer.invoke("pi:imSaveConfig", cfg),
+  imGetStatus: () => ipcRenderer.invoke("pi:imGetStatus"),
+  imIsSession: (sessionPath: string) =>
+    ipcRenderer.invoke("pi:imIsSession", sessionPath),
+  imMigrateSession: (sessionPath: string, newCwd: string) =>
+    ipcRenderer.invoke("pi:imMigrateSession", { sessionPath, newCwd }),
+  imMigrateChannelSessions: (instanceId: string) =>
+    ipcRenderer.invoke("pi:imMigrateChannelSessions", instanceId),
+  onImStatus: (callback: (s: Record<string, string>) => void) => {
+    const listener = (_: unknown, s: Record<string, string>) => callback(s);
+    ipcRenderer.on("pi:imStatus", listener);
+    return () => ipcRenderer.removeListener("pi:imStatus", listener);
+  },
 
   getState: (cwd?: string) => ipcRenderer.invoke("pi:getState", { cwd }),
 
@@ -101,6 +119,15 @@ const piAPI = {
     ipcRenderer.invoke("pi:renameSession", { sessionPath, name }),
   deleteSession: (sessionPath: string) =>
     ipcRenderer.invoke("pi:deleteSession", { sessionPath }),
+
+  // ── Scheduled tasks ──
+  getScheduledTasks: () => ipcRenderer.invoke("pi:getScheduledTasks"),
+  saveScheduledTask: (task: any) =>
+    ipcRenderer.invoke("pi:saveScheduledTask", { task }),
+  deleteScheduledTask: (taskId: string) =>
+    ipcRenderer.invoke("pi:deleteScheduledTask", { taskId }),
+  runScheduledTaskNow: (taskId: string) =>
+    ipcRenderer.invoke("pi:runScheduledTaskNow", { taskId }),
 
   listSkills: () => ipcRenderer.invoke("pi:listSkills"),
   importSkill: () =>
@@ -159,13 +186,6 @@ const piAPI = {
   // Open an external URL (GitHub repo, docs, …) in the OS default browser.
   openExternal: (url: string) => ipcRenderer.invoke("pi:openExternal", { url }),
 
-  // Native app-menu "帮助与反馈" entry → switch the renderer to the help page.
-  onShowHelp: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on("pi:showHelp", listener);
-    return () => ipcRenderer.removeListener("pi:showHelp", listener);
-  },
-
   // App version (read from package.json via app.getVersion), used by the About dialog
   getAppVersion: () => ipcRenderer.invoke("pi:getAppVersion"),
 
@@ -187,6 +207,31 @@ const piAPI = {
   getActiveTools: () => ipcRenderer.invoke("pi:getActiveTools"),
   saveActiveTools: (tools: string[]) =>
     ipcRenderer.invoke("pi:saveActiveTools", tools),
+
+  // Context-file import toggles (规则与记忆 → 导入设置)
+  getContextFilesConfig: () => ipcRenderer.invoke("pi:getContextFilesConfig"),
+  setContextFilesConfig: (cfg: ContextFilesConfig) =>
+    ipcRenderer.invoke("pi:setContextFilesConfig", cfg),
+
+  // Rules (规则): single rules.md file
+  getRulesContent: () => ipcRenderer.invoke("pi:getRulesContent"),
+  saveRulesContent: (content: string) =>
+    ipcRenderer.invoke("pi:saveRulesContent", content),
+  deleteRulesFile: () => ipcRenderer.invoke("pi:deleteRulesFile"),
+
+  // Pi Packages (扩展商店)
+  searchPackages: (keyword?: string, from?: number, size?: number, category?: string) =>
+    ipcRenderer.invoke("pi:searchPackages", { keyword, from, size, category }),
+  getPackageDetail: (name: string) =>
+    ipcRenderer.invoke("pi:getPackageDetail", { name }),
+  getInstalledPackages: () => ipcRenderer.invoke("pi:getInstalledPackages"),
+  installPackage: (source: string) =>
+    ipcRenderer.invoke("pi:installPackage", { source }),
+  removePackage: (source: string) =>
+    ipcRenderer.invoke("pi:removePackage", { source }),
+  checkPackageUpdates: () => ipcRenderer.invoke("pi:checkPackageUpdates"),
+  updatePackage: (source: string) =>
+    ipcRenderer.invoke("pi:updatePackage", { source }),
 
   // Auto-update (electron-updater, generic provider -> Gitee Releases)
   checkForUpdates: () => ipcRenderer.invoke("pi:checkForUpdates"),
@@ -233,6 +278,16 @@ const piAPI = {
     const listener = (_: any, payload: any) => callback(payload.id, payload.exitCode);
     ipcRenderer.on("pi:terminal:exit", listener);
     return () => ipcRenderer.removeListener("pi:terminal:exit", listener);
+  },
+  onScheduledTaskStarted: (callback: (info: { taskId: string; sessionPath: string }) => void) => {
+    const listener = (_: any, payload: any) => callback(payload);
+    ipcRenderer.on("scheduledTask:started", listener);
+    return () => ipcRenderer.removeListener("scheduledTask:started", listener);
+  },
+  onScheduledTaskCompleted: (callback: (info: { taskId: string; sessionPath: string }) => void) => {
+    const listener = (_: any, payload: any) => callback(payload);
+    ipcRenderer.on("scheduledTask:completed", listener);
+    return () => ipcRenderer.removeListener("scheduledTask:completed", listener);
   },
 };
 

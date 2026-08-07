@@ -368,6 +368,33 @@
   line-height: 1.4;
 }
 
+/* ── Vision (supports images) checkbox row ── */
+.checkRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacer-10, 10px);
+  padding: var(--spacer-4) 0;
+  cursor: pointer;
+}
+.checkbox {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--border-brand, #4f7cff);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.checkText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.checkLabel {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-default);
+  font-weight: var(--font-weight-medium);
+}
+
 .error {
   font-size: var(--body-xs-font-size);
   color: var(--status-error-default);

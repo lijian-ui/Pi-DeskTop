@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useAgentStore, type Message } from "../store/agent-store";
 import { useSessionStore } from "../store/session-store";
 import { useWorkspaceStore } from "../store/workspace-store";
-import { extractText } from "../utils/content-utils";
+import { extractText, extractImages } from "../utils/content-utils";
 
 let msgCounter = 0;
 
@@ -65,8 +65,11 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
       // Extract content: for user messages the full content is in the event;
       // for assistant messages it streams in via text_delta so start empty.
       let content = "";
+      let images: Message["images"];
       if (role === "user" && ev.message?.content) {
         content = extractText(ev.message.content);
+        const imgs = extractImages(ev.message.content, ev.messageId ?? `m${msgCounter}`);
+        if (imgs.length) images = imgs;
       }
       return [
         ...msgs,
@@ -74,6 +77,7 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
           id: ev.messageId ?? `msg-${++msgCounter}`,
           role,
           content,
+          images,
           isStreaming: role === "assistant",
           timestamp: Date.now(),
         },
@@ -171,6 +175,7 @@ function drainQueue() {
       id: `user-${Date.now()}`,
       role: "user",
       content: next.content,
+      images: next.images,
       timestamp: Date.now(),
     });
     const session = useSessionStore.getState();
@@ -179,8 +184,17 @@ function drainQueue() {
       session.sessions.find((x) => x.path === path)?.cwd ||
       session.currentCwd ||
       useWorkspaceStore.getState().cwd;
+    // Forward the images that were staged when the message was queued —
+    // otherwise a picture attached during streaming would be silently dropped.
+    const images = next.images?.length
+      ? next.images.map((a) => ({
+          type: "image" as const,
+          data: a.data,
+          mimeType: a.mimeType,
+        }))
+      : undefined;
     window.piDesk
-      .prompt(next.content, undefined, cwd, path ?? undefined)
+      .prompt(next.content, images, cwd, path ?? undefined)
       .then(() => {
         // Success — safe to drop from the queue.
         useAgentStore.getState().removeQueuedMessage(next.id);
@@ -212,7 +226,8 @@ export function useAgentSession() {
       const session = useSessionStore.getState();
       const focusedPath = session.currentPath;
       const targetPath = payload?.sessionPath || focusedPath || "";
-      const isFocus = !payload?.sessionPath || payload.sessionPath === focusedPath;
+      const isFocus =
+        !payload?.sessionPath || payload?.sessionPath === focusedPath;
 
       if (CONTENT_EVENTS.has(ev.type)) {
         session.mutateBuffer(targetPath, (msgs) => reduceMessageEvent(msgs, ev));
@@ -287,6 +302,7 @@ export function useAgentSession() {
     window.piDesk.getState().then((state) => {
       if (state?.model) useAgentStore.getState().setModel(state.model);
       if (state?.thinkingLevel) useAgentStore.getState().setThinkingLevel(state.thinkingLevel);
+      if (state?.commands) useAgentStore.getState().setCommands(state.commands);
     });
 
     // Track which sessions are currently running (one per busy cwd) so the

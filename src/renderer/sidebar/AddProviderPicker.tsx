@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { X, Search, ArrowLeft, Plus, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useUIStore } from "../store/ui-store";
 import ProviderIcon from "./ProviderIcon";
 import type {
   ProviderCatalog,
@@ -42,6 +43,7 @@ export default function AddProviderPicker({
   editProviderId?: string | null;
 }) {
   const { t } = useTranslation();
+  const bumpModelsVersion = useUIStore((s) => s.bumpModelsVersion);
   const [catalog, setCatalog] = useState<ProviderCatalog | null>(null);
   const [query, setQuery] = useState("");
   const [step, setStep] = useState<Step>("pick");
@@ -51,6 +53,7 @@ export default function AddProviderPicker({
   const [formName, setFormName] = useState("");
   const [formBaseUrl, setFormBaseUrl] = useState("");
   const [formContextWindow, setFormContextWindow] = useState<number>(NaN);
+  const [formSupportsImages, setFormSupportsImages] = useState(false);
   const [formApiKey, setFormApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -98,6 +101,9 @@ export default function AddProviderPicker({
         setFormContextWindow(
           model0 && Number.isFinite(model0.contextWindow) ? model0.contextWindow : 128000
         );
+        setFormSupportsImages(
+          Array.isArray(model0?.input) ? model0.input.includes("image") : false
+        );
         setFormApiKey(typeof cfg.apiKey === "string" ? cfg.apiKey : "");
         setError("");
         setStep("config");
@@ -130,18 +136,31 @@ export default function AddProviderPicker({
     },
   ];
 
+  // Cloud OpenAI-compatible endpoints shipped as presets (same flow as local,
+  // but remote — the user still fills in an API key in the config step).
+  const cloudProviders = [
+    {
+      id: "agnesai",
+      name: t("models.agnesName"),
+      desc: t("models.agnesDesc"),
+      baseUrl: "https://api.agnes-ai.cn/v1",
+    },
+  ];
+
   const apiKey = (catalog?.apiKeyProviders ?? []).filter(matches);
   const customMatches = matches({ id: CUSTOM_ID, name: t("models.customCardTitle") });
   const localMatches = localProviders.filter(matches);
+  const cloudMatches = cloudProviders.filter(matches);
 
   const nothingFound =
-    !!catalog && apiKey.length === 0 && !customMatches && localMatches.length === 0;
+    !!catalog && apiKey.length === 0 && !customMatches && localMatches.length === 0 && cloudMatches.length === 0;
 
   const openConfig = (sel: Selection) => {
     setSelection(sel);
     setFormName("");
     setFormBaseUrl(sel.presetBaseUrl ?? "");
     setFormContextWindow(NaN);
+    setFormSupportsImages(false);
     setFormApiKey("");
     setError("");
     setStep("config");
@@ -223,7 +242,16 @@ export default function AddProviderPicker({
           const rest = existingModels.filter(
             (m) => String(m?.id) !== oldId && String(m?.id) !== modelId
           );
-          models = [{ ...edited, id: modelId, name, contextWindow: ctx }, ...rest];
+          models = [
+            {
+              ...edited,
+              id: modelId,
+              name,
+              contextWindow: ctx,
+              input: formSupportsImages ? ["text", "image"] : ["text"],
+            },
+            ...rest,
+          ];
         } else {
           // Add: upsert by model id — same id updates in place, a new id is
           // APPENDED so provider can hold multiple models (LM Studio, Ollama…).
@@ -231,7 +259,7 @@ export default function AddProviderPicker({
             id: modelId,
             name,
             reasoning: false,
-            input: ["text"],
+            input: formSupportsImages ? ["text", "image"] : ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: ctx,
             maxTokens: 16384,
@@ -259,6 +287,7 @@ export default function AddProviderPicker({
         await window.piDesk.saveApiKey(selection.id, formApiKey.trim());
       }
       onSaved();
+      bumpModelsVersion();
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : t("models.saveFailed"));
@@ -347,6 +376,34 @@ export default function AddProviderPicker({
                   {localMatches.length > 0 && (
                     <Section title={t("models.sectionLocal")}>
                       {localMatches.map((p) => (
+                        <button
+                          key={p.id}
+                          className={styles.card}
+                          onClick={() =>
+                            openConfig({
+                              id: p.id,
+                              name: p.name,
+                              kind: "custom",
+                              presetBaseUrl: p.baseUrl,
+                            })
+                          }
+                        >
+                          <span className={styles.cardText}>
+                            <span className={styles.cardName}>{p.name}</span>
+                            <span className={styles.cardSub}>{p.desc}</span>
+                          </span>
+                          <span className={styles.cardIcon}>
+                            <ProviderIcon id={p.id} size={22} />
+                          </span>
+                        </button>
+                      ))}
+                    </Section>
+                  )}
+
+                  {/* CLOUD — Agnes etc. */}
+                  {cloudMatches.length > 0 && (
+                    <Section title={t("models.sectionCloud")}>
+                      {cloudMatches.map((p) => (
                         <button
                           key={p.id}
                           className={styles.card}
@@ -461,6 +518,18 @@ export default function AddProviderPicker({
                     }
                   />
                   <span className={styles.fieldHint}>{t("models.contextWindowHint")}</span>
+                </label>
+                <label className={styles.checkRow}>
+                  <input
+                    type="checkbox"
+                    className={styles.checkbox}
+                    checked={formSupportsImages}
+                    onChange={(e) => setFormSupportsImages(e.target.checked)}
+                  />
+                  <span className={styles.checkText}>
+                    <span className={styles.checkLabel}>{t("models.supportsImages")}</span>
+                    <span className={styles.fieldHint}>{t("models.supportsImagesHint")}</span>
+                  </span>
                 </label>
               </>
             )}

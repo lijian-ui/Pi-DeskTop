@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   X, Settings as SystemIcon, Palette, Brain, Cpu,
   Bot as AssistantIcon, Database, Keyboard, Shield, Languages,
-  Layers, Wrench,
+  Layers, Wrench, HelpCircle,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUIStore } from "../store/ui-store";
@@ -10,8 +10,14 @@ import ModelsPage from "./ModelsPage";
 import ThemeSettings from "./ThemeSettings";
 import SecurityPage from "./SecurityPage";
 import ContextPage from "./ContextPage";
+import MemoryPage from "./MemoryPage";
 import SoulSettings from "./SoulSettings";
 import ToolsSettings from "./ToolsSettings";
+import SystemSettings from "./SystemSettings";
+import HelpIntro from "../help/sections/HelpIntro";
+import HelpFaq from "../help/sections/HelpFaq";
+import HelpFeedback from "../help/sections/HelpFeedback";
+import HelpResources from "../help/sections/HelpResources";
 import { saveLang } from "../../shared/i18n/index";
 import styles from "./SettingsPage.module.css";
 
@@ -26,7 +32,8 @@ type SettingsSection =
   | "shortcuts"
   | "security"
   | "context"
-  | "language";
+  | "language"
+  | "help";
 
 interface NavItem {
   key: SettingsSection;
@@ -46,11 +53,12 @@ const NAV_ITEMS: NavItem[] = [
   { key: "personalization", icon: Palette, labelKey: "settings.personalization" },
   { key: "shortcuts", icon: Keyboard, labelKey: "settings.shortcuts" },
   { key: "data", icon: Database, labelKey: "settings.data" },
+  { key: "help", icon: HelpCircle, labelKey: "settings.help" },
 ];
 
 export default function SettingsPage() {
-  const [activeSection, setActiveSection] = useState<SettingsSection>("models");
   const setMainView = useUIStore((s) => s.setMainView);
+  const [activeSection, setActiveSection] = useState<SettingsSection>("models");
   const { t, i18n } = useTranslation();
 
   const handleClose = () => setMainView("chat");
@@ -96,10 +104,14 @@ export default function SettingsPage() {
             <SecurityPage />
           ) : activeSection === "context" ? (
             <ContextPage />
+          ) : activeSection === "memory" ? (
+            <MemoryPage />
           ) : activeSection === "assistant" ? (
             <SoulSettings />
           ) : activeSection === "tools" ? (
             <ToolsSettings />
+          ) : activeSection === "system" ? (
+            <SystemSettings />
           ) : activeSection === "language" ? (
             <div className={styles.langPage}>
               <h2 className={styles.langTitle}>{t("lang.switch")}</h2>
@@ -120,6 +132,8 @@ export default function SettingsPage() {
                 </button>
               </div>
             </div>
+          ) : activeSection === "help" ? (
+            <HelpContent />
           ) : (
             <div className={styles.placeholder}>
               <div className={styles.placeholderIcon}>
@@ -132,5 +146,22 @@ export default function SettingsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Help & Feedback content, embedded as a Settings section so it lives inside
+ * the settings page (not a standalone top-level view). The four blocks are the
+ * modular files under src/renderer/help/sections. They stack vertically as a
+ * single scrolling help document.
+ */
+function HelpContent() {
+  return (
+    <>
+      <HelpIntro />
+      <HelpFaq />
+      <HelpFeedback />
+      <HelpResources />
+    </>
   );
 }

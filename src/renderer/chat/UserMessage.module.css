@@ -27,6 +27,48 @@
   border-radius: var(--radius-8);
 }
 
+/* ── Image attachments ── */
+.imageList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacer-6);
+  margin-bottom: var(--spacer-6);
+}
+
+.imageList:last-child {
+  margin-bottom: 0;
+}
+
+.messageImage {
+  max-width: 240px;
+  max-height: 200px;
+  border-radius: var(--radius-8);
+  border: 1px solid var(--border-neutral-l2);
+  object-fit: contain;
+  display: block;
+  cursor: zoom-in;
+  background: var(--bg-base-secondary);
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.66);
+  cursor: zoom-out;
+  padding: var(--spacer-24, 24px);
+}
+
+.lightbox img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  border-radius: var(--radius-8);
+}
+
 /* ── Code-reference cards (from the file-preview panel) ── */
 .refList {
   display: flex;

@@ -52,12 +52,6 @@
 
 .body {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.placeholder {
-  color: var(--text-tertiary);
-  font-size: var(--body-base-font-size);
+  min-height: 0;
+  overflow-y: auto;
 }
