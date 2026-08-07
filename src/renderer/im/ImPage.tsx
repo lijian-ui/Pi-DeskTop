@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { X, Plus, Pencil, Trash2, Loader2, FolderSync } from "lucide-react";
+import { X, Plus, Pencil, Trash2, Loader2, FolderSync, Plug } from "lucide-react";
 import { useUIStore } from "../store/ui-store";
 import { useSessionStore } from "../store/session-store";
 import type { ImConfig, ImChannelInstance } from "../../preload/api";
@@ -142,7 +142,12 @@ export default function ImPage() {
   return (
     <div className={styles.page}>
       <div className={styles.header}>
-        <h2 className={styles.title}>{t("nav.im")}</h2>
+        <div className={styles.titleRow}>
+          <h2 className={styles.title}>{t("nav.im")}</h2>
+          {channels.length > 0 && (
+            <span className={styles.countBadge}>{channels.length}</span>
+          )}
+        </div>
         <div className={styles.headerRight}>
           <button
             className={styles.addBtn}
@@ -171,7 +176,21 @@ export default function ImPage() {
         {/* Channel cards */}
         {channels.length === 0 ? (
           <div className={styles.empty}>
-            <p>{t("im.empty")}</p>
+            <div className={styles.emptyIcon}>
+              <Plug size={24} />
+            </div>
+            <p className={styles.emptyText}>{t("im.empty")}</p>
+            <button
+              type="button"
+              className={styles.emptyAction}
+              onClick={() => {
+                setEditing(null);
+                setModalOpen(true);
+              }}
+            >
+              <Plus size={15} />
+              <span>{t("im.addChannel")}</span>
+            </button>
           </div>
         ) : (
           <div className={styles.channelList}>

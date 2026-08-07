@@ -1,5 +1,11 @@
-/* IM 接入页 — header + scrollable body. Channel cards style mirrors
-   ModelsPage's configured-provider list. */
+/* IM 接入页 — Linear 风格极简精修（保留绿品牌 + 暗/亮主题）
+   设计要点：
+   · 克制的留白与统一圆角（--radius-*）
+   · 1px 细描边，悬停微抬升 + 品牌描边
+   · 图标容器用品牌淡色底（--bg-brand-popup）
+   · 状态胶囊带前置指示点
+   · 空状态带图标与行动按钮
+   所有颜色均走设计 token，主题切换自动适配。 */
 
 .page {
   display: flex;
@@ -8,19 +14,46 @@
   min-width: 0;
 }
 
+/* ── Header ── */
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 20px;
+  padding: 18px 24px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border-neutral-l2);
+  background: linear-gradient(180deg, var(--bg-overlay-l1), transparent);
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: var(--font-weight-strong);
+  letter-spacing: -0.01em;
+  color: var(--text-default);
   margin: 0;
+  white-space: nowrap;
+}
+
+.countBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--bg-overlay-l3);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
 }
 
 .headerRight {
@@ -33,48 +66,62 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
-  padding: 0 14px;
+  height: 34px;
+  padding: 0 15px;
   border: none;
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-8);
   background: var(--bg-brand);
-  color: var(--text-on-brand, #fff);
+  color: var(--text-onbrand, #0c0c0d);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--font-weight-strong);
   cursor: pointer;
-  transition: filter 0.12s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: background 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
 }
 .addBtn:hover {
-  filter: brightness(1.08);
+  background: var(--bg-brand-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px var(--bg-brand-popup);
+}
+.addBtn:active {
+  transform: translateY(0);
 }
 
 .closeBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border: none;
-  border-radius: var(--radius-4);
+  border-radius: var(--radius-6);
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .closeBtn:hover {
   background: var(--bg-overlay-l2);
   color: var(--text-default);
 }
 
+/* ── Body ── */
 .body {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  max-width: 720px;
+  gap: 14px;
+  max-width: 760px;
   width: 100%;
   margin: 0 auto;
+  animation: imFade 0.25s ease;
+}
+
+@keyframes imFade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
 }
 
 /* ── Spin (toggle / save busy) ── */
@@ -88,22 +135,26 @@
   to { transform: rotate(360deg); }
 }
 
+/* ── Error / notice banners ── */
 .error {
   font-size: 12px;
-  color: #ef4444;
-  padding: 8px 12px;
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  border-radius: var(--radius-6);
+  line-height: 1.5;
+  color: var(--status-error-default);
+  padding: 10px 14px;
+  background: var(--status-error-surface-l1);
+  border: 1px solid rgba(246, 70, 70, 0.35);
+  border-radius: var(--radius-8);
+  white-space: pre-wrap;
 }
 
 .notice {
   font-size: 12px;
-  color: #10b981;
-  padding: 8px 12px;
-  background: rgba(16, 185, 129, 0.08);
-  border: 1px solid rgba(16, 185, 129, 0.35);
-  border-radius: var(--radius-6);
+  line-height: 1.5;
+  color: var(--status-success-default);
+  padding: 10px 14px;
+  background: rgba(51, 193, 146, 0.08);
+  border: 1px solid rgba(51, 193, 146, 0.35);
+  border-radius: var(--radius-8);
   white-space: pre-wrap;
 }
 
@@ -113,48 +164,92 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 48px 20px;
+  gap: 6px;
+  padding: 56px 24px;
   border: 1px dashed var(--border-neutral-l2);
-  border-radius: var(--radius-md);
-  color: var(--text-tertiary);
-  font-size: 13px;
+  border-radius: var(--radius-12, 12px);
+  background: var(--bg-overlay-l1);
   text-align: center;
 }
 
-.empty p {
+.emptyIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 6px;
+  border-radius: 50%;
+  background: var(--bg-brand-popup);
+  color: var(--text-brand);
+}
+
+.emptyText {
   margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.emptyAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  margin-top: 10px;
+  padding: 0 16px;
+  border: none;
+  border-radius: var(--radius-8);
+  background: var(--bg-brand);
+  color: var(--text-onbrand, #0c0c0d);
+  font-size: 13px;
+  font-weight: var(--font-weight-strong);
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: background 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+}
+.emptyAction:hover {
+  background: var(--bg-brand-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px var(--bg-brand-popup);
+}
+.emptyAction:active {
+  transform: translateY(0);
 }
 
 /* ── Channel cards ── */
 .channelList {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  animation: imFade 0.3s ease;
 }
 
 .channelCard {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
+  gap: 14px;
+  padding: 14px 16px;
   background: var(--bg-overlay-l1);
   border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-md);
-  transition: border-color 0.12s ease, background 0.12s ease;
+  border-radius: var(--radius-10, 10px);
+  transition: border-color 0.14s ease, background 0.14s ease, transform 0.14s ease,
+    box-shadow 0.14s ease;
 }
 .channelCard:hover {
   border-color: var(--border-brand);
   background: var(--bg-overlay-l2);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
 }
 
 .channelIcon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-8);
-  background: var(--bg-overlay-l2);
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-10, 10px);
+  background: var(--bg-brand-popup);
   color: var(--text-brand);
   flex-shrink: 0;
 }
@@ -164,7 +259,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .channelNameRow {
@@ -176,7 +271,7 @@
 
 .channelName {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--font-weight-strong);
   color: var(--text-default);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -192,45 +287,78 @@
 }
 
 .channelWorkspace {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 11px;
   color: var(--text-brand);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.channelWorkspace::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
 
+/* ── Status pills (with leading dot) ── */
 .badge {
+  display: inline-flex;
+  align-items: center;
   font-size: 10px;
-  padding: 1px 8px;
+  line-height: 1;
+  padding: 3px 9px 3px 7px;
   border-radius: 999px;
   border: 1px solid transparent;
+  flex-shrink: 0;
+  font-weight: var(--font-weight-medium);
+}
+.badge::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 5px;
   flex-shrink: 0;
 }
 
 .badge_off,
 .badge_error {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.35);
-  background: rgba(239, 68, 68, 0.08);
+  color: var(--status-error-default);
+  border-color: rgba(246, 70, 70, 0.35);
+  background: rgba(246, 70, 70, 0.08);
 }
 
 .badge_connecting {
-  color: #f59e0b;
-  border-color: rgba(245, 158, 11, 0.35);
-  background: rgba(245, 158, 11, 0.08);
+  color: var(--status-alert-default);
+  border-color: rgba(210, 157, 0, 0.35);
+  background: rgba(210, 157, 0, 0.08);
 }
 
 .badge_connected {
-  color: #10b981;
-  border-color: rgba(16, 185, 129, 0.35);
-  background: rgba(16, 185, 129, 0.08);
+  color: var(--status-success-default);
+  border-color: rgba(51, 193, 146, 0.35);
+  background: rgba(51, 193, 146, 0.08);
+}
+.badge_connected::before {
+  animation: dotPulse 2s ease-in-out infinite;
+}
+
+@keyframes dotPulse {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  50% { box-shadow: 0 0 0 3px transparent; opacity: 0.65; }
 }
 
 /* ── Card actions ── */
 .channelActions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex-shrink: 0;
 }
 
@@ -238,8 +366,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border: none;
   border-radius: var(--radius-6);
   background: transparent;
@@ -248,7 +376,7 @@
   transition: background 0.12s ease, color 0.12s ease;
 }
 .iconBtn:hover {
-  background: var(--bg-overlay-l2);
+  background: var(--bg-overlay-l3);
   color: var(--text-default);
 }
 .iconBtn:disabled {
@@ -261,15 +389,15 @@
 }
 
 .dangerBtn:hover {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.1);
+  color: var(--status-error-default);
+  background: rgba(246, 70, 70, 0.1);
 }
 
 /* Enable toggle (mini switch) */
 .toggleBtn {
   position: relative;
-  width: 34px;
-  height: 20px;
+  width: 36px;
+  height: 21px;
   border: none;
   border-radius: 999px;
   background: var(--border-neutral-l2);
@@ -278,6 +406,7 @@
   transition: background 0.15s ease;
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
 }
 .toggleBtn:disabled {
   opacity: 0.6;
@@ -288,8 +417,8 @@
   position: absolute;
   left: 2px;
   top: 2px;
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
   border-radius: 50%;
   background: var(--bg-base-default);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
@@ -300,5 +429,5 @@
   background: var(--bg-brand);
 }
 .toggleOn .toggleKnob {
-  left: 16px;
+  left: 17px;
 }
