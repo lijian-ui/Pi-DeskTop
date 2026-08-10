@@ -108,109 +108,6 @@ function isQpsLimitError(err: any): boolean {
   return msg.includes("qps") || msg.includes("rate limit") || msg.includes("too many");
 }
 
-// ── markdown normalization for the card renderer ──
-
-function normalizeLineEndings(text: string): string {
-  return text.replace(/\r\n?/g, "\n");
-}
-
-function ensureTableBlankLines(text: string): string {
-  const lines = normalizeLineEndings(text).split("\n");
-  const result: string[] = [];
-  const tableDividerRegex = /^\s*\|?\s*:?-+:?\s*(\|?\s*:?-+:?\s*)+\|?\s*$/;
-  const tableRowRegex = /^\s*\|?.*\|.*\|?\s*$/;
-  const isDivider = (line: string) =>
-    !!line && line.includes("|") && tableDividerRegex.test(line);
-  for (let i = 0; i < lines.length; i++) {
-    const currentLine = lines[i];
-    const nextLine = lines[i + 1] ?? "";
-    if (
-      tableRowRegex.test(currentLine) &&
-      isDivider(nextLine) &&
-      i > 0 &&
-      lines[i - 1].trim() !== "" &&
-      !tableRowRegex.test(lines[i - 1])
-    ) {
-      result.push("");
-    }
-    result.push(currentLine);
-  }
-  return result.join("\n");
-}
-
-/**
- * Convert single \n to <br> (DingTalk card renderer convention), preserving
- * \n inside code fences and as markdown block syntax separators.
- */
-function fixNewlines(text: string): string {
-  const normalized = normalizeLineEndings(text);
-  const markdownBlockStartPattern =
-    /^(\s{0,3}(?:[-*+]|\d+[.)])[ ])|(\s{0,3}\|)|(\s{0,3}#{1,6}\s)|(\s{0,3}(?:[-*_])\s*(?:[-*_])\s*(?:[-*_]))/;
-  const fencePattern = /^\s{0,3}```/;
-  const quotePattern = /^\s{0,3}>\s?/;
-
-  // 1. merge consecutive quote lines (outside code) with <br>
-  const mergedLines: string[] = [];
-  let pendingQuoteLines: string[] = [];
-  let inCodeBlock = false;
-  const flushPendingQuoteLines = () => {
-    if (pendingQuoteLines.length > 0) {
-      mergedLines.push(pendingQuoteLines.join("<br>"));
-      pendingQuoteLines = [];
-    }
-  };
-  for (const line of normalized.split("\n")) {
-    const isFence = fencePattern.test(line);
-    if (inCodeBlock) {
-      flushPendingQuoteLines();
-      mergedLines.push(line);
-      if (isFence) inCodeBlock = false;
-      continue;
-    }
-    if (isFence) {
-      flushPendingQuoteLines();
-      mergedLines.push(line);
-      inCodeBlock = true;
-      continue;
-    }
-    if (quotePattern.test(line)) {
-      if (pendingQuoteLines.length === 0) pendingQuoteLines.push(line);
-      else pendingQuoteLines.push(line.replace(quotePattern, ""));
-    } else {
-      flushPendingQuoteLines();
-      mergedLines.push(line);
-    }
-  }
-  flushPendingQuoteLines();
-
-  // 2. per line: keep \n inside fences & before block syntax; else \n → <br>
-  const parts: string[] = [];
-  inCodeBlock = false;
-  for (const line of mergedLines) {
-    const isFence = fencePattern.test(line);
-    if (inCodeBlock) {
-      parts.push(line);
-      if (isFence) inCodeBlock = false;
-      continue;
-    }
-    if (isFence) {
-      parts.push(line);
-      inCodeBlock = true;
-      continue;
-    }
-    if (markdownBlockStartPattern.test(line)) {
-      parts.push(`\n${line}`);
-    } else {
-      parts.push(line.replace(/\n/g, "<br>"));
-    }
-  }
-  return parts.join("\n");
-}
-
-function normalizeForCard(content: string): string {
-  return fixNewlines(ensureTableBlankLines(content));
-}
-
 // ── card API ──
 
 function buildDeliverBody(
@@ -314,7 +211,7 @@ export async function streamDingtalkCard(
       cardData: {
         cardParamMap: {
           flowStatus: AICardStatus.INPUTING,
-          msgContent: normalizeForCard(content),
+          msgContent: content,
           staticMsgContent: "",
           sys_full_json_obj: JSON.stringify({ order: ["msgContent"] }),
           config: JSON.stringify({ autoLayout: true }),
@@ -345,7 +242,7 @@ export async function streamDingtalkCard(
     card.inputingStarted = true;
   }
 
-  const fixedContent = normalizeForCard(content);
+  const fixedContent = content;
   const streamContent = finished ? fixedContent : fixedContent.replace(/\n+$/, "");
   const body = {
     outTrackId: card.cardInstanceId,
@@ -390,7 +287,7 @@ export async function finishDingtalkCard(
 ): Promise<void> {
   if (!card) return;
   if (cfg) await ensureValidToken(card, cfg);
-  const fixedContent = normalizeForCard(content);
+  const fixedContent = content;
 
   await streamDingtalkCard(card, fixedContent, true, cfg);
 

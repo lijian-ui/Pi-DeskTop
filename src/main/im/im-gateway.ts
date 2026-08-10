@@ -28,6 +28,7 @@ const HELP_TEXT = [
   "🤖 可用命令：",
   "/model —— 查看可用模型列表",
   "/model <名称> —— 切换当前会话的模型",
+  "/status —— 查看当前会话的工作目录与模型",
   "/compact —— 压缩上下文（减少 token 占用）",
   "/reset / /clear / /new —— 开启新会话",
   "其他内容将直接发送给 AI 处理。",
@@ -271,6 +272,25 @@ export class ImGateway {
     }
     if (lower === "model") {
       return await this.handleModelCommand(args, ctx);
+    }
+    if (lower === "status") {
+      // Report the session's cwd + the model this cwd's unit is running on.
+      // unit.defaultModel is set by /model and by the desktop Models page;
+      // when null the session uses the global default from settings.json.
+      const unit = this.piManager.getUnit(ctx.cwd);
+      const model = unit?.defaultModel;
+      const modelLabel = model
+        ? `${model.provider} / ${model.modelId}`
+        : "全局默认（未单独设置）";
+      await ctx.adapter.sendText(
+        ctx.peer,
+        [
+          "📊 当前会话状态：",
+          `📁 工作目录：${ctx.cwd}`,
+          `🤖 模型：${modelLabel}`,
+        ].join("\n"),
+      );
+      return true;
     }
     if (lower === "compact") {
       try {
