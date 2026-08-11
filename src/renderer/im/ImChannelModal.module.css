@@ -231,3 +231,106 @@
   background: var(--bg-brand-hover);
 }
 .btnPrimary:disabled { opacity: 0.4; cursor: default; }
+
+/* ── WeChat QR bind ── */
+.wxBound {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  font-size: var(--body-sm-font-size);
+  background: rgba(22, 163, 74, 0.08);
+  border: 1px solid rgba(22, 163, 74, 0.35);
+  border-radius: var(--radius-8);
+  padding: var(--spacer-10) var(--spacer-12);
+  color: #16a34a;
+}
+
+.wxBindBtn {
+  height: 32px;
+  padding: 0 var(--spacer-14, 14px);
+  background: var(--bg-brand);
+  color: var(--icon-onbrand);
+  border: none;
+  border-radius: var(--radius-8);
+  cursor: pointer;
+  font-size: var(--body-sm-font-size);
+  transition: background 0.12s ease;
+}
+.wxBindBtn:hover { background: var(--bg-brand-hover); }
+.wxBindBtn:disabled { opacity: 0.5; cursor: default; }
+
+.wxGhostBtn {
+  height: 32px;
+  padding: 0 var(--spacer-14, 14px);
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  cursor: pointer;
+  font-size: var(--body-sm-font-size);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.wxGhostBtn:hover { background: var(--bg-overlay-l2); color: var(--text-default); }
+.wxGhostBtn:disabled { opacity: 0.5; cursor: default; }
+
+.wxQrArea {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacer-10);
+  margin-top: var(--spacer-8);
+}
+
+.wxQrImg {
+  width: 200px;
+  height: 200px;
+  border-radius: var(--radius-8);
+  border: 1px solid var(--border-neutral-l2);
+  background: #fff;
+  object-fit: contain;
+}
+
+.wxQrEmpty {
+  width: 200px;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--body-sm-font-size);
+  color: var(--text-tertiary);
+  border: 1px dashed var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+}
+
+.wxStatus {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.wxLink {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  text-align: center;
+  word-break: break-all;
+  line-height: 1.5;
+}
+.wxLinkUrl { color: var(--text-secondary); }
+
+.wxVerifyRow {
+  display: flex;
+  gap: var(--spacer-8);
+  width: 100%;
+  align-items: center;
+}
+
+.wxError {
+  font-size: var(--body-xs-font-size);
+  color: var(--status-error-default, #e24b4a);
+}
+
+.wxActions {
+  display: flex;
+  gap: var(--spacer-8);
+  align-items: center;
+}

@@ -213,6 +213,23 @@ export default function ImPage() {
                         {t("im.workspace")}: {inst.cwd}
                       </span>
                     )}
+                    {st === "expired" && (
+                      <div className={styles.expiredRow}>
+                        <span className={styles.expiredText}>
+                          {t("im.expiredHint")}
+                        </span>
+                        <button
+                          type="button"
+                          className={styles.expiredBtn}
+                          onClick={() => {
+                            setEditing(inst);
+                            setModalOpen(true);
+                          }}
+                        >
+                          {t("im.weixinRebind")}
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <span className={styles.channelActions}>

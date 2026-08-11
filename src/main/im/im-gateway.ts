@@ -13,6 +13,7 @@ import type { ImConfig, ImChannelInstance } from "./im-config";
 import { readImConfig } from "./im-config";
 import { ImSessionMap, IM_CHAT_SUBDIR, readSessionCwd } from "./im-session-map";
 import { DingtalkAdapter } from "./dingtalk/dingtalk-adapter";
+import { WeixinAdapter } from "./weixin/weixin-adapter";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -220,13 +221,19 @@ export class ImGateway {
     if (inst.type === "dingtalk") {
       return Boolean(inst.config?.clientId && inst.config?.clientSecret);
     }
-    return false; // future channels (weixin/qq) not implemented yet
+    if (inst.type === "weixin") {
+      // WeChat is QR-login bound: token + botId are written by the login flow.
+      return Boolean(inst.config?.token && inst.config?.botId);
+    }
+    return false; // future channels (qq) not implemented yet
   }
 
   private createAdapter(inst: ImChannelInstance): ImChannelAdapter | null {
     switch (inst.type) {
       case "dingtalk":
         return new DingtalkAdapter(inst);
+      case "weixin":
+        return new WeixinAdapter(inst);
       default:
         console.warn(`[im] channel type "${inst.type}" not implemented`);
         return null;
@@ -567,6 +574,10 @@ export class ImGateway {
       if (pending && pending.adapter.beginStream && !pending.streamStarted) {
         pending.streamStarted = true;
         pending.adapter.beginStream(pending.target).catch(() => {});
+      }
+      // Channels without cards (WeChat) can still show a "typing…" indicator.
+      if (pending && !pending.adapter.beginStream && pending.adapter.sendTyping) {
+        pending.adapter.sendTyping(pending.target).catch(() => {});
       }
     } else if (event?.type === "message_update" && event?.assistantMessageEvent?.type === "text_delta") {
       // Accumulate deltas; flush to the adapter on a throttle cadence (the

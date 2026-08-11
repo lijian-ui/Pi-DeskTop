@@ -65,6 +65,13 @@ const piAPI = {
   imGetConfig: () => ipcRenderer.invoke("pi:imGetConfig"),
   imSaveConfig: (cfg: any) => ipcRenderer.invoke("pi:imSaveConfig", cfg),
   imGetStatus: () => ipcRenderer.invoke("pi:imGetStatus"),
+  imWeixinStartLogin: () => ipcRenderer.invoke("pi:imWeixinStartLogin"),
+  imWeixinLoginStatus: (loginId: string) =>
+    ipcRenderer.invoke("pi:imWeixinLoginStatus", loginId),
+  imWeixinSubmitVerifyCode: (loginId: string, code: string) =>
+    ipcRenderer.invoke("pi:imWeixinSubmitVerifyCode", { loginId, code }),
+  imWeixinCancelLogin: (loginId: string) =>
+    ipcRenderer.invoke("pi:imWeixinCancelLogin", loginId),
   imIsSession: (sessionPath: string) =>
     ipcRenderer.invoke("pi:imIsSession", sessionPath),
   imMigrateSession: (sessionPath: string, newCwd: string) =>

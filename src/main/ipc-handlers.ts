@@ -6,6 +6,12 @@ import type { TerminalManager } from "./pi/terminal-manager";
 import { getImGateway } from "./index";
 import { readImConfig, writeImConfig, type ImConfig } from "./im/im-config";
 import {
+  startLogin as startWeixinLogin,
+  getLoginStatus as getWeixinLoginStatus,
+  submitVerifyCode as submitWeixinVerifyCode,
+  cancelLogin as cancelWeixinLogin,
+} from "./im/weixin/weixin-login";
+import {
   searchNpmPackages,
   getInstalledPackages,
   installPackage,
@@ -281,6 +287,21 @@ export function registerIpcHandlers(
   ipcMain.handle("pi:imGetStatus", async () => {
     const gateway = getImGateway();
     return gateway?.getStatus() ?? {};
+  });
+
+  // ── Weixin QR login ──
+  ipcMain.handle("pi:imWeixinStartLogin", async () => {
+    return startWeixinLogin();
+  });
+  ipcMain.handle("pi:imWeixinLoginStatus", async (_, loginId: string) => {
+    return getWeixinLoginStatus(String(loginId));
+  });
+  ipcMain.handle("pi:imWeixinSubmitVerifyCode", async (_, payload: { loginId: string; code: string }) => {
+    return submitWeixinVerifyCode(String(payload?.loginId), String(payload?.code ?? ""));
+  });
+  ipcMain.handle("pi:imWeixinCancelLogin", async (_, loginId: string) => {
+    cancelWeixinLogin(String(loginId));
+    return { ok: true };
   });
   ipcMain.handle("pi:imIsSession", async (_, sessionPath: string) => {
     const gateway = getImGateway();

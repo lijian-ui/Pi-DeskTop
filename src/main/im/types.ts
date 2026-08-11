@@ -6,7 +6,7 @@
  * independent: session mapping, Pi prompt entry and reply routing.
  */
 
-export type ImStatus = "off" | "connecting" | "connected" | "error";
+export type ImStatus = "off" | "connecting" | "connected" | "error" | "expired";
 
 /** Image payload passed to Pi prompts (mirrors SDK ImageContent). */
 export interface ImImage {

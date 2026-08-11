@@ -251,6 +251,35 @@
   white-space: nowrap;
 }
 
+/* ── Expired (login expired → re-scan) row ── */
+.expiredRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.expiredText {
+  font-size: 11px;
+  color: var(--status-error-default);
+}
+
+.expiredBtn {
+  height: 22px;
+  padding: 0 10px;
+  font-size: 11px;
+  background: rgba(246, 70, 70, 0.12);
+  color: var(--status-error-default);
+  border: 1px solid rgba(246, 70, 70, 0.4);
+  border-radius: var(--radius-6);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.expiredBtn:hover {
+  background: rgba(246, 70, 70, 0.2);
+}
+
 /* ── Status pills ── */
 .badge {
   display: inline-flex;
@@ -269,6 +298,12 @@
   color: var(--status-error-default);
   border-color: rgba(246, 70, 70, 0.35);
   background: rgba(246, 70, 70, 0.08);
+}
+
+.badge_expired {
+  color: var(--status-error-default);
+  border-color: rgba(246, 70, 70, 0.45);
+  background: rgba(246, 70, 70, 0.14);
 }
 
 .badge_connecting {

@@ -26,7 +26,10 @@ export interface ImChannelInstance {
   name: string;
   type: ImChannelType;
   enabled: boolean;
-  /** Channel-specific credentials, keyed by channel (clientId/clientSecret…). */
+  /** Channel-specific credentials, keyed by channel:
+   *  - dingtalk: clientId / clientSecret
+   *  - weixin:   token / botId / baseUrl / userId — written by the QR login
+   *    flow (no appId/appSecret; WeChat binds via scan). */
   config: Record<string, string>;
   /**
    * Optional default workspace for this channel. IM conversations are

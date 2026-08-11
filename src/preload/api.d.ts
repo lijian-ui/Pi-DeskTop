@@ -76,6 +76,16 @@ export interface PiDeskAPI {
   imGetConfig(): Promise<ImConfig>;
   imSaveConfig(cfg: ImConfig): Promise<{ ok: boolean; error?: string }>;
   imGetStatus(): Promise<Record<string, string>>;
+  /** Start a WeChat QR login; resolves with the QR material + login id. */
+  imWeixinStartLogin(): Promise<WeixinLoginStatus>;
+  /** Poll the login snapshot (login runs in the main process). */
+  imWeixinLoginStatus(loginId: string): Promise<WeixinLoginStatus | null>;
+  /** Submit the pairing code shown on the phone when need_verifycode. */
+  imWeixinSubmitVerifyCode(
+    loginId: string,
+    code: string,
+  ): Promise<{ ok: boolean }>;
+  imWeixinCancelLogin(loginId: string): Promise<{ ok: boolean }>;
   /** True when the session file belongs to an IM conversation. */
   imIsSession(sessionPath: string): Promise<boolean>;
   /** Migrate a single IM conversation to a new cwd (desktop workspace picker). */
@@ -305,6 +315,35 @@ export interface ImChannelInstance {
 /** IM 网关配置（多渠道实例数组）。 */
 export interface ImConfig {
   channels: ImChannelInstance[];
+}
+
+/** 微信扫码登录状态快照（主进程后台轮询，渲染层轮询本接口）。 */
+export interface WeixinLoginStatus {
+  loginId: string;
+  status:
+    | "running"
+    | "wait"
+    | "scaned"
+    | "confirmed"
+    | "expired"
+    | "need_verifycode"
+    | "verify_code_blocked"
+    | "error"
+    | "canceled";
+  /** 二维码图片地址（<img> 直接显示）。 */
+  qrcodeUrl: string;
+  /** 二维码原始内容（备用链接，图片打不开时可用）。 */
+  qrcode: string;
+  message: string;
+  /** status === "need_verifycode" 时为 true，UI 应弹出配对码输入。 */
+  verifyCodeNeeded?: boolean;
+  /** status === "confirmed" 时携带绑定凭证。 */
+  credentials?: {
+    token: string;
+    botId: string;
+    baseUrl: string;
+    userId?: string;
+  };
 }
 
 /** 扩展商店：市场包（来自 npm registry 搜索）。 */
