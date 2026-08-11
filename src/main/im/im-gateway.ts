@@ -23,6 +23,55 @@ function parseCommand(text: string): { name: string; args: string } | null {
   return { name: m[1], args: (m[2] ?? "").trim() };
 }
 
+/** Which args field carries the human-relevant payload per tool name. */
+const TOOL_ARG_KEY: Record<string, string> = {
+  read_file: "path",
+  write_file: "path",
+  edit_file: "path",
+  list_files: "path",
+  delete_file: "path",
+  bash: "command",
+  command: "command",
+  run_command: "command",
+  run_shell: "command",
+  grep: "pattern",
+  search: "pattern",
+  glob: "pattern",
+  find: "pattern",
+  web_fetch: "url",
+  web_search: "query",
+};
+
+/**
+ * Human-readable tool call for the card progress line, e.g.
+ * `read_file E:/Project/pi-desktop/README.md` or `bash npm run build`.
+ * Falls back to the first non-object arg, then the bare tool name.
+ */
+function formatToolCall(toolName: string, args: unknown): string {
+  let argObj: Record<string, unknown> = {};
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    argObj = args as Record<string, unknown>;
+  } else if (typeof args === "string") {
+    try {
+      const parsed = JSON.parse(args);
+      if (parsed && typeof parsed === "object") argObj = parsed;
+    } catch {
+      /* keep empty */
+    }
+  }
+  const key = TOOL_ARG_KEY[toolName];
+  const raw = key ? argObj[key] : undefined;
+  if (raw !== undefined && raw !== null && typeof raw !== "object") {
+    return `${toolName} ${String(raw)}`;
+  }
+  for (const v of Object.values(argObj)) {
+    if (v !== undefined && v !== null && typeof v !== "object") {
+      return `${toolName} ${String(v)}`;
+    }
+  }
+  return toolName;
+}
+
 /** /help reply — the command list shown in the IM channel. */
 const HELP_TEXT = [
   "🤖 可用命令：",
@@ -44,6 +93,16 @@ const HELP_TEXT = [
 const STREAM_THROTTLE_MS = 800;
 /** Hard per-frame cap — flush early when the accumulated text exceeds it. */
 const STREAM_FRAME_MAX = 1000;
+
+/** One queued inbound message for a session's serial processing queue. */
+interface QueuedInbound {
+  adapter: ImChannelAdapter;
+  text: string;
+  images?: any[];
+  peer: string;
+  sessionPath: string;
+  effectiveCwd: string;
+}
 
 /** Extract final assistant text from a message_end payload. */
 function extractMessageText(message: any): string {
@@ -103,6 +162,13 @@ export class ImGateway {
       streamStarted?: boolean;
     }
   >();
+  /**
+   * Serial FIFO queue per session. Group chats share one session, so
+   * concurrent messages must be answered in arrival order (A → B → C) —
+   * never interleaved. A queue with exactly one item is the one currently
+   * being processed (drained by drainQueue).
+   */
+  private queues = new Map<string, QueuedInbound[]>();
   private sessionMap: ImSessionMap;
   private channels: ImChannelInstance[] = [];
 
@@ -233,17 +299,51 @@ export class ImGateway {
       if (handled) return;
     }
 
-    // 2. Ensure Pi session, register pending reply, prompt
+    // 2. Ensure Pi session, then process through the per-session FIFO queue:
+    //    group chats share one session, so concurrent messages are answered
+    //    in arrival order (A → B → C) instead of interleaving/losing turns.
     const sessionPath = await this.sessionMap.ensureSession(
       msg.sessionKey,
       effectiveCwd,
     );
-    this.pending.set(sessionPath, { adapter, target: peer });
-    await this.piManager
-      .prompt(msg.text, msg.images, effectiveCwd, sessionPath)
-      .catch(async (err) => {
-        await adapter.sendText(peer, `⚠️ 处理失败：${err?.message ?? String(err)}`);
-      });
+    const q = this.queues.get(sessionPath) ?? [];
+    q.push({ adapter, text: msg.text, images: msg.images, peer, sessionPath, effectiveCwd });
+    this.queues.set(sessionPath, q);
+    if (q.length === 1) {
+      // Queue was empty → this item starts processing immediately.
+      void this.drainQueue(sessionPath).catch((err) =>
+        console.error("[im] drainQueue:", err),
+      );
+    }
+  }
+
+  /**
+   * Process one queued message for a session, then advance to the next.
+   * Serial by construction: only the head of the queue is ever drained, and
+   * prompt() resolves after the turn (agent_end) completes, so replies come
+   * out in arrival order with no interleaving.
+   */
+  private async drainQueue(sessionPath: string): Promise<void> {
+    const q = this.queues.get(sessionPath);
+    const item = q?.[0];
+    if (!item) return;
+    this.pending.set(sessionPath, { adapter: item.adapter, target: item.peer });
+    try {
+      await this.piManager.prompt(item.text, item.images, item.effectiveCwd, sessionPath);
+    } catch (err) {
+      await item.adapter
+        .sendText(item.peer, `⚠️ 处理失败：${err instanceof Error ? err.message : String(err)}`)
+        .catch(() => {});
+    } finally {
+      q.shift();
+      if (q.length > 0) {
+        void this.drainQueue(sessionPath).catch((e) =>
+          console.error("[im] drainQueue:", e),
+        );
+      } else {
+        this.queues.delete(sessionPath);
+      }
+    }
   }
 
   /**
@@ -437,25 +537,39 @@ export class ImGateway {
           const sinceLast = now - (pending.lastStreamAt ?? 0);
           if (sinceLast >= STREAM_THROTTLE_MS || (pending.accumulated?.length ?? 0) >= STREAM_FRAME_MAX) {
             pending.lastStreamAt = now;
-            const text = pending.accumulated;
-            pending.adapter.streamText(pending.target, text).catch(() => {});
+            // Full accumulated snapshot every frame (novaclaw-style): the card
+            // content grows smoothly and never jumps backwards. (The streaming
+            // API's ~1K per-frame advice is not enforced; finalize handles
+            // very long texts separately.)
+            pending.adapter.streamText(pending.target, pending.accumulated).catch(() => {});
           }
         }
       }
+    } else if (event?.type === "tool_execution_start") {
+      // Show the current tool call ON the streaming card (overwrite) — it
+      // stays visible only until the next text_delta arrives, which replaces
+      // it with the real reply (smooth full-accumulated growth, no stacking,
+      // no scrolling window). Exactly the "show tool, then reply" feel.
+      const pending = this.pending.get(sessionPath);
+      if (pending && pending.adapter.streamText && event?.toolName) {
+        const label = formatToolCall(event.toolName, event?.args);
+        pending.adapter.streamText(pending.target, `🔧 正在调用工具：${label}`).catch(() => {});
+      }
     } else if (event?.type === "agent_end") {
       // Reply cycle finished (all turns done, including tool calls). Finalize
-      // the card with the last assistant message's full text.
+      // the card with the last assistant message's full text — or with a
+      // short "done" note when the model produced no final text (purely tool
+      // calls), so the card closes instead of hanging in "inputting".
       const pending = this.pending.get(sessionPath);
       if (pending) {
         const messages: any[] = event?.messages ?? [];
         const last = messages[messages.length - 1];
         const text = extractMessageText(last);
-        if (text) {
-          if (pending.adapter.endStream) {
-            pending.adapter.endStream(pending.target, text).catch(() => {});
-          } else {
-            pending.adapter.sendText(pending.target, text).catch(() => {});
-          }
+        const finalText = text || "✅ 已完成（无文本输出）";
+        if (pending.adapter.endStream) {
+          pending.adapter.endStream(pending.target, finalText).catch(() => {});
+        } else {
+          pending.adapter.sendText(pending.target, finalText).catch(() => {});
         }
         this.pending.delete(sessionPath);
       }

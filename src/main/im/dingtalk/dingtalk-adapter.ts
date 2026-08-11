@@ -315,13 +315,9 @@ export class DingtalkAdapter implements ImChannelAdapter {
           this.name,
         );
       } else {
-        await sendDingtalkText(
-          this.credentials,
-          target,
-          enriched,
-          true,
-          info.userId ? [info.userId] : undefined,
-        );
+        // No webhook — send as a markdown message so code blocks / lists /
+        // tables render (sampleText would show as plain text).
+        await sendDingtalkMarkdown(this.credentials, target, this.name, enriched, true);
       }
     } else {
       await sendDingtalkMarkdown(this.credentials, target, this.name, enriched, false);
@@ -480,10 +476,18 @@ export class DingtalkAdapter implements ImChannelAdapter {
     // replacement so it stays consistent.
     const enriched = await this.collectAndSendMedia(target, text, isGroup);
     try {
-      await finishDingtalkCard(card, enriched);
+      // Single card holds the final answer (novaclaw-style). Long texts skip
+      // the streaming finalize frame (the ~1K per-frame advice) and go
+      // straight to the FINISHED PUT with the full content. Only on failure
+      // do we fall back to a markdown message (auto-chunked).
+      const long = enriched.length > CARD_STREAM_FRAME_LIMIT;
+      await finishDingtalkCard(card, enriched, undefined, long);
     } catch {
-      // Finalize failed — send the plain text as a fallback.
+      // Finalize failed — send the full reply as a (chunked) markdown message.
       await this.sendText(target, text).catch(() => {});
     }
   }
 }
+
+/** DingTalk card streaming API caps a single content frame at ~1K. */
+const CARD_STREAM_FRAME_LIMIT = 1000;

@@ -88,8 +88,27 @@ export async function sendDingtalkText(
  * Send a markdown message. SampleMarkdown renders code blocks with syntax
  * highlighting — the reply format for single chats where readability of
  * code/lists matters. Group replies stay on sampleText so @ works.
+ *
+ * DingTalk's markdown message endpoint caps a single message; over-long
+ * replies are silently truncated or downgraded to plain text by the
+ * client. We split by paragraph (double-newline) and fall back to a hard
+ * character cut when a single block exceeds the limit, sending multiple
+ * markdown messages back-to-back so the user gets the full reply.
  */
 export async function sendDingtalkMarkdown(
+  cfg: DingtalkCredentials,
+  target: string,
+  title: string,
+  markdown: string,
+  isGroup: boolean,
+  chunkLimit: number = 2000,
+): Promise<void> {
+  for (const chunk of chunkMarkdown(markdown, chunkLimit)) {
+    await sendOneDingtalkMarkdown(cfg, target, title, chunk, isGroup);
+  }
+}
+
+async function sendOneDingtalkMarkdown(
   cfg: DingtalkCredentials,
   target: string,
   title: string,
@@ -122,6 +141,36 @@ export async function sendDingtalkMarkdown(
       { headers: { "x-acs-dingtalk-access-token": token } },
     );
   }
+}
+
+/** Split markdown into chunks ≤ limit; never breaks inside a paragraph
+ *  unless the paragraph itself is too big. */
+function chunkMarkdown(text: string, limit: number): string[] {
+  if (text.length <= limit) return [text];
+  const chunks: string[] = [];
+  const parts = text.split(/\n\s*\n/);
+  let cur = "";
+  for (const p of parts) {
+    const sep = cur ? "\n\n" : "";
+    if (cur && (cur.length + sep.length + p.length) > limit) {
+      chunks.push(cur);
+      cur = "";
+    }
+    if (p.length <= limit) {
+      cur = cur ? `${cur}${sep}${p}` : p;
+    } else {
+      // Single paragraph exceeds the limit — flush current and hard-cut.
+      if (cur) {
+        chunks.push(cur);
+        cur = "";
+      }
+      for (let i = 0; i < p.length; i += limit) {
+        chunks.push(p.slice(i, i + limit));
+      }
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
 }
 
 /**

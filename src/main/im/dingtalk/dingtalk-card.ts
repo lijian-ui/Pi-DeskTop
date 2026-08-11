@@ -284,12 +284,19 @@ export async function finishDingtalkCard(
   card: AICardInstance,
   content: string,
   cfg?: DingtalkCredentials,
+  /** Skip the streaming finalize frame (PUT /card/streaming with
+   *  isFinalize=true). That endpoint caps a single content frame at ~1K;
+   *  long replies would be truncated with "***". Skipping it lets the
+   *  FINISHED PUT below carry the full text directly. */
+  skipStreamFinalize: boolean = false,
 ): Promise<void> {
   if (!card) return;
   if (cfg) await ensureValidToken(card, cfg);
   const fixedContent = content;
 
-  await streamDingtalkCard(card, fixedContent, true, cfg);
+  if (!skipStreamFinalize) {
+    await streamDingtalkCard(card, fixedContent, true, cfg);
+  }
 
   const body = {
     outTrackId: card.cardInstanceId,
