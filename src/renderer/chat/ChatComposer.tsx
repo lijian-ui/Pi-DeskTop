@@ -564,7 +564,12 @@ export default function ChatComposer() {
   ).map((c) => ({ kind: "command", name: c.name, description: c.description }));
   const skillEntries: SkillEntry[] = showSlash
     ? skills
-        .filter((s) => s.name.toLowerCase().includes(slashQuery!))
+        .filter(
+          (s) =>
+            // Disabled skills are excluded from the agent's prompt — keep them
+            // out of the slash suggestion list too.
+            !s.disableModelInvocation && s.name.toLowerCase().includes(slashQuery!),
+        )
         .map((info) => ({ kind: "skill", info }))
     : [];
   const entries: SlashEntry[] = [...commandEntries, ...skillEntries];

@@ -12,6 +12,10 @@ interface SkillState {
   loading: boolean;
   importing: boolean;
   reading: boolean;
+  /** filePath of a skill whose enable/disable toggle is in flight. */
+  togglingPath: string | null;
+  /** filePath of a skill whose delete is in flight. */
+  deletingPath: string | null;
   error: string | null;
   /** The skill currently shown in the detail modal (null = modal closed). */
   viewing: ViewingSkill | null;
@@ -23,6 +27,10 @@ interface SkillState {
   openSkill: (info: SkillInfo) => Promise<void>;
   /** Close the detail modal. */
   closeSkill: () => void;
+  /** Toggle automatic model invocation (disableModelInvocation frontmatter). */
+  toggleSkill: (info: SkillInfo) => Promise<void>;
+  /** Delete the skill directory (SKILL.md's parent). */
+  removeSkill: (info: SkillInfo) => Promise<void>;
   /**
    * Build what gets inserted into the composer when a skill is "selected".
    *
@@ -46,6 +54,8 @@ export const useSkillStore = create<SkillState>((set, get) => ({
   loading: false,
   importing: false,
   reading: false,
+  togglingPath: null,
+  deletingPath: null,
   error: null,
   viewing: null,
 
@@ -94,6 +104,50 @@ export const useSkillStore = create<SkillState>((set, get) => ({
   },
 
   closeSkill: () => set({ viewing: null }),
+
+  toggleSkill: async (info: SkillInfo) => {
+    set({ togglingPath: info.filePath, error: null });
+    // Optimistic flip so the switch responds immediately; roll back on error.
+    const prev = get().skills;
+    // Backend writes `disableModelInvocation: !enabled` — pass the CURRENT
+    // disable flag so the flip lands (passing `!flag` double-negates and the
+    // disk value stays unchanged, making the switch snap back).
+    const enable = info.disableModelInvocation;
+    set({
+      skills: prev.map((s) =>
+        s.filePath === info.filePath
+          ? { ...s, disableModelInvocation: !s.disableModelInvocation }
+          : s,
+      ),
+    });
+    try {
+      await window.piDesk.setSkillEnabled(info.filePath, enable);
+    } catch (err) {
+      console.error("Failed to toggle skill:", err);
+      set({
+        skills: prev,
+        error: err instanceof Error ? err.message : "Failed to toggle skill",
+      });
+    } finally {
+      set({ togglingPath: null });
+      // No reload on success: the optimistic flip already equals the on-disk
+      // value written above. Reloading here could briefly snap the switch back
+      // if the IPC response races the reload (the "closes then opens" glitch).
+    }
+  },
+
+  removeSkill: async (info: SkillInfo) => {
+    set({ deletingPath: info.filePath, error: null });
+    try {
+      await window.piDesk.deleteSkill(info.filePath);
+      await get().load();
+    } catch (err) {
+      console.error("Failed to delete skill:", err);
+      set({ error: err instanceof Error ? err.message : "Failed to delete skill" });
+    } finally {
+      set({ deletingPath: null });
+    }
+  },
 
   commandFor: (info: SkillInfo) => {
     if (info.disableModelInvocation) {

@@ -323,8 +323,12 @@ export class ImGateway {
       isGroup?: boolean;
     };
     const senderNick = raw.senderNick?.trim();
-    const groupLabel =
-      raw.isGroup && raw.conversationTitle ? `[群：${raw.conversationTitle}]` : "";
+    // DingTalk reports the member-nick list as the "title" for groups that
+    // have no custom name (e.g. "李健,孟静静") — treat comma-y titles as
+    // anonymous and fall back to a generic label instead of leaking members.
+    const title = raw.conversationTitle?.trim();
+    const realTitle = title && !/[，,]/.test(title) ? title : null;
+    const groupLabel = raw.isGroup ? `[群：${realTitle ?? "群聊"}]` : "";
     const userText = senderNick
       ? `${groupLabel}[用户：${senderNick}] ${msg.text}`
       : groupLabel

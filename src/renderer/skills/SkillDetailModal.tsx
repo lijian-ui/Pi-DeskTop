@@ -65,8 +65,8 @@ export default function SkillDetailModal() {
               {t(SOURCE_KEY[info.source] ?? "skills.source.path")}
             </span>
             {info.disableModelInvocation && (
-              <span className={`${styles.badge} ${styles.badgeModelOnly}`}>
-                {t("skills.modelOnly")}
+              <span className={`${styles.badge} ${styles.badgeDisabled}`}>
+                {t("skills.disabled")}
               </span>
             )}
           </div>

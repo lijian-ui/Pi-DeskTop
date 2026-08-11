@@ -11,7 +11,7 @@ import {
   type AgentSessionEvent,
   type AgentSessionRuntime,
 } from "@earendil-works/pi-coding-agent";
-import { readFile, writeFile, mkdir, unlink, readdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, unlink, readdir, rm } from "node:fs/promises";
 import { existsSync, statSync, watch, mkdirSync, readdirSync, readFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
@@ -59,6 +59,30 @@ export interface SkillInfo {
   baseDir: string;
   source: "user" | "project" | "path";
   disableModelInvocation: boolean;
+}
+
+/**
+ * Set a boolean key in a SKILL.md YAML frontmatter block (the `---`-delimited
+ * header). Adds the key when missing; returns the original string when there
+ * is no frontmatter or nothing changed.
+ */
+function setSkillFrontmatterBool(content: string, key: string, value: boolean): string {
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/;
+  const m = content.match(fm);
+  if (!m) return content;
+  const body = m[1];
+  // The SDK reads `disable-model-invocation` (kebab). Earlier builds wrote the
+  // camelCase `disableModelInvocation` — match both so legacy toggles get
+  // normalized to the canonical key instead of silently staying ineffective.
+  const alt = key === "disable-model-invocation" ? "disableModelInvocation" : key;
+  const keyRe = new RegExp(`^\\s*(?:${key}|${alt})\\s*:[^\\r\\n]*`, "m");
+  let nextBody: string;
+  if (keyRe.test(body)) {
+    nextBody = body.replace(keyRe, `${key}: ${value}`);
+  } else {
+    nextBody = `${body.replace(/\s+$/, "")}\n${key}: ${value}`;
+  }
+  return content.replace(fm, `---\n${nextBody}\n---`);
 }
 
 /** A built-in provider from the SDK catalog, surfaced to the Models UI. */
@@ -1431,10 +1455,23 @@ export class PiDeskSessionManager {
   async saveSoul(text: string): Promise<void> {
     await writeSoul(text);
     this.servicesByCwd.clear();
-    Promise.resolve(this.session?.reload?.()).catch((err) => {
-      console.warn("Soul change: session reload skipped:", err);
-    });
+    this.reloadAllSessions("Soul change");
     console.log("Soul changed — services cache invalidated");
+  }
+
+  /**
+   * Reload every live session so global changes (skills / soul) reach their
+   * system prompts. Skills and soul are user-level, so they affect ALL cwds —
+   * reloading only `this.session` (cwd === "", there is no global workspace)
+   * would leave the session the user is actually chatting in on the old
+   * snapshot.
+   */
+  private reloadAllSessions(reason: string): void {
+    for (const unit of this.units.values()) {
+      Promise.resolve(unit?.runtime.session?.reload?.()).catch((err) => {
+        console.warn(`${reason}: session reload skipped:`, err);
+      });
+    }
   }
 
   /**
@@ -2263,15 +2300,62 @@ export class PiDeskSessionManager {
       // picks up the new skill(s).
       this.servicesByCwd.clear();
       // Make the running session pick up the newly added skill(s).
-      try {
-        await this.session?.reload?.();
-      } catch (reloadErr) {
-        console.warn("Skill import: session reload skipped:", reloadErr);
-      }
+      this.reloadAllSessions("Skill import");
       return { name: basename(zipPath) };
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
+  }
+
+  /**
+   * Toggle a skill's automatic model invocation by editing `disableModelInvocation`
+   * in its SKILL.md frontmatter (true = disabled for the model, only callable
+   * explicitly via /skill:name). The skill stays in the list so it can be
+   * re-enabled later.
+   */
+  async setSkillEnabled(filePath: string, enabled: boolean): Promise<void> {
+    // `enabled` = should the skill be active? The frontmatter flag is the
+    // negation (disableModelInvocation), so flip it when writing.
+    const abs = resolve(filePath);
+    this.assertSkillPath(abs);
+    const content = await readFile(abs, "utf-8");
+    const updated = setSkillFrontmatterBool(content, "disable-model-invocation", !enabled);
+    if (updated === content) return;
+    await writeFile(abs, updated, "utf-8");
+    this.invalidateSkillCache();
+  }
+
+  /**
+   * Delete a skill: removes the directory containing its SKILL.md. Only paths
+   * inside the user / project skill roots are accepted (safety guard).
+   */
+  async deleteSkill(filePath: string): Promise<void> {
+    const abs = resolve(filePath);
+    this.assertSkillPath(abs);
+    await rm(dirname(abs), { recursive: true, force: true });
+    this.invalidateSkillCache();
+  }
+
+  /** Refuse to touch SKILL.md files outside the user / project skill roots. */
+  private assertSkillPath(abs: string): void {
+    const home = homedir();
+    const roots: string[] = [
+      resolve(join(getAgentDir(), "skills")),
+      resolve(join(home, CONFIG_DIR_NAME, "skills")),
+    ];
+    if (this.cwd) roots.push(resolve(join(this.cwd, CONFIG_DIR_NAME, "skills")));
+    const ok = roots.some((r) => abs.startsWith(r + sep));
+    if (!ok) throw new Error("Unsafe skill path: " + abs);
+  }
+
+  /**
+   * Drop the skills cache and reload every live session so their system
+   * prompts pick up the new skill list immediately. Skills are USER-level
+   * (~/.pi/agent/skills), so they affect every cwd's session.
+   */
+  private invalidateSkillCache(): void {
+    this.servicesByCwd.clear();
+    this.reloadAllSessions("Skill change");
   }
 
   /**

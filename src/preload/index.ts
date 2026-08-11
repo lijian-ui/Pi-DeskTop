@@ -134,6 +134,10 @@ const piAPI = {
     ipcRenderer.invoke("pi:importSkill"),
   readSkillFile: (filePath: string) =>
     ipcRenderer.invoke("pi:readSkillFile", { filePath }),
+  setSkillEnabled: (filePath: string, enabled: boolean) =>
+    ipcRenderer.invoke("pi:setSkillEnabled", { filePath, enabled }),
+  deleteSkill: (filePath: string) =>
+    ipcRenderer.invoke("pi:deleteSkill", { filePath }),
 
   getCwd: () => ipcRenderer.invoke("pi:getCwd"),
   setCwd: (cwd: string) =>

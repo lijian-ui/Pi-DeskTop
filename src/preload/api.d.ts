@@ -196,6 +196,8 @@ export interface PiDeskAPI {
   listSkills(): Promise<SkillInfo[]>;
   importSkill(): Promise<{ name?: string; error?: string } | null>;
   readSkillFile(filePath: string): Promise<string>;
+  setSkillEnabled(filePath: string, enabled: boolean): Promise<void>;
+  deleteSkill(filePath: string): Promise<void>;
 
   // Workspace (cwd) management
   getCwd(): Promise<string>;

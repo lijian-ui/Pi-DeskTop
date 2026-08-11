@@ -475,6 +475,16 @@ export function registerIpcHandlers(
     return content;
   });
 
+  ipcMain.handle("pi:setSkillEnabled", async (_, { filePath, enabled }) => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.setSkillEnabled(String(filePath), Boolean(enabled));
+  });
+
+  ipcMain.handle("pi:deleteSkill", async (_, { filePath }) => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.deleteSkill(String(filePath));
+  });
+
   // ── Workspace (cwd) management ──
   ipcMain.handle("pi:getCwd", async () => {
     if (!pmgr) return process.cwd();
