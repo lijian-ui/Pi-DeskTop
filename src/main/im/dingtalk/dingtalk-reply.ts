@@ -42,9 +42,9 @@ async function getAccessToken(cfg: DingtalkCredentials): Promise<string> {
  * Send a plain-text message.
  * @param target conversationId (group) or userId (single chat)
  * @param isGroup routes to groupMessages/send vs oToMessages/batchSend
- * @param atUserIds when replying in a GROUP, @ these users (DingTalk staffIds —
- *   the plaintext user id must go through msgParam.at.atUserIds; appending
- *   "@id" to the content only works for the encrypted chatbotUserId form).
+ * @param atUserIds retained for signature parity only — the v1.0 robot API's
+ *   sampleText msgParam has NO at support (verified against DingTalk docs),
+ *   so group fallback text can't @. Use the session webhook for @.
  */
 export async function sendDingtalkText(
   cfg: DingtalkCredentials,
@@ -57,8 +57,6 @@ export async function sendDingtalkText(
 
   if (isGroup) {
     const msgParam: Record<string, any> = { content: text };
-    const ids = (atUserIds ?? []).filter(Boolean);
-    if (ids.length) msgParam.at = { atUserIds: ids };
     await axios.post(
       `${DINGTALK_API}/v1.0/robot/groupMessages/send`,
       {
@@ -253,22 +251,38 @@ export async function sendDingtalkFile(
 /**
  * Reply through the per-session webhook that DingTalk ships on every inbound
  * message (sessionWebhook). Group-only channel: unlike the v1.0 robot API
- * (whose sampleText msgParam has NO at support), the webhook endpoint honors
- * `at.atUserIds` — this is the only path that can actually @ members.
+ * (which has NO @ support), the webhook endpoint can render mentions. The
+ * exact at field/ID form is not well documented for enterprise robots — send
+ * BOTH the plaintext staffId (at.userIds) and the encrypted senderId
+ * (at.atDingtalkIds) so whichever one the client honors actually renders.
  */
 export async function sendDingtalkWebhook(
   webhook: string,
   text: string,
   atUserIds?: string[],
   title: string = "Pi Desktop",
+  atDingtalkIds?: string[],
 ): Promise<void> {
-  const at = (atUserIds ?? []).filter(Boolean);
+  const userIds = (atUserIds ?? []).filter(Boolean);
+  const dingtalkIds = (atDingtalkIds ?? []).filter(Boolean);
+  if (!userIds.length && !dingtalkIds.length) {
+    await axios.post(
+      webhook,
+      { msgtype: "markdown", markdown: { title, text } },
+      { headers: { "Content-Type": "application/json" } },
+    );
+    return;
+  }
   await axios.post(
     webhook,
     {
       msgtype: "markdown",
       markdown: { title, text },
-      ...(at.length ? { at: { atUserIds: at, isAtAll: false } } : {}),
+      at: {
+        ...(userIds.length ? { userIds } : {}),
+        ...(dingtalkIds.length ? { atDingtalkIds: dingtalkIds } : {}),
+        isAtAll: false,
+      },
     },
     { headers: { "Content-Type": "application/json" } },
   );

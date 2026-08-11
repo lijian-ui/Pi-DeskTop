@@ -386,14 +386,13 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     );
     await window.piDesk.switchSession(cwd, path, isScheduled);
     set({ currentPath: path, currentCwd: cwd });
-    // Background sessions accumulate their output live in messagesByPath, so
-    // if the buffer already exists we just mirror it — no reload needed and
-    // no loss of the in-flight stream. Otherwise pull history once.
-    if (!get().messagesByPath.has(path)) {
-      await reloadMessages(cwd);
-    } else {
-      get().syncFocus(path);
-    }
+    // ALWAYS reload the full history from the main process. The buffer only
+    // accumulates live events since subscription — for long-lived sessions
+    // (IM / scheduled tasks) whose earlier turns happened before the desktop
+    // app subscribed, the buffer alone would show only the recent tail.
+    // session.messages includes any in-flight streaming message, so nothing
+    // is lost; subsequent pi:event deltas keep appending on top.
+    await reloadMessages(cwd);
     await get().load();
   },
 

@@ -75,11 +75,11 @@ function formatToolCall(toolName: string, args: unknown): string {
 /** /help reply — the command list shown in the IM channel. */
 const HELP_TEXT = [
   "🤖 可用命令：",
-  "/model —— 查看可用模型列表",
-  "/model <名称> —— 切换当前会话的模型",
-  "/status —— 查看当前会话的工作目录与模型",
-  "/compact —— 压缩上下文（减少 token 占用）",
-  "/reset / /clear / /new —— 开启新会话",
+  "- /model —— 查看可用模型列表",
+  "- /model <名称> —— 切换当前会话的模型",
+  "- /status —— 查看当前会话的工作目录与模型",
+  "- /compact —— 压缩上下文（减少 token 占用）",
+  "- /reset /clear /new —— 开启新会话",
   "其他内容将直接发送给 AI 处理。",
 ].join("\n");
 
@@ -102,6 +102,10 @@ interface QueuedInbound {
   peer: string;
   sessionPath: string;
   effectiveCwd: string;
+  /** Sender nickname (DingTalk senderNick) — used for the fake @ prefix. */
+  senderNick?: string;
+  /** True when the message came from a group chat. */
+  isGroup?: boolean;
 }
 
 /** Extract final assistant text from a message_end payload. */
@@ -160,6 +164,9 @@ export class ImGateway {
       lastStreamAt?: number;
       /** beginStream already called for this reply cycle. */
       streamStarted?: boolean;
+      /** Sender nickname — fake @ prefix on the final reply (groups only). */
+      senderNick?: string;
+      isGroup?: boolean;
     }
   >();
   /**
@@ -306,8 +313,34 @@ export class ImGateway {
       msg.sessionKey,
       effectiveCwd,
     );
+    // DingTalk includes the sender's nickname (senderNick) and — for groups —
+    // the conversation title on every message. Prefix both so the agent knows
+    // WHO is asking and WHICH group it's in (and can address the user by
+    // name), especially in group chats where one session serves everyone.
+    const raw = (msg.raw ?? {}) as {
+      senderNick?: string;
+      conversationTitle?: string;
+      isGroup?: boolean;
+    };
+    const senderNick = raw.senderNick?.trim();
+    const groupLabel =
+      raw.isGroup && raw.conversationTitle ? `[群：${raw.conversationTitle}]` : "";
+    const userText = senderNick
+      ? `${groupLabel}[用户：${senderNick}] ${msg.text}`
+      : groupLabel
+        ? `${groupLabel} ${msg.text}`
+        : msg.text;
     const q = this.queues.get(sessionPath) ?? [];
-    q.push({ adapter, text: msg.text, images: msg.images, peer, sessionPath, effectiveCwd });
+    q.push({
+      adapter,
+      text: userText,
+      images: msg.images,
+      peer,
+      sessionPath,
+      effectiveCwd,
+      senderNick,
+      isGroup: raw.isGroup,
+    });
     this.queues.set(sessionPath, q);
     if (q.length === 1) {
       // Queue was empty → this item starts processing immediately.
@@ -327,7 +360,12 @@ export class ImGateway {
     const q = this.queues.get(sessionPath);
     const item = q?.[0];
     if (!item) return;
-    this.pending.set(sessionPath, { adapter: item.adapter, target: item.peer });
+    this.pending.set(sessionPath, {
+      adapter: item.adapter,
+      target: item.peer,
+      senderNick: item.senderNick,
+      isGroup: item.isGroup,
+    });
     try {
       await this.piManager.prompt(item.text, item.images, item.effectiveCwd, sessionPath);
     } catch (err) {
@@ -382,12 +420,14 @@ export class ImGateway {
       const modelLabel = model
         ? `${model.provider} / ${model.modelId}`
         : "全局默认（未单独设置）";
+      // Markdown list items — a bare "\n" would collapse into one line in
+      // DingTalk's markdown renderer (single newline = space per spec).
       await ctx.adapter.sendText(
         ctx.peer,
         [
           "📊 当前会话状态：",
-          `📁 工作目录：${ctx.cwd}`,
-          `🤖 模型：${modelLabel}`,
+          `- 📁 工作目录：${ctx.cwd}`,
+          `- 🤖 模型：${modelLabel}`,
         ].join("\n"),
       );
       return true;
@@ -445,10 +485,10 @@ export class ImGateway {
         const lines: string[] = ["📋 可用模型："];
         let idx = 0;
         for (const p of usable) {
-          lines.push(`🔷 ${p.name}`);
+          lines.push(`- 🔷 ${p.name}`);
           for (const m of p.models) {
             idx += 1;
-            lines.push(`  ${idx}. ${m.id}`);
+            lines.push(`- ${idx}. ${m.id}`);
           }
         }
         lines.push("");
@@ -565,7 +605,13 @@ export class ImGateway {
         const messages: any[] = event?.messages ?? [];
         const last = messages[messages.length - 1];
         const text = extractMessageText(last);
-        const finalText = text || "✅ 已完成（无文本输出）";
+        let finalText = text || "✅ 已完成（无文本输出）";
+        // Group chats: prefix a plain "@昵称 " so the user knows this reply
+        // answers THEIR message (DingTalk can't render a real @ for
+        // enterprise robots, but the text mention is enough to route it).
+        if (pending.isGroup && pending.senderNick) {
+          finalText = `@${pending.senderNick} ${finalText}`;
+        }
         if (pending.adapter.endStream) {
           pending.adapter.endStream(pending.target, finalText).catch(() => {});
         } else {

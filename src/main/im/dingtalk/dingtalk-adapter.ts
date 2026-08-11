@@ -51,6 +51,8 @@ interface DingtalkMessageData {
   msgId?: string;
   isInAtList?: boolean;
   senderNick?: string;
+  /** Group chats carry the group title on every message. */
+  conversationTitle?: string;
   /** Per-session reply webhook — group-only channel that honors `at`. */
   sessionWebhook?: string;
 }
@@ -142,10 +144,15 @@ export class DingtalkAdapter implements ImChannelAdapter {
   /**
    * peer → conversation info learned from inbound messages. The userId
    * (senderStaffId) drives group replies: we @ the last user who talked to the
-   * bot in that conversation. The webhook is the group reply channel that
+   * bot in that conversation. encryptedId (senderId) is the encrypted form —
+   * some @ channels need it (atDingtalkIds) while others need the plaintext
+   * staffId (at.userIds). The webhook is the group reply channel that
    * actually honors `at` (the v1.0 robot API does not).
    */
-  private peerInfo = new Map<string, { isGroup: boolean; userId: string; webhook?: string }>();
+  private peerInfo = new Map<
+    string,
+    { isGroup: boolean; userId: string; encryptedId?: string; webhook?: string }
+  >();
 
   onMessage?: (msg: ImInboundMessage) => void;
   onStatusChange?: (status: ImStatus) => void;
@@ -226,7 +233,12 @@ export class DingtalkAdapter implements ImChannelAdapter {
     // Group messages must @ the bot; ignore otherwise (avoids noise).
     if (isGroup && !data.isInAtList) return;
 
-    this.peerInfo.set(peer, { isGroup, userId, webhook: data.sessionWebhook });
+    this.peerInfo.set(peer, {
+      isGroup,
+      userId,
+      encryptedId: data.senderId,
+      webhook: data.sessionWebhook,
+    });
 
     const content = resolveDingtalkContent(data);
     const downloadCodes: string[] = [];
@@ -296,7 +308,12 @@ export class DingtalkAdapter implements ImChannelAdapter {
       sessionKey: `dingtalk:${this.instanceId}:${peer}`,
       text,
       images,
-      raw: { isGroup, senderNick: data.senderNick, msgId: data.msgId },
+      raw: {
+        isGroup,
+        senderNick: data.senderNick,
+        conversationTitle: data.conversationTitle,
+        msgId: data.msgId,
+      },
     });
   }
 
@@ -306,13 +323,15 @@ export class DingtalkAdapter implements ImChannelAdapter {
     if (info.isGroup) {
       if (info.webhook) {
         // Group replies go through the session webhook — the only channel that
-        // honors `at` (markdown also renders, unlike sampleText). Fall back to
-        // the REST API when no webhook is known yet.
+        // honors `at` (markdown also renders, unlike sampleText). Pass both
+        // the plaintext staffId and the encrypted senderId so whichever @
+        // field DingTalk's webhook accepts is populated.
         await sendDingtalkWebhook(
           info.webhook,
           enriched,
           info.userId ? [info.userId] : undefined,
           this.name,
+          info.encryptedId ? [info.encryptedId] : undefined,
         );
       } else {
         // No webhook — send as a markdown message so code blocks / lists /
