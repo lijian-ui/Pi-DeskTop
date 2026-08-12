@@ -15,7 +15,7 @@ export interface PiDeskAPI {
   ): () => void;
   respondBashApproval(payload: {
     requestId: number;
-    decision: "allow" | "deny" | "allow-session";
+    decision: "allow" | "deny" | "allow-session" | "allow-whitelist";
   }): Promise<void>;
   setBashGuardMode(mode: "yolo" | "ask"): Promise<void>;
   getBashGuardConfig(): Promise<{ blacklist: string[]; whitelist: string[] }>;
@@ -86,6 +86,11 @@ export interface PiDeskAPI {
     code: string,
   ): Promise<{ ok: boolean }>;
   imWeixinCancelLogin(loginId: string): Promise<{ ok: boolean }>;
+  /** Start a QQ Bot QR binding; resolves with the QR material + login id. */
+  imQqStartLogin(): Promise<QqLoginStatus>;
+  /** Poll the QQ binding snapshot. */
+  imQqLoginStatus(loginId: string): Promise<QqLoginStatus | null>;
+  imQqCancelLogin(loginId: string): Promise<{ ok: boolean }>;
   /** True when the session file belongs to an IM conversation. */
   imIsSession(sessionPath: string): Promise<boolean>;
   /** Migrate a single IM conversation to a new cwd (desktop workspace picker). */
@@ -287,6 +292,8 @@ export interface ScheduledTask {
   model?: { provider: string; modelId: string } | null;
   /** Bash permission mode: "yolo" (auto-allow) or "ask" (block non-whitelist). */
   permissionMode?: "yolo" | "ask";
+  /** Optional IM channel instance id to push the run result to after completion. */
+  imPushInstanceId?: string;
 }
 
 export type RunStatus = "success" | "error" | "running";
@@ -343,6 +350,22 @@ export interface WeixinLoginStatus {
     botId: string;
     baseUrl: string;
     userId?: string;
+  };
+}
+
+/** QQ 机器人扫码绑定状态快照（connector 后台轮询，渲染层轮询本接口）。 */
+export interface QqLoginStatus {
+  loginId: string;
+  status: "running" | "confirmed" | "error" | "canceled";
+  /** 二维码图片地址（<img> 直接显示）。 */
+  qrcodeUrl: string;
+  /** 二维码原始内容（备用链接）。 */
+  qrcode: string;
+  message: string;
+  /** status === "confirmed" 时携带机器人凭证。 */
+  credentials?: {
+    appId: string;
+    appSecret: string;
   };
 }
 

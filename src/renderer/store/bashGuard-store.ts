@@ -29,7 +29,10 @@ interface BashGuardState {
   /** Show a new request immediately, or enqueue it if one is already showing. */
   enqueuePending: (p: PendingApproval) => void;
   /** Respond to the CURRENTLY shown request and advance to the next queued one. */
-  respondAndAdvance: (requestId: number, decision: "allow" | "deny" | "allow-session") => void;
+  respondAndAdvance: (
+    requestId: number,
+    decision: "allow" | "deny" | "allow-session" | "allow-whitelist",
+  ) => void;
   /** Dismiss the current request WITHOUT answering it (rare: e.g. reset). */
   skipPending: () => void;
 }

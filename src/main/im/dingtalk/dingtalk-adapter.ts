@@ -15,7 +15,7 @@ import type {
   ImStatus,
 } from "../types";
 import type { ImChannelInstance } from "../im-config";
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import { basename } from "node:path";
 import { DingtalkConnection } from "./dingtalk-connection";
 import {
@@ -344,6 +344,26 @@ export class DingtalkAdapter implements ImChannelAdapter {
   }
 
   /**
+ * Send a command-approval message. DingTalk's v1.0 robot API has NO
+ * multi-button ActionCard template (`sampleActionCard` is single-button only;
+ * `sampleActionCard_2` / `sampleCard` are rejected with
+ * invalidParameter.msgKey.invalid), so we fall back to a plain text message —
+ * the user replies /allow /deny (or allow:N / ✅ 允许 N), which the gateway's
+ * approval-response recognizer handles.
+ */
+async sendKeyboard(
+  target: string,
+  text: string,
+  buttons: { id: string; label: string; style?: 1 | 2 }[],
+): Promise<void> {
+  // Use \n\n (paragraph break) — a single \n is rendered as a space in
+  // DingTalk's sampleMarkdown template, which crammed every option onto one
+  // line in the earlier preview.
+  const codes = buttons.map((b) => `${b.label} → \`${b.id}\``).join("\n\n");
+  await this.sendText(target, `${text}\n\n${codes}`);
+}
+
+  /**
    * Identify local images/files referenced in the reply, upload them, send as
    * dedicated media messages, and replace the reference with a short note.
    * Returns the text to send back to the user (with paths replaced).
@@ -418,7 +438,15 @@ export class DingtalkAdapter implements ImChannelAdapter {
       /(?:file:\/\/)?[A-Za-z]:[\\/][^\s"'()<>]+|(?:\/(?:Users|home|tmp|var|private|root)\/[^\s"'()<>]+)/g;
     for (const m of result.matchAll(bareFile)) {
       const path = toLocalPath(m[0]);
-      if (!existsSync(path)) continue;
+      // Regular files only — a `pwd`-style directory output must not be
+      // uploaded as media (existsSync alone matches directories → EISDIR).
+      let isFile = false;
+      try {
+        isFile = statSync(path).isFile();
+      } catch {
+        isFile = false;
+      }
+      if (!isFile) continue;
       if (/\.(png|jpe?g|gif|bmp|webp)$/i.test(path)) {
         const up = await uploadDingtalkMedia(this.credentials, path, "image");
         if (up) {

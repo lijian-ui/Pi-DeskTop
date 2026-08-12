@@ -49,6 +49,12 @@ export interface ScheduledTask {
    * Defaults to "yolo".
    */
   permissionMode?: "yolo" | "ask";
+  /**
+   * Optional IM channel instance id to PUSH the run result to after the task
+   * completes (e.g. "8d1a..."). The message goes to the channel's most recent
+   * active peer. Omit / empty ⇒ no push.
+   */
+  imPushInstanceId?: string;
 }
 
 export type RunStatus = "success" | "error" | "running";

@@ -790,6 +790,24 @@ export class PiDeskSessionManager {
   private bashMode: "yolo" | "ask" = "ask";
   private bashReqId: number = 0;
   /**
+   * IM channels that opted into channel-level command approval, keyed by the
+   * channel's session cwd (chat/im/<channel>). When a cwd is present here,
+   * bash commands from that cwd are approved via the channel (user replies
+   * /allow /deny in QQ/DingTalk/WeChat) instead of the desktop modal — the
+   * channel approval REPLACES the global ask dialog for that channel.
+   */
+  private approvalChannels = new Map<string, { channel: string; instanceId: string }>();
+  /**
+   * Injected by the IM gateway: fired when a bash command needs channel
+   * approval. The gateway resolves the peer and sends the confirm message.
+   */
+  onChannelApprovalRequest?: (cwd: string, requestId: number, command: string) => void;
+  /**
+   * Injected by the IM gateway: deliver a scheduled-task completion message
+   * to an IM channel instance (its most recent active peer).
+   */
+  onImPushRequest?: (instanceId: string, text: string) => void;
+  /**
    * Global requestId → owning unit. The renderer's approval response only
    * carries a requestId; this index routes it to the exact cwd that spawned
    * the prompt, so a decision in one workspace never answers another's.
@@ -1375,20 +1393,43 @@ export class PiDeskSessionManager {
     }
   }
 
-  /** Resolve a pending approval request from the renderer modal. */
+  /**
+   * Register / unregister an IM channel that opted into channel-level command
+   * approval. When enabled for a channel's cwd, bash commands from that cwd
+   * go through the channel (via onChannelApprovalRequest) instead of the
+   * desktop modal — even if the global bashMode is "yolo". The danger
+   * blacklist is still enforced first.
+   */
+  setApprovalChannel(
+    cwd: string,
+    info: { channel: string; instanceId: string } | null,
+  ): void {
+    if (info) {
+      this.approvalChannels.set(cwd, info);
+      console.warn(
+        `[guard] approval channel registered: cwd=${cwd} ${info.channel}/${info.instanceId}`,
+      );
+    } else {
+      this.approvalChannels.delete(cwd);
+      console.warn(`[guard] approval channel unregistered: cwd=${cwd}`);
+    }
+  }
+
+  /** Resolve a pending approval request from the renderer modal. Returns
+   *  true when a matching pending request was found and resolved. */
   handleBashApprovalResponse({
     requestId,
     decision,
   }: {
     requestId: number;
-    decision: "allow" | "deny" | "allow-session";
-  }): void {
+    decision: "allow" | "deny" | "allow-session" | "allow-whitelist";
+  }): boolean {
     // Route the decision to the exact unit that spawned the prompt.
     const unit = this.pendingBashIndex.get(requestId);
-    if (!unit) return;
+    if (!unit) return false;
     const entry = unit.pendingBashRequests.get(requestId);
     this.pendingBashIndex.delete(requestId);
-    if (!entry) return;
+    if (!entry) return false;
     unit.pendingBashRequests.delete(requestId);
     clearTimeout(entry.timer);
     if (decision === "allow-session") {
@@ -1400,9 +1441,68 @@ export class PiDeskSessionManager {
       // can never run a blacklisted command.
       unit.allowAllSession = true;
       entry.resolve("allow");
+    } else if (decision === "allow-whitelist") {
+      // Explicit "allow and remember": run the command once AND persist its
+      // verb into the shared whitelist (globally, all channels/sessions).
+      // Unlike the old implicit global-leak this is a deliberate user action.
+      // Blacklisted commands are never whitelisted (resolve as deny).
+      if (this.isBlacklistedCommand(entry.command)) {
+        entry.resolve("deny");
+      } else {
+        void this.addWhitelistVerb(entry.command);
+        entry.resolve("allow");
+      }
     } else {
       entry.resolve(decision === "deny" ? "deny" : "allow");
     }
+    return true;
+  }
+
+  /** True when the command (or any chain segment) hits the danger blacklist. */
+  private isBlacklistedCommand(command: string): boolean {
+    const trimmed = command.trim();
+    const segments = PiDeskSessionManager.splitCommandChain(trimmed);
+    const hits = (s: string) => this.bashBlacklistRx.some((rx) => rx.test(s));
+    return hits(trimmed) || segments.some(hits);
+  }
+
+  /**
+   * Persist a command's leading verb into the shared whitelist as a
+   * line-anchored pattern (`^\s*<verb>\b`) — precise enough not to match
+   * unrelated words, broad enough to cover the whole command family.
+   */
+  private async addWhitelistVerb(command: string): Promise<void> {
+    try {
+      const verb = (command.trim().split(/\s+/)[0] ?? "").replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+      if (!verb) return;
+      const pattern = `^\\s*${verb}\\b`;
+      if (!this.guardConfig.whitelist.includes(pattern)) {
+        this.guardConfig.whitelist.push(pattern);
+        this.compileBashPatterns();
+        await writeBashGuardConfig(this.guardConfig);
+        console.warn(`[guard] whitelisted verb via approval: ${verb} (${pattern})`);
+      }
+    } catch (err) {
+      console.warn(`[guard] addWhitelistVerb failed:`, err);
+    }
+  }
+
+  /**
+   * Resolve the MOST RECENT pending approval of a cwd — used when the user
+   * replies `/allow` without an id (the common IM interaction). Returns true
+   * when a pending request was resolved.
+   */
+  resolveLatestApproval(
+    cwd: string,
+    decision: "allow" | "deny" | "allow-session" | "allow-whitelist",
+  ): boolean {
+    const unit = this.units.get(cwd);
+    if (!unit || unit.pendingBashRequests.size === 0) return false;
+    let latest = -1;
+    for (const id of unit.pendingBashRequests.keys()) {
+      if (id > latest) latest = id;
+    }
+    return this.handleBashApprovalResponse({ requestId: latest, decision });
   }
 
   /** Read the current bash guard config (for the Settings UI). */
@@ -1705,11 +1805,65 @@ export class PiDeskSessionManager {
     const hitsBlacklist = (s: string) => this.bashBlacklistRx.some((rx) => rx.test(s));
     if (hitsBlacklist(trimmed) || segments.some(hitsBlacklist)) return "deny-blacklist";
     if (unit.allowAllSession) return "allow";
+    // Channel-level approval overrides the global yolo mode: a channel that
+    // opted into approval intercepts its own bash commands, even when the
+    // desktop is set to yolo. Whitelisted verbs are still auto-allowed.
+    if (this.approvalChannels.has(unit.cwd)) {
+      console.warn(`[guard] approval cwd hit: ${unit.cwd}`);
+      if (this.bashWhitelistRx.some((rx) => rx.test(trimmed))) return "allow";
+      return this.requestChannelApproval(command, unit);
+    }
+    if (this.approvalChannels.size > 0) {
+      console.warn(
+        `[guard] approval MISS: cwd=${unit.cwd} (registered=${JSON.stringify([...this.approvalChannels.keys()])})`,
+      );
+    }
     if (this.bashMode === "yolo") return "allow";
     // Whitelist patterns are matched *broadly* (substring regex) so a verb like
     // "rm" whitelists the whole command family.
     if (this.bashWhitelistRx.some((rx) => rx.test(trimmed))) return "allow";
     return this.requestApproval(command, unit);
+  }
+
+  /**
+   * Channel-level approval: same pending-request machinery as requestApproval
+   * (requestId / timeout / unit routing), but instead of showing the desktop
+   * modal the gateway is asked to send a confirm message on the channel.
+   * The user replies `/allow <id>` / `/deny <id>` (or /allow_session), which
+   * the gateway routes back through handleBashApprovalResponse.
+   */
+  private requestChannelApproval(command: string, unit: RuntimeUnit): Promise<"allow" | "deny"> {
+    const requestId = ++this.bashReqId;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (unit.pendingBashRequests.has(requestId)) {
+          unit.pendingBashRequests.delete(requestId);
+          this.pendingBashIndex.delete(requestId);
+          console.warn(`Channel bash approval ${requestId} timed out — auto-denying`);
+          resolve("deny");
+        }
+      }, BASH_APPROVAL_TIMEOUT_MS);
+      unit.pendingBashRequests.set(requestId, { resolve, command, timer });
+      this.pendingBashIndex.set(requestId, unit);
+      // Ask the gateway to surface the confirmation on the channel. If no
+      // gateway is wired (or it fails), auto-deny so the loop never hangs.
+      if (this.onChannelApprovalRequest) {
+        try {
+          this.onChannelApprovalRequest(unit.cwd, requestId, command);
+        } catch (err) {
+          console.warn(`Channel approval notify failed:`, err);
+          unit.pendingBashRequests.delete(requestId);
+          this.pendingBashIndex.delete(requestId);
+          clearTimeout(timer);
+          resolve("deny");
+        }
+      } else {
+        unit.pendingBashRequests.delete(requestId);
+        this.pendingBashIndex.delete(requestId);
+        clearTimeout(timer);
+        resolve("deny");
+      }
+    });
   }
 
   private requestApproval(command: string, unit: RuntimeUnit): Promise<"allow" | "deny"> {
@@ -2137,12 +2291,24 @@ export class PiDeskSessionManager {
     // Feed the run's events into the SAME pi:event channel normal sessions
     // use, tagged with the task's sessionPath. The renderer then routes them
     // into messagesByPath exactly like any background session — live content
-    // accumulation with zero special-case reload logic.
+    // accumulation with zero special-case reload logic. We also harvest the
+    // final assistant text here for the optional IM completion push.
+    let lastReply = "";
     const forwardEvents = (event: AgentSessionEvent) => {
       const wc = this.webContents && !this.webContents.isDestroyed()
         ? this.webContents
         : this.findLiveWebContents();
       wc?.send("pi:event", { sessionPath, cwd, event });
+      if (event.type === "message_end") {
+        const m = (event as any).message;
+        const c = m?.content;
+        if (typeof c === "string") lastReply = c;
+        else if (Array.isArray(c)) {
+          lastReply = c
+            .map((b: any) => (typeof b?.text === "string" ? b.text : ""))
+            .join("");
+        }
+      }
     };
     const unsubscribeEvents = session.subscribe(forwardEvents);
 
@@ -2163,6 +2329,21 @@ export class PiDeskSessionManager {
       // The trigger message is just a trigger — the real task lives in the
       // system prompt's <scheduled_task> block.
       await session.prompt("请开始执行本次定时任务。");
+      // Optional IM completion push (task.imPushInstanceId configured).
+      if (task.imPushInstanceId && this.onImPushRequest) {
+        const finishedAt = new Date().toLocaleString("zh-CN");
+        const summary = lastReply.trim()
+          ? lastReply.trim().slice(0, 1500)
+          : "（任务无文本输出）";
+        try {
+          this.onImPushRequest(
+            task.imPushInstanceId,
+            `✅ 定时任务「${task.name}」已完成（${finishedAt}）\n\n${summary}`,
+          );
+        } catch (err) {
+          console.warn(`[scheduler] IM push failed:`, err);
+        }
+      }
       await updateRun(runId, {
         finishedAt: new Date().toISOString(),
         status: "success",

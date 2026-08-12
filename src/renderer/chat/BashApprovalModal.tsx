@@ -28,7 +28,9 @@ export default function BashApprovalModal() {
 
   if (!pending) return null;
 
-  const respond = (decision: "allow" | "deny" | "allow-session") => {
+  const respond = (
+    decision: "allow" | "deny" | "allow-session" | "allow-whitelist",
+  ) => {
     respondAndAdvance(pending.requestId, decision);
   };
 
@@ -55,6 +57,13 @@ export default function BashApprovalModal() {
         </button>
         <button className={styles.allow} onClick={() => respond("allow")}>
           允许
+        </button>
+        <button
+          className={styles.allowWhitelist}
+          onClick={() => respond("allow-whitelist")}
+          title="放行本条命令，并将命令动词加入全局白名单（以后该命令全渠道免审批）"
+        >
+          允许并加入白名单
         </button>
         <button
           className={styles.allowSession}

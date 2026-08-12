@@ -41,6 +41,14 @@ export default defineConfig({
                 "ws",
                 "bufferutil",
                 "utf-8-validate",
+                // QQ bot SDK + connector pull in `qrcode-terminal`, whose
+                // legacy octal escapes (`\033[40m`) are a syntax error in
+                // rollup's strict mode — keep the whole chain external and
+                // let Electron resolve them at runtime (same pattern as
+                // dingtalk-stream above).
+                "@tencent-connect/qqbot-connector",
+                "@tencent-connect/qqbot-nodejs",
+                "qrcode-terminal",
               ],
             },
           },

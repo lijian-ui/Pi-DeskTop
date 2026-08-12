@@ -12,6 +12,11 @@ import {
   cancelLogin as cancelWeixinLogin,
 } from "./im/weixin/weixin-login";
 import {
+  startLogin as startQqLogin,
+  getLoginStatus as getQqLoginStatus,
+  cancelLogin as cancelQqLogin,
+} from "./im/qq/qq-login";
+import {
   searchNpmPackages,
   getInstalledPackages,
   installPackage,
@@ -303,6 +308,19 @@ export function registerIpcHandlers(
     cancelWeixinLogin(String(loginId));
     return { ok: true };
   });
+
+  // ── QQ QR bind ──
+  ipcMain.handle("pi:imQqStartLogin", async () => {
+    return startQqLogin();
+  });
+  ipcMain.handle("pi:imQqLoginStatus", async (_, loginId: string) => {
+    return getQqLoginStatus(String(loginId));
+  });
+  ipcMain.handle("pi:imQqCancelLogin", async (_, loginId: string) => {
+    cancelQqLogin(String(loginId));
+    return { ok: true };
+  });
+
   ipcMain.handle("pi:imIsSession", async (_, sessionPath: string) => {
     const gateway = getImGateway();
     return gateway?.isSession(sessionPath) ?? false;

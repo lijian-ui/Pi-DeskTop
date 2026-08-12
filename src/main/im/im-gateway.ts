@@ -14,6 +14,7 @@ import { readImConfig } from "./im-config";
 import { ImSessionMap, IM_CHAT_SUBDIR, readSessionCwd } from "./im-session-map";
 import { DingtalkAdapter } from "./dingtalk/dingtalk-adapter";
 import { WeixinAdapter } from "./weixin/weixin-adapter";
+import { QqAdapter } from "./qq/qq-adapter";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -80,6 +81,7 @@ const HELP_TEXT = [
   "- /model <名称> —— 切换当前会话的模型",
   "- /status —— 查看当前会话的工作目录与模型",
   "- /compact —— 压缩上下文（减少 token 占用）",
+  "- /allow <ID> / /deny <ID> —— 允许 / 拒绝命令审批",
   "- /reset /clear /new —— 开启新会话",
   "其他内容将直接发送给 AI 处理。",
 ].join("\n");
@@ -179,9 +181,35 @@ export class ImGateway {
   private queues = new Map<string, QueuedInbound[]>();
   private sessionMap: ImSessionMap;
   private channels: ImChannelInstance[] = [];
+  /** cwd → most recent peer (target) for channel approval messages. */
+  private lastPeerByCwd = new Map<string, string>();
+  /** cwd → instanceId for approval channels (to find the adapter). */
+  private approvalCwdInfo = new Map<string, { channel: string; instanceId: string }>();
+  /** instanceId → most recent peer — used for task-completion pushes. */
+  private lastPeerByInstanceId = new Map<string, string>();
 
   constructor(private piManager: PiDeskSessionManager) {
     this.sessionMap = new ImSessionMap(piManager);
+    // Channel-level bash approval: the session-manager asks us to surface the
+    // confirmation on the channel; the user replies /allow /deny.
+    this.piManager.onChannelApprovalRequest = (cwd, requestId, command) => {
+      this.sendApprovalRequest(cwd, requestId, command);
+    };
+    // Scheduled-task completion push: session-manager asks us to deliver the
+    // run result to an IM channel's most recent active peer.
+    this.piManager.onImPushRequest = (instanceId, text) => {
+      const adapter = this.adapterFor(instanceId);
+      const peer = this.lastPeerByInstanceId.get(instanceId);
+      if (!adapter || !peer) {
+        console.warn(
+          `[im] push skipped: instance=${instanceId} adapter=${!!adapter} peer=${peer ?? "✗"}`,
+        );
+        return;
+      }
+      void adapter.sendText(peer, text).catch((err) => {
+        console.warn(`[im] push failed:`, err);
+      });
+    };
   }
 
   /** Load persisted session map + bind the event forwarder hook. */
@@ -194,17 +222,98 @@ export class ImGateway {
     };
   }
 
+  /** Unregister every channel-approval cwd from the session manager. */
+  private clearApprovalRegistrations(): void {
+    for (const cwd of this.approvalCwdInfo.keys()) {
+      this.piManager.setApprovalChannel(cwd, null);
+    }
+    this.approvalCwdInfo.clear();
+    this.lastPeerByCwd.clear();
+  }
+
+  /**
+   * Send a channel-approval confirm request to the peer that owns the cwd.
+   * QQ gets inline buttons (click to allow/deny); other channels fall back
+   * to a plain-text /allow /deny message. Auto-denies via the session
+   * manager's timeout if no peer is known yet.
+   */
+  private sendApprovalRequest(cwd: string, requestId: number, command: string): void {
+    const info = this.approvalCwdInfo.get(cwd);
+    const peer = this.lastPeerByCwd.get(cwd);
+    console.warn(
+      `[im] approval request id=${requestId} cwd=${cwd} info=${info ? "✓" : "✗"} peer=${peer ?? "✗"}`,
+    );
+    if (!info || !peer) return;
+    const adapter = this.adapterFor(info.instanceId);
+    if (!adapter) return;
+    const shortCmd = command.length > 200 ? `${command.slice(0, 200)}…` : command;
+    const text = `🔐 需要您确认执行 bash 命令（ID: ${requestId}）：\n\`\`\`\n${shortCmd}\n\`\`\``;
+    if (adapter.sendKeyboard) {
+      void adapter
+        .sendKeyboard(peer, text, [
+          { id: `allow:${requestId}`, label: "✅ 允许", style: 1 },
+          { id: `allow_whitelist:${requestId}`, label: "🔁 允许并记住", style: 1 },
+          { id: `deny:${requestId}`, label: "⛔ 拒绝", style: 2 },
+          { id: `allow_session:${requestId}`, label: "本次会话允许", style: 1 },
+        ])
+        .catch((err) => console.warn(`[im] approval keyboard failed:`, err));
+      return;
+    }
+    void adapter
+      .sendText(
+        peer,
+        `${text}\n回复 \`/allow\`（或 \`/allow ${requestId}\`）允许 ｜ \`/deny\` 拒绝 ｜ \`/allow_session\` 本次会话始终允许`,
+      )
+      .catch((err) => console.warn(`[im] approval notify failed:`, err));
+  }
+
+  /** Button-click approval (QQ inline keyboard). Button id = "decision:id". */
+  private handleApprovalInteraction(adapter: ImChannelAdapter, buttonId: string, userId?: string): void {
+    const m = /^(allow|allow_whitelist|deny|allow_session):(\d+)$/.exec(buttonId);
+    if (!m) return;
+    const decision =
+      m[1] === "allow_whitelist"
+        ? "allow-whitelist"
+        : (m[1] as "allow" | "deny" | "allow-session");
+    const requestId = Number(m[2]);
+    const ok = this.piManager.handleBashApprovalResponse({ requestId, decision });
+    // Notify the clicker (QQ c2c openid) about the outcome.
+    if (userId) {
+      void adapter
+        .sendText(
+          `c2c:${userId}`,
+          ok
+            ? decision === "deny"
+              ? "❌ 已拒绝"
+              : decision === "allow-whitelist"
+                ? "✅ 已允许并加入白名单"
+                : "✅ 已允许"
+            : "❌ 审批已过期或不存在",
+        )
+        .catch(() => {});
+    }
+  }
+
   /** (Re)build adapters from config: stop all, then start enabled channels. */
   async applyConfig(cfg: ImConfig): Promise<void> {
     await this.stopAll();
     this.channels = cfg.channels ?? [];
     this.pending.clear();
+    this.clearApprovalRegistrations();
 
     for (const inst of this.channels) {
       if (!inst.enabled) continue;
       if (!this.hasValidConfig(inst)) {
         console.warn(`[im] instance ${inst.name} (${inst.id}) missing credentials — skipped`);
         continue;
+      }
+      // Channel opted into command approval → register its default cwd
+      // (per-message dynamic registration below also covers migrated
+      // sessions whose cwd differs).
+      if (inst.config?.approval === "on") {
+        const cwd = inst.cwd ?? join(getAgentDir(), "chat", IM_CHAT_SUBDIR, inst.type);
+        this.approvalCwdInfo.set(cwd, { channel: inst.type, instanceId: inst.id });
+        this.piManager.setApprovalChannel(cwd, { channel: inst.type, instanceId: inst.id });
       }
       const adapter = this.createAdapter(inst);
       if (!adapter) continue;
@@ -225,7 +334,11 @@ export class ImGateway {
       // WeChat is QR-login bound: token + botId are written by the login flow.
       return Boolean(inst.config?.token && inst.config?.botId);
     }
-    return false; // future channels (qq) not implemented yet
+    if (inst.type === "qq") {
+      // QQ is QR-login bound: appId + appSecret come from the scan.
+      return Boolean(inst.config?.appId && inst.config?.appSecret);
+    }
+    return false;
   }
 
   private createAdapter(inst: ImChannelInstance): ImChannelAdapter | null {
@@ -234,6 +347,8 @@ export class ImGateway {
         return new DingtalkAdapter(inst);
       case "weixin":
         return new WeixinAdapter(inst);
+      case "qq":
+        return new QqAdapter(inst);
       default:
         console.warn(`[im] channel type "${inst.type}" not implemented`);
         return null;
@@ -246,6 +361,9 @@ export class ImGateway {
     };
     adapter.onStatusChange = (s) => {
       this.setChannelStatus(adapter.instanceId, s);
+    };
+    adapter.onInteraction = (buttonId, userId) => {
+      this.handleApprovalInteraction(adapter, buttonId, userId);
     };
     this.adapters.push(adapter);
   }
@@ -300,6 +418,22 @@ export class ImGateway {
         : join(getAgentDir(), "chat", IM_CHAT_SUBDIR, msg.channel);
     }
 
+    // Channel-level approval: track the peer for this cwd (used to send the
+    // confirm message) and register the cwd if the channel opted in — this
+    // also covers sessions migrated to a non-default workspace.
+    this.lastPeerByCwd.set(effectiveCwd, peer);
+    this.lastPeerByInstanceId.set(instanceId, peer);
+    if (instance?.config?.approval === "on") {
+      this.approvalCwdInfo.set(effectiveCwd, {
+        channel: msg.channel,
+        instanceId,
+      });
+      this.piManager.setApprovalChannel(effectiveCwd, {
+        channel: msg.channel,
+        instanceId,
+      });
+    }
+
     // 1. Slash commands — handled here, never forwarded to the LLM. Unknown
     // /commands fall through to the normal prompt flow.
     const cmd = parseCommand(msg.text);
@@ -311,6 +445,46 @@ export class ImGateway {
         cwd: effectiveCwd,
       });
       if (handled) return;
+    }
+
+    // 1.5 Approval-response text — typed manually OR bounced back by an
+    // ActionCard button click (DingTalk) or other channels. Two formats:
+    //   • English code: "allow:3" / "deny:3" / "allow_session:3" / "allow_always:3"
+    //   • Chinese label: "✅ 允许 3" / "⛔ 拒绝 3" / "🔁 允许并记住 3" / "本次会话允许 3"
+    // Consumed here, never sent to the LLM.
+    const trimmed = msg.text.trim();
+    const enMatch = /^(allow|deny|allow_session|allow_always):(\d+)$/.exec(trimmed);
+    const cnMatch = !enMatch
+      ? /^(✅\s*允许|⛔\s*拒绝|🔁\s*允许并记住|本次会话允许)\s+(\d+)$/.exec(trimmed)
+      : null;
+    if (enMatch || cnMatch) {
+      const keyword = enMatch ? enMatch[1] : cnMatch![1];
+      const requestId = Number((enMatch ?? cnMatch)![2]);
+      const decision =
+        keyword === "deny"
+          ? "deny"
+          : keyword === "allow_session"
+            ? "allow-session"
+            : keyword === "allow_always"
+              ? "allow-whitelist"
+              : "allow";
+      const ok = this.piManager.handleBashApprovalResponse({
+        requestId,
+        decision,
+      });
+      await adapter
+        .sendText(
+          peer,
+          ok
+            ? decision === "deny"
+              ? "❌ 已拒绝"
+              : decision === "allow-whitelist"
+                ? "✅ 已允许并加入白名单"
+                : "✅ 已允许"
+            : "❌ 没有待审批的命令，或审批已过期",
+        )
+        .catch(() => {});
+      return;
     }
 
     // 2. Ensure Pi session, then process through the per-session FIFO queue:
@@ -413,6 +587,42 @@ export class ImGateway {
     if (lower === "reset" || lower === "clear" || lower === "new") {
       await this.sessionMap.delete(ctx.sessionKey);
       await ctx.adapter.sendText(ctx.peer, "✅ 已开启新会话");
+      return true;
+    }
+    if (
+      lower === "allow" ||
+      lower === "deny" ||
+      lower === "allow_session" ||
+      lower === "allow_always"
+    ) {
+      // Channel-level bash approval responses: /allow <id> /deny <id>
+      // /allow_session <id> /allow_always <id> (allow + persist whitelist).
+      // Without an id, resolve the MOST RECENT pending approval of this
+      // session's cwd (the common IM interaction).
+      const decision =
+        lower === "deny"
+          ? "deny"
+          : lower === "allow_session"
+            ? "allow-session"
+            : lower === "allow_always"
+              ? "allow-whitelist"
+              : "allow";
+      const idArg = args.trim();
+      const id = Number(idArg);
+      const ok =
+        idArg && Number.isFinite(id) && id > 0
+          ? this.piManager.handleBashApprovalResponse({ requestId: id, decision })
+          : this.piManager.resolveLatestApproval(ctx.cwd, decision);
+      await ctx.adapter.sendText(
+        ctx.peer,
+        ok
+          ? lower === "deny"
+            ? "❌ 已拒绝"
+            : lower === "allow_always"
+              ? "✅ 已允许并加入白名单"
+              : "✅ 已允许"
+          : "❌ 没有待审批的命令，或审批已过期",
+      );
       return true;
     }
     if (lower === "help") {

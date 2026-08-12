@@ -72,6 +72,11 @@ const piAPI = {
     ipcRenderer.invoke("pi:imWeixinSubmitVerifyCode", { loginId, code }),
   imWeixinCancelLogin: (loginId: string) =>
     ipcRenderer.invoke("pi:imWeixinCancelLogin", loginId),
+  imQqStartLogin: () => ipcRenderer.invoke("pi:imQqStartLogin"),
+  imQqLoginStatus: (loginId: string) =>
+    ipcRenderer.invoke("pi:imQqLoginStatus", loginId),
+  imQqCancelLogin: (loginId: string) =>
+    ipcRenderer.invoke("pi:imQqCancelLogin", loginId),
   imIsSession: (sessionPath: string) =>
     ipcRenderer.invoke("pi:imIsSession", sessionPath),
   imMigrateSession: (sessionPath: string, newCwd: string) =>

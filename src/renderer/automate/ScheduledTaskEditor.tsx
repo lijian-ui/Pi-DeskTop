@@ -97,6 +97,10 @@ export default function ScheduledTaskEditor({
   const [permissionMode, setPermissionMode] = useState<"yolo" | "ask">(
     task.permissionMode ?? "yolo",
   );
+  const [imPushInstanceId, setImPushInstanceId] = useState(
+    task.imPushInstanceId ?? "",
+  );
+  const [imChannels, setImChannels] = useState<{ id: string; name: string }[]>([]);
   const [availableModels, setAvailableModels] = useState<ModelItem[]>([]);
 
   useEffect(() => {
@@ -118,6 +122,27 @@ export default function ScheduledTaskEditor({
       })
       .catch(() => {
         /* model list unavailable — leave empty, default option still works */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load IM channel instances for the "push result to" selector.
+  useEffect(() => {
+    let cancelled = false;
+    window.piDesk
+      .imGetConfig()
+      .then((cfg: { channels?: { id: string; name: string; enabled?: boolean }[] }) => {
+        if (cancelled || !cfg?.channels) return;
+        setImChannels(
+          cfg.channels
+            .filter((c: any) => c?.enabled && c?.id)
+            .map((c: any) => ({ id: String(c.id), name: String(c.name) })),
+        );
+      })
+      .catch(() => {
+        /* no IM config — leave selector empty */
       });
     return () => {
       cancelled = true;
@@ -196,6 +221,7 @@ export default function ScheduledTaskEditor({
         schedule,
         model: modelKey ? parseModelKey(modelKey) : null,
         permissionMode,
+        imPushInstanceId: imPushInstanceId || undefined,
       });
     } finally {
       setSaving(false);
@@ -294,6 +320,23 @@ export default function ScheduledTaskEditor({
                 >
                   <option value="yolo">{t("scheduled.permissionYolo")}</option>
                   <option value="ask">{t("scheduled.permissionAsk")}</option>
+                </select>
+              </div>
+              <div className={styles.toolbarGroup}>
+                <span className={styles.toolbarLabel}>
+                  {t("scheduled.imPush")}
+                </span>
+                <select
+                  className={styles.toolbarSelect}
+                  value={imPushInstanceId}
+                  onChange={(e) => setImPushInstanceId(e.target.value)}
+                >
+                  <option value="">{t("scheduled.imPushNone")}</option>
+                  {imChannels.map((ch) => (
+                    <option key={ch.id} value={ch.id}>
+                      {ch.name}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>

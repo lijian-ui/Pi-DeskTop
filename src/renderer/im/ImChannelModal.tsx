@@ -10,7 +10,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { X, Check, FolderOpen, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { ImChannelInstance, ImChannelType, WeixinLoginStatus } from "../../preload/api";
+import type {
+  ImChannelInstance,
+  ImChannelType,
+  QqLoginStatus,
+  WeixinLoginStatus,
+} from "../../preload/api";
 import styles from "./ImChannelModal.module.css";
 
 /** Channel types the UI lets the user pick from. */
@@ -23,8 +28,8 @@ function newId(): string {
 /**
  * Field spec per channel type — drives which credential inputs render.
  * key = instance.config key; labelKey = i18n label.
- * WeChat has NO appId/appSecret: it is bound via QR scan (token written by
- * the login flow), so its field list is empty.
+ * WeChat / QQ have NO appId/appSecret inputs: both are bound via QR scan
+ * (credentials written by the login flow), so their field lists are empty.
  */
 const TYPE_FIELDS: Record<
   ImChannelType,
@@ -35,16 +40,13 @@ const TYPE_FIELDS: Record<
     { key: "clientSecret", labelKey: "im.clientSecret", secret: true },
   ],
   weixin: [],
-  qq: [
-    { key: "appId", labelKey: "im.qqAppId" },
-    { key: "appSecret", labelKey: "im.qqAppSecret", secret: true },
-  ],
+  qq: [],
 };
 
 const NOT_IMPL: Record<ImChannelType, string | null> = {
   dingtalk: null,
   weixin: null,
-  qq: "im.qqNotImpl",
+  qq: null,
 };
 
 export default function ImChannelModal({
@@ -75,6 +77,12 @@ export default function ImChannelModal({
   const [wxVerifyCode, setWxVerifyCode] = useState("");
   const [wxVerifyError, setWxVerifyError] = useState(false);
   const [wxQrError, setWxQrError] = useState(false);
+
+  // ── QQ QR bind state ──
+  const [qqLogin, setQqLogin] = useState<QqLoginStatus | null>(null);
+  const [qqFetching, setQqFetching] = useState(false);
+  const [qqQrError, setQqQrError] = useState(false);
+  const boundQqAppId = type === "qq" ? (config["appId"] ?? "") : "";
   // Already-bound instance → show bound summary + rebind button.
   const boundBotId = type === "weixin" ? (config["botId"] ?? "") : "";
 
@@ -102,6 +110,30 @@ export default function ImChannelModal({
   const cancelWxLogin = () => {
     if (wxLogin?.loginId) void window.piDesk.imWeixinCancelLogin(wxLogin.loginId);
     setWxLogin(null);
+  };
+
+  const startQqLogin = async () => {
+    setQqFetching(true);
+    setQqQrError(false);
+    try {
+      const s = await window.piDesk.imQqStartLogin();
+      setQqLogin(s);
+    } catch (err) {
+      setQqLogin({
+        loginId: "",
+        status: "error",
+        qrcodeUrl: "",
+        qrcode: "",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setQqFetching(false);
+    }
+  };
+
+  const cancelQqLogin = () => {
+    if (qqLogin?.loginId) void window.piDesk.imQqCancelLogin(qqLogin.loginId);
+    setQqLogin(null);
   };
 
   const submitWxVerifyCode = () => {
@@ -145,11 +177,36 @@ export default function ImChannelModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wxLogin?.loginId, wxLogin?.status]);
 
+  // Poll the QQ login snapshot while one is in flight.
+  useEffect(() => {
+    if (!qqLogin || !qqLogin.loginId) return;
+    const done = qqLogin.status === "confirmed" || qqLogin.status === "error" || qqLogin.status === "canceled";
+    if (done) return;
+    const iv = setInterval(async () => {
+      const s = await window.piDesk.imQqLoginStatus(qqLogin.loginId);
+      if (!s) {
+        clearInterval(iv);
+        return;
+      }
+      setQqLogin(s);
+      if (s.status === "confirmed" && s.credentials) {
+        const c = s.credentials;
+        setConfig((prev) => ({ ...prev, appId: c.appId, appSecret: c.appSecret }));
+      }
+    }, 2000);
+    return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qqLogin?.loginId, qqLogin?.status]);
+
   const canSave = useMemo(() => {
     if (!name.trim()) return false;
     if (type === "weixin") {
       // WeChat: binding must have completed (token written into config).
       return Boolean(config["token"] && config["botId"]);
+    }
+    if (type === "qq") {
+      // QQ: binding must have completed (appId/appSecret written).
+      return Boolean(config["appId"] && config["appSecret"]);
     }
     return fields.every((f) => (config[f.key] ?? "").trim() !== "");
   }, [name, config, fields, type]);
@@ -365,6 +422,100 @@ export default function ImChannelModal({
                 </button>
               )}
             </div>
+          ) : type === "qq" ? (
+            <div className={styles.field}>
+              <span className={styles.fieldLabel}>{t("im.qqBindTitle")}</span>
+
+              {qqLogin && qqLogin.status === "confirmed" && (
+                <div className={styles.wxBound}>
+                  <Check size={16} />
+                  <span>{t("im.qqBound", { appId: config["appId"] ?? "" })}</span>
+                </div>
+              )}
+
+              {!qqLogin && boundQqAppId && (
+                <div className={styles.wxBound}>
+                  <Check size={16} />
+                  <span>{t("im.qqBound", { appId: boundQqAppId })}</span>
+                </div>
+              )}
+
+              {!qqLogin && !boundQqAppId && (
+                <>
+                  <p className={styles.fieldHint}>{t("im.qqBindHint")}</p>
+                  <button
+                    type="button"
+                    className={styles.wxBindBtn}
+                    onClick={() => void startQqLogin()}
+                    disabled={qqFetching}
+                  >
+                    {qqFetching ? t("im.qqFetching") : t("im.qqBindStart")}
+                  </button>
+                </>
+              )}
+
+              {qqLogin && qqLogin.status !== "confirmed" && (
+                <div className={styles.wxQrArea}>
+                  {qqLogin.qrcodeUrl ? (
+                    <img
+                      className={styles.wxQrImg}
+                      src={qqLogin.qrcodeUrl}
+                      alt="QQ QR"
+                      onError={() => setQqQrError(true)}
+                    />
+                  ) : (
+                    <div className={styles.wxQrEmpty}>{t("im.qqFetching")}</div>
+                  )}
+
+                  <div className={styles.wxStatus}>
+                    {qqLogin.status === "error"
+                      ? qqLogin.message
+                      : t("im.qqScanWait")}
+                  </div>
+
+                  {qqQrError && qqLogin.qrcode && (
+                    <p className={styles.wxLink}>
+                      {t("im.qqLinkFallback")}
+                      <span className={styles.wxLinkUrl}>{qqLogin.qrcode}</span>
+                    </p>
+                  )}
+
+                  <div className={styles.wxActions}>
+                    {qqLogin.status === "error" && (
+                      <button
+                        type="button"
+                        className={styles.wxBindBtn}
+                        onClick={() => void startQqLogin()}
+                        disabled={qqFetching}
+                      >
+                        {t("im.qqBindStart")}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className={styles.wxGhostBtn}
+                      onClick={cancelQqLogin}
+                    >
+                      {t("im.qqCancel")}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {(boundQqAppId || qqLogin?.status === "confirmed") && (
+                <button
+                  type="button"
+                  className={styles.wxGhostBtn}
+                  onClick={() => {
+                    setQqLogin(null);
+                    void startQqLogin();
+                  }}
+                  disabled={qqFetching}
+                >
+                  {t("im.qqRebind")}
+                </button>
+              )}
+            </div>
           ) : (
             fields.map((f) => (
               <label key={f.key} className={styles.field}>
@@ -386,6 +537,30 @@ export default function ImChannelModal({
           )}
 
           {notImpl && <div className={styles.notImpl}>{t(notImpl)}</div>}
+
+          {/* Channel-level command approval (Linear-style row: label + desc + compact switch). */}
+          <div className={styles.field}>
+            <div className={styles.approvalRow}>
+              <div className={styles.approvalCopy}>
+                <span className={styles.fieldLabel}>{t("im.approval")}</span>
+                <span className={styles.approvalHint}>{t("im.approvalHint")}</span>
+              </div>
+              <label
+                className={`${styles.approvalSwitch} ${
+                  config["approval"] === "on" ? styles.approvalSwitchOn : ""
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={config["approval"] === "on"}
+                  onChange={(e) =>
+                    setConfig({ ...config, approval: e.target.checked ? "on" : "off" })
+                  }
+                />
+                <span className={styles.approvalSlider} />
+              </label>
+            </div>
+          </div>
 
           {/* 默认工作区（可选） */}
           <div className={styles.field}>

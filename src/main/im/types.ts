@@ -62,4 +62,19 @@ export interface ImChannelAdapter {
   beginStream?(target: string): Promise<void>;
   streamText?(target: string, text: string, finished?: boolean): Promise<void>;
   endStream?(target: string, text: string): Promise<void>;
+  /**
+   * Optional inline-keyboard approval message (QQ buttons). Channels without
+   * this fall back to a plain-text /allow /deny message. Button ids encode
+   * the approval decision, e.g. "allow:3".
+   */
+  sendKeyboard?(
+    target: string,
+    text: string,
+    buttons: { id: string; label: string; style?: 1 | 2 }[],
+  ): Promise<void>;
+  /**
+   * Optional interaction (button click) hook — set by the gateway. Fired with
+   * the clicked button id (and the clicker's user id when known).
+   */
+  onInteraction?: (buttonId: string, userId?: string) => void;
 }
