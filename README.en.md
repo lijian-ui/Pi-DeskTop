@@ -19,6 +19,7 @@ Pi Desktop is a desktop client for Pi, the AI coding agent. It never modifies an
 - **File management**: browse the workspace from a sidebar file manager, search files, preview contents; reference files with `@` in chat to attach them as cards sent along with your message.
 - **Soul persona**: edit persona in settings, injected at the very bottom of the system prompt, hot-reloaded every turn.
 - **Security center**: bash dangerous-command blacklist / whitelist, confirmation dialog for sensitive commands (isolated per workspace).
+- **IM gateway**: chat with the AI from your phone via DingTalk / WeChat / QQ bots — text, images, voice, slash commands, command approval, and scheduled-task result push (see [IM Gateway](#im-gateway-dingtalk--wechat--qq)).
 - **System tray**: clicking X minimizes to the tray; left-click toggles the window, right-click menu to quit.
 - **Auto-update**: electron-updater against Gitee (primary) / GitHub (mirror); users upgrade automatically after each release.
 - **Session export**: export a session to a standalone HTML file.
@@ -87,6 +88,18 @@ npm run build:electron   # produces .dmg + .zip under release/
 ```
 
 > node-pty ships prebuilt darwin-arm64 / darwin-x64 binaries (N-API), so `npm install` on macOS skips compilation; if you hit compile errors, check Xcode CLT.
+
+## IM Gateway (DingTalk / WeChat / QQ)
+
+Configure bots on the **"IM Gateway"** page and chat with the AI from your phone. IM sessions appear in the desktop sidebar, can be continued there, and can be bound / migrated to any workspace.
+
+| Channel | How to connect | Credentials |
+|---|---|---|
+| **DingTalk** | internal-org robot (Stream long connection, no public callback URL) | AppKey + AppSecret |
+| **WeChat** | **QR scan login** (official iLink protocol, no AppID/AppSecret) | phone WeChat scan |
+| **QQ** | **QR scan login** (official bot SDK) | phone QQ scan (writes AppID + AppSecret automatically) |
+
+Capabilities: text / image (multimodal) / voice (server-side ASR) / file sending & receiving, quoted-message context, streaming replies (DingTalk AI cards, QQ typewriter), slash commands (`/model` `/status` `/compact` `/reset` ...), **channel command approval** (QQ inline buttons; text commands `/allow` `/deny` `/allow_always` or `allow:1` on DingTalk/WeChat — channel approval overrides the desktop global mode, the danger blacklist is always enforced), "allow & remember" whitelisting, and **scheduled-task result push** to a chosen channel.
 
 ## Runtime Config (Windows: `~/.pi/agent/` · macOS: `~/Documents/PiAgent/`)
 
