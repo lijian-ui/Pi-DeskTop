@@ -115,7 +115,7 @@ npm run build:electron   # 产出 release/ 下的 .dmg + .zip
 
 ### 斜杠命令
 
-`/model`（切换模型）· `/status`（查看目录与模型）· `/compact`（压缩上下文）· `/allow` `/deny` `/allow_always`（审批响应，见下）· `/reset` `/clear` `/new`（新会话）· `/help`
+`/model`（切换模型）· `/status`（查看目录与模型）· `/compact`（压缩上下文）· `/stop`（停止当前运行，含正在执行的命令）· `/allow` `/deny` `/allow_always`（审批响应，见下）· `/reset` `/clear` `/new`（新会话）· `/help`
 
 ### 命令审批（安全）
 

@@ -1370,6 +1370,12 @@ export class PiDeskSessionManager {
     const unit = cwd ? this.units.get(cwd) : this.units.get(this.cwd ?? "");
     if (!unit) return;
     try {
+      const session = unit.runtime.session as any;
+      // Kill any in-flight bash command FIRST — session.abort() alone only
+      // stops the agent loop and then waits for the bash child to finish on
+      // its own (the SDK calls abortBash only on dispose). Without this the
+      // stop button appears stuck while the command keeps running.
+      if (session?.abortBash) session.abortBash();
       await unit.runtime.session?.abort();
     } catch {
       // Abort raced the turn finishing; the prompt() finally clears the flag.

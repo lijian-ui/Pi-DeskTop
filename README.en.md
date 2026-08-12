@@ -99,7 +99,7 @@ Configure bots on the **"IM Gateway"** page and chat with the AI from your phone
 | **WeChat** | **QR scan login** (official iLink protocol, no AppID/AppSecret) | phone WeChat scan |
 | **QQ** | **QR scan login** (official bot SDK) | phone QQ scan (writes AppID + AppSecret automatically) |
 
-Capabilities: text / image (multimodal) / voice (server-side ASR) / file sending & receiving, quoted-message context, streaming replies (DingTalk AI cards, QQ typewriter), slash commands (`/model` `/status` `/compact` `/reset` ...), **channel command approval** (QQ inline buttons; text commands `/allow` `/deny` `/allow_always` or `allow:1` on DingTalk/WeChat — channel approval overrides the desktop global mode, the danger blacklist is always enforced), "allow & remember" whitelisting, and **scheduled-task result push** to a chosen channel.
+Capabilities: text / image (multimodal) / voice (server-side ASR) / file sending & receiving, quoted-message context, streaming replies (DingTalk AI cards, QQ typewriter), slash commands (`/model` `/status` `/compact` `/stop` `/reset` ...), **channel command approval** (QQ inline buttons; text commands `/allow` `/deny` `/allow_always` or `allow:1` on DingTalk/WeChat — channel approval overrides the desktop global mode, the danger blacklist is always enforced), "allow & remember" whitelisting, and **scheduled-task result push** to a chosen channel.
 
 ## Runtime Config (Windows: `~/.pi/agent/` · macOS: `~/Documents/PiAgent/`)
 

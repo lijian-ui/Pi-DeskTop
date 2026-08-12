@@ -82,6 +82,7 @@ const HELP_TEXT = [
   "- /status —— 查看当前会话的工作目录与模型",
   "- /compact —— 压缩上下文（减少 token 占用）",
   "- /allow <ID> / /deny <ID> —— 允许 / 拒绝命令审批",
+  "- /stop —— 停止当前正在运行的任务（含正在执行的命令）",
   "- /reset /clear /new —— 开启新会话",
   "其他内容将直接发送给 AI 处理。",
 ].join("\n");
@@ -584,6 +585,22 @@ export class ImGateway {
     },
   ): Promise<boolean> {
     const lower = name.toLowerCase();
+    if (lower === "stop") {
+      // Abort the running turn for this session's cwd — kills any in-flight
+      // bash command too (session-manager.abort → abortBash).
+      try {
+        await this.piManager.abort(ctx.cwd);
+        await ctx.adapter.sendText(ctx.peer, "⏹️ 已停止");
+      } catch (err) {
+        await ctx.adapter
+          .sendText(
+            ctx.peer,
+            `⚠️ 停止失败：${err instanceof Error ? err.message : String(err)}`,
+          )
+          .catch(() => {});
+      }
+      return true;
+    }
     if (lower === "reset" || lower === "clear" || lower === "new") {
       await this.sessionMap.delete(ctx.sessionKey);
       await ctx.adapter.sendText(ctx.peer, "✅ 已开启新会话");
