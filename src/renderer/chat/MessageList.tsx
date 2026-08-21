@@ -1,11 +1,63 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
-import { useAgentStore } from "../store/agent-store";
+import { useAgentStore, type Message } from "../store/agent-store";
 import { useUIStore } from "../store/ui-store";
 import { useTranslation } from "react-i18next";
 import UserMessage from "./UserMessage";
-import AssistantMessage from "./AssistantMessage";
+import AssistantTurn from "./AssistantTurn";
 import styles from "./MessageList.module.css";
+
+type RenderItem =
+  | { type: "user"; message: Message }
+  | { type: "turn"; messages: Message[] };
+
+/**
+ * Group contiguous assistant messages into a single "turn" item, while leaving
+ * user messages as standalone items. Each turn gets EXACTLY ONE Pi avatar in
+ * the UI (its intermediate process output — thinking / tools / intermediate
+ * replies — all live inside a single collapsible panel; only the final reply
+ * text is shown expanded). Contiguity is broken only by user messages.
+ */
+/** Ghost assistant messages: empty content + no thinking + not streaming
+ *  + no tool calls. Leftover placeholders from duplicate message_start events
+ *  that were never filled. They are dropped so they never render as an empty
+ *  Pi bubble. */
+function isGhost(msg: Message): boolean {
+  return (
+    msg.role !== "user" &&
+    !(
+      msg.content?.trim() ||
+      msg.thinking?.trim() ||
+      msg.isStreaming ||
+      msg.toolExecutions?.length
+    )
+  );
+}
+
+function buildRenderItems(msgs: Message[]): RenderItem[] {
+  const items: RenderItem[] = [];
+  let currentTurn: Message[] = [];
+
+  const flush = () => {
+    if (currentTurn.length) {
+      items.push({ type: "turn", messages: currentTurn });
+      currentTurn = [];
+    }
+  };
+
+  for (const msg of msgs) {
+    if (msg.role === "user") {
+      flush();
+      items.push({ type: "user", message: msg });
+      continue;
+    }
+    if (isGhost(msg)) continue; // drop placeholders, keep the turn contiguous
+    currentTurn.push(msg);
+  }
+  flush();
+
+  return items;
+}
 
 /** How close (px) to the bottom still counts as "at the bottom". */
 const BOTTOM_THRESHOLD = 80;
@@ -249,42 +301,41 @@ export default function MessageList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchOpen, searchTrigger, searchIndex, searchMatchIds, visibleCount]);
 
-  // Only render the most recent `visibleCount` messages; older ones are
-  // revealed on demand as the user scrolls up.
-  const startIdx = Math.max(0, messages.length - visibleCount);
-  const visibleMessages = messages.slice(startIdx);
+  // Group the full message list into turns; turns are NOT chunked by
+  // virtual-scrolling so an assistant's turn (avatar + collapsible bubble)
+  // never gets split across page boundaries.
+  const renderItems = useMemo(() => buildRenderItems(messages), [messages]);
+
+  // Only render the most recent `visibleCount` turns; older ones are revealed
+  // on demand as the user scrolls up.
+  const startIdx = Math.max(0, renderItems.length - visibleCount);
+  const visibleItems = renderItems.slice(startIdx);
   const activeId = searchMatchIds[searchIndex] ?? "";
 
   return (
     <div className={styles.messageListWrapper}>
       <div className={styles.messageList} ref={listRef} onScroll={handleScroll}>
         <div className={styles.listInner}>
-          {visibleCount < messages.length && (
+          {visibleCount < renderItems.length && (
             <div className={styles.historyHint}>
               {t("chat.historyOlder")}
             </div>
           )}
-          {visibleMessages
-            // Filter out ghost assistant messages: empty content + no thinking +
-            // not currently streaming. These are leftover placeholders from
-            // duplicate message_start events that were never filled with content.
-            .filter(
-              (msg) =>
-                msg.role === "user" ||
-                !!(
-                  msg.content?.trim() ||
-                  msg.thinking?.trim() ||
-                  msg.isStreaming ||
-                  msg.toolExecutions?.length
-                )
-            )
-            .map((msg) => {
-              const highlight = msg.id === activeId;
-              if (msg.role === "user") {
-                return <UserMessage key={msg.id} message={msg} highlight={highlight} />;
-              }
-              return <AssistantMessage key={msg.id} message={msg} highlight={highlight} />;
-            })}
+          {visibleItems.map((item) => {
+            if (item.type === "user") {
+              const msg = item.message;
+              return (
+                <UserMessage key={msg.id} message={msg} highlight={msg.id === activeId} />
+              );
+            }
+            return (
+              <AssistantTurn
+                key={`turn-${item.messages[0].id}`}
+                messages={item.messages}
+                highlight={item.messages.some((m) => m.id === activeId)}
+              />
+            );
+          })}
           <div className={styles.scrollAnchor} ref={anchorRef} />
         </div>
       </div>

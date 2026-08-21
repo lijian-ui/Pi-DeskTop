@@ -71,33 +71,35 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
         const imgs = extractImages(ev.message.content, ev.messageId ?? `m${msgCounter}`);
         if (imgs.length) images = imgs;
       }
-      return [
-        ...msgs,
-        {
-          id: ev.messageId ?? `msg-${++msgCounter}`,
-          role,
-          content,
-          images,
-          isStreaming: role === "assistant",
-          timestamp: Date.now(),
-        },
-      ];
+      const newMsg = {
+        id: ev.messageId ?? `msg-${++msgCounter}`,
+        role,
+        content,
+        images,
+        isStreaming: role === "assistant",
+        timestamp: Date.now(),
+      };
+      return [...msgs, newMsg];
     }
 
     case "message_update": {
-      const delta = ev.assistantMessageEvent?.delta;
+      const delta = ev.assistantMessageEvent?.delta ?? ev.delta;
+      const subType = ev.assistantMessageEvent?.type ?? ev.type;
       // Short-circuit empty deltas by returning the SAME array reference.
       // mutateBuffer → setMessages keeps the identical reference, so the
       // store notifies nothing and React bails out — zero re-render cost for
       // events that carry no visible content.
-      if (typeof delta !== "string" || delta.length === 0) return msgs;
-      if (ev.assistantMessageEvent?.type === "text_delta") {
+      if (typeof delta !== "string" || delta.length === 0) {
+        return msgs;
+      }
+      if (subType === "text_delta") {
+        const last = msgs[msgs.length - 1];
         return msgs.map((m, i) =>
           i === msgs.length - 1 && m.role === "assistant"
             ? { ...m, content: m.content + delta }
             : m
         );
-      } else if (ev.assistantMessageEvent?.type === "thinking_delta") {
+      } else if (subType === "thinking_delta") {
         return msgs.map((m, i) =>
           i === msgs.length - 1 && m.role === "assistant"
             ? { ...m, thinking: (m.thinking ?? "") + delta }
@@ -109,6 +111,7 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
 
     case "message_end": {
       const msg = ev.message;
+      const last = msgs[msgs.length - 1];
       return msgs.map((m, i) =>
         i === msgs.length - 1 && m.role === "assistant" && m.isStreaming
           ? {
@@ -171,6 +174,11 @@ function drainQueue() {
     const s = useAgentStore.getState();
     if (s.messageQueue.length === 0) return;
     const next = s.messageQueue[0];
+    // Dequeue NOW: the message is in-flight — the queue panel must not keep
+    // showing it while the LLM is already answering it (it previously only
+    // vanished when the reply finished, so a 1-item queue lingered through
+    // the whole reply). On failure we put it back at the head below.
+    useAgentStore.getState().removeQueuedMessage(next.id);
     s.addMessage({
       id: `user-${Date.now()}`,
       role: "user",
@@ -196,13 +204,15 @@ function drainQueue() {
     window.piDesk
       .prompt(next.content, images, cwd, path ?? undefined)
       .then(() => {
-        // Success — safe to drop from the queue.
-        useAgentStore.getState().removeQueuedMessage(next.id);
+        // Already dequeued at send time — nothing to remove here.
       })
       .catch((err: any) => {
-        // Failure — remove the optimistic user bubble and surface the error,
-        // but KEEP the message in the queue so the user can retry or edit it
-        // instead of losing their input silently.
+        // Failure — put the message BACK at the head of the queue (the
+        // optimistic user bubble stays visible) so the user can retry or
+        // edit it instead of losing their input silently.
+        useAgentStore.setState((st) => ({
+          messageQueue: [next, ...st.messageQueue],
+        }));
         useAgentStore.getState().setError(err?.message ?? "Failed to send queued message");
       });
   });
@@ -231,6 +241,26 @@ export function useAgentSession() {
 
       if (CONTENT_EVENTS.has(ev.type)) {
         session.mutateBuffer(targetPath, (msgs) => reduceMessageEvent(msgs, ev));
+        // The SDK may fork a continuation session file (a brand-new path) in
+        // the middle of a long task, or a background session may start
+        // streaming. When content flows into a session that is NOT the one the
+        // chat panel is currently showing, follow it — otherwise the panel
+        // stays pinned to the old session and shows a stuck "requesting"
+        // placeholder while the real output accumulates in a background
+        // buffer (it is only mirrored to the panel when path === currentPath).
+        // Guard with the target session actually having a streaming assistant
+        // message, so merely hovering over a finished background session never
+        // yanks focus away from what the user is reading.
+        const liveStore = useSessionStore.getState();
+        if (targetPath && targetPath !== liveStore.currentPath) {
+          const targetStreaming = (liveStore.messagesByPath.get(targetPath) ?? []).some(
+            (m) => m.role === "assistant" && m.isStreaming,
+          );
+          if (targetStreaming) {
+            liveStore.setCurrentPath(targetPath);
+            liveStore.syncFocus(targetPath);
+          }
+        }
         if (ev.type === "message_end") {
           // Refresh the session list (debounced — a tool loop can end dozens
           // of messages in a burst) so counts / new sessions stay current.

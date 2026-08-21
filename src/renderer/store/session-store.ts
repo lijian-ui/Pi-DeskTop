@@ -529,7 +529,9 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const next = fn(prev);
     // Short-circuit: if the reducer returned the same reference, skip the
     // Map copy entirely (happens on empty streaming deltas).
-    if (next === prev) return;
+    if (next === prev) {
+      return;
+    }
     // Mutate the existing Map in-place and trigger Zustand update via
     // a new reference. This avoids copying all entries on every token.
     state.messagesByPath.set(path, next);

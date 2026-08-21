@@ -1,0 +1,144 @@
+.assistantTurn {
+  position: relative;
+  display: flex;
+  gap: var(--spacer-12);
+  align-items: flex-start;
+}
+
+.avatarRow {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  margin-top: 2px;
+}
+
+.avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  background: var(--bg-brand);
+  color: var(--text-onbrand);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-family-heading);
+  font-weight: var(--font-weight-strong);
+  font-size: var(--body-xs-font-size);
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-8);
+}
+
+.content {
+  min-width: 0;
+}
+
+.typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.typingText {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+  line-height: 1;
+  user-select: none;
+}
+
+.typingDots {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.typingDots span {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--bg-brand);
+  opacity: 0.4;
+  animation: typingBounce 1.2s infinite ease-in-out;
+}
+
+.typingDots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typingDots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typingBounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-12);
+  margin-top: var(--spacer-4);
+  padding-right: var(--spacer-4);
+}
+
+.time {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+}
+
+.stoppedBadge {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--body-xs-font-size);
+  color: var(--status-error-default);
+  background: var(--status-error-surface-l1);
+  border: 1px solid var(--status-error-default);
+  border-radius: var(--radius-full);
+  padding: 1px var(--spacer-6);
+  line-height: 1.4;
+}
+
+.copyBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-4);
+  font-size: var(--body-xs-font-size);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.copyBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.copyLabel {
+  line-height: 1;
+}
+
+.highlight {
+  outline: 2px solid var(--border-brand);
+  outline-offset: 3px;
+  border-radius: var(--radius-8);
+}
