@@ -10,7 +10,7 @@
  * dedup and a patch so card-action events (type="card") are routed through
  * the EventDispatcher (which only accepts type="event").
  */
-import type * as Lark from "@larksuiteoapi/node-sdk";
+import * as Lark from "@larksuiteoapi/node-sdk";
 
 const DEDUP_TTL_MS = 5 * 60 * 1000;
 

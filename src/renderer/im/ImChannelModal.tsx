@@ -21,6 +21,13 @@ import styles from "./ImChannelModal.module.css";
 /** Channel types the UI lets the user pick from. */
 const CHANNEL_TYPES: ImChannelType[] = ["dingtalk", "weixin", "qq", "feishu"];
 
+/**
+ * Channels whose adapter implements `sendVoice` — only these get the TTS
+ * voice-reply switches. Keep in sync with the adapters in src/main/im/*.
+ * qq → SILK, feishu → Opus(OGG), dingtalk → AMR-NB.
+ */
+const VOICE_CAPABLE_TYPES: ImChannelType[] = ["qq", "feishu", "dingtalk"];
+
 function newId(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `ch-${Date.now()}`;
 }
@@ -80,6 +87,7 @@ export default function ImChannelModal({
 
   const fields = TYPE_FIELDS[type];
   const notImpl = NOT_IMPL[type];
+  const supportsVoice = VOICE_CAPABLE_TYPES.includes(type);
 
   // ── WeChat QR bind state ──
   const [wxLogin, setWxLogin] = useState<WeixinLoginStatus | null>(null);
@@ -239,8 +247,8 @@ export default function ImChannelModal({
       enabled: editInstance?.enabled ?? true,
       config,
       cwd: trimmedWs ? trimmedWs : undefined,
-      ttsReply: (type === "qq" || type === "feishu") ? ttsReply : undefined,
-      ttsVoiceOnly: (type === "qq" || type === "feishu") ? ttsVoiceOnly : undefined,
+      ttsReply: supportsVoice ? ttsReply : undefined,
+      ttsVoiceOnly: supportsVoice ? ttsVoiceOnly : undefined,
     };
     try {
       await onSave(instance);
@@ -574,8 +582,8 @@ export default function ImChannelModal({
             </div>
           </div>
 
-          {/* TTS voice reply (QQ + Feishu) */}
-          {(type === "qq" || type === "feishu") && (
+          {/* TTS voice reply (channels whose adapter implements sendVoice) */}
+          {supportsVoice && (
             <div className={styles.field}>
               <div className={styles.approvalRow}>
                 <div className={styles.approvalCopy}>
@@ -590,7 +598,11 @@ export default function ImChannelModal({
                   <input
                     type="checkbox"
                     checked={ttsReply}
-                    onChange={(e) => setTtsReply(e.target.checked)}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setTtsReply(v);
+                      if (!v) setTtsVoiceOnly(false);
+                    }}
                   />
                   <span className={styles.approvalSlider} />
                 </label>
@@ -598,8 +610,8 @@ export default function ImChannelModal({
             </div>
           )}
 
-          {/* Voice-only mode (QQ/Feishu + ttsReply only) */}
-          {(type === "qq" || type === "feishu") && ttsReply && (
+          {/* Voice-only mode (voice-capable channels; auto-enables voice reply) */}
+          {supportsVoice && (
             <div className={styles.field}>
               <div className={styles.approvalRow}>
                 <div className={styles.approvalCopy}>
@@ -614,7 +626,11 @@ export default function ImChannelModal({
                   <input
                     type="checkbox"
                     checked={ttsVoiceOnly}
-                    onChange={(e) => setTtsVoiceOnly(e.target.checked)}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      if (v) setTtsReply(true);
+                      setTtsVoiceOnly(v);
+                    }}
                   />
                   <span className={styles.approvalSlider} />
                 </label>

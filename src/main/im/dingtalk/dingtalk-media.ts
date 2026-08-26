@@ -48,8 +48,8 @@ async function getOapiAccessToken(cfg: DingtalkCredentials): Promise<string | nu
 
 /** Result of uploading a local file to DingTalk media storage. */
 export interface DingtalkUploadResult {
-  /** Raw media_id as returned by the API. The leading `@` is significant:
-   *  sampleImageMsg.photoURL and sampleFile.mediaId both require it
+  /** Raw media_id as returned by the API. The leading `@` is significant for
+   *  sampleImageMsg.photoURL, sampleFile.mediaId and sampleAudio.mediaId
    *  (mirrors the DingTalk OpenClaw SDK / novaclaw). */
   mediaId: string;
 }
@@ -68,9 +68,18 @@ export async function uploadDingtalkMedia(
     const token = await getOapiAccessToken(cfg);
     if (!token) return null;
     const form = new FormData();
+    // Content-Type must match the media kind — DingTalk rejects/garbles audio
+    // uploaded as generic octet-stream. Voice needs audio/amr (reference:
+    // dingtalk-openclaw-connector media.ts uploadMediaToDingTalk).
+    const contentType =
+      mediaType === "image"
+        ? "image/jpeg"
+        : mediaType === "voice"
+          ? "audio/amr"
+          : "application/octet-stream";
     form.append("media", createReadStream(filePath), {
       filename: basename(filePath),
-      contentType: mediaType === "image" ? "image/jpeg" : "application/octet-stream",
+      contentType,
     });
     const res = await axios.post(`${DINGTALK_OAPI}/media/upload`, form, {
       params: { access_token: token, type: mediaType },

@@ -7,10 +7,10 @@
  */
 import type * as Lark from "@larksuiteoapi/node-sdk";
 
-const CHUNK_LIMIT = 28_000;
+export const CHUNK_LIMIT = 28_000;
 
 /** Build a post-format content payload with a single markdown block. */
-function buildPostContent(text: string): string {
+export function buildPostContent(text: string): string {
   return JSON.stringify({
     zh_cn: { content: [[{ tag: "md", text }]] },
   });
@@ -117,7 +117,7 @@ export async function uploadFeishuImage(
   const res = await client.im.image.create({
     data: { image_type: "message", image },
   });
-  return res?.data?.image_key ?? null;
+  return res?.image_key ?? null;
 }
 
 /**

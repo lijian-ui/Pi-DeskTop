@@ -15,16 +15,20 @@ import type {
   ImStatus,
 } from "../types";
 import type { ImChannelInstance } from "../im-config";
-import { statSync } from "node:fs";
-import { basename } from "node:path";
+import { statSync, writeFileSync, unlinkSync } from "node:fs";
+import { basename, join } from "node:path";
+import { tmpdir } from "node:os";
 import { DingtalkConnection } from "./dingtalk-connection";
 import {
   sendDingtalkText,
   sendDingtalkMarkdown,
   sendDingtalkImage,
   sendDingtalkFile,
+  sendDingtalkVoice,
   sendDingtalkWebhook,
 } from "./dingtalk-reply";
+import { wavToAmr, isFfmpegAvailable, getAudioDurationMs } from "../audio-convert";
+import { getActiveTtsConfig, synthesizeSpeech } from "../../tts/tts-service";
 import {
   uploadDingtalkMedia,
   downloadDingtalkMedia,
@@ -532,6 +536,54 @@ async sendKeyboard(
     } catch {
       // Finalize failed — send the full reply as a (chunked) markdown message.
       await this.sendText(target, text).catch(() => {});
+    }
+  }
+
+  /**
+   * Voice reply: text → MiMo TTS → WAV → AMR → DingTalk voice message.
+   * Returns true on success, false on any failure (caller falls back to text).
+   */
+  async sendVoice(target: string, text: string): Promise<boolean> {
+    const info = this.peerInfo.get(target);
+    if (!info) return false;
+    if (!isFfmpegAvailable()) {
+      console.warn("[im:dingtalk] sendVoice: ffmpeg not available");
+      return false;
+    }
+    try {
+      const ttsConfig = await getActiveTtsConfig();
+      if (!ttsConfig) {
+        console.warn("[im:dingtalk] sendVoice: no active TTS config");
+        return false;
+      }
+      const { audioBase64 } = await synthesizeSpeech(ttsConfig, text);
+      const wavBuffer = Buffer.from(audioBase64, "base64");
+      const amrBuffer = wavToAmr(wavBuffer);
+      if (!amrBuffer) {
+        console.warn("[im:dingtalk] sendVoice: WAV→AMR conversion failed");
+        return false;
+      }
+      // uploadDingtalkMedia streams from a file path, so persist the AMR first.
+      const amrPath = join(tmpdir(), `tts-${Date.now()}.amr`);
+      writeFileSync(amrPath, amrBuffer);
+      try {
+        const up = await uploadDingtalkMedia(this.credentials, amrPath, "voice");
+        if (!up) {
+          console.warn("[im:dingtalk] sendVoice: upload failed");
+          return false;
+        }
+        const durationMs = getAudioDurationMs(amrPath);
+        // sampleAudio's mediaId field references the media_id returned by
+        // /media/upload (same as sampleImageMsg/sampleFile), NOT a download URL.
+        await sendDingtalkVoice(this.credentials, target, up.mediaId, info.isGroup, durationMs);
+        console.log("[im:dingtalk] voice reply sent OK");
+        return true;
+      } finally {
+        try { unlinkSync(amrPath); } catch { /* ignore */ }
+      }
+    } catch (err) {
+      console.warn("[im:dingtalk] sendVoice failed:", err);
+      return false;
     }
   }
 }

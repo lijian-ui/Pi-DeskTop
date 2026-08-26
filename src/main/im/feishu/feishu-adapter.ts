@@ -18,6 +18,8 @@ import { FeishuConnection, type FeishuCredentials } from "./feishu-connection";
 import {
   sendFeishuText,
   downloadFeishuResource,
+  buildPostContent,
+  CHUNK_LIMIT,
   type FeishuSendTarget,
 } from "./feishu-reply";
 import { getActiveTtsConfig, synthesizeSpeech } from "../../tts/tts-service";
@@ -88,6 +90,12 @@ export class FeishuAdapter implements ImChannelAdapter {
     { isGroup: boolean; receiveIdType: "chat_id" | "open_id"; replyToMessageId?: string }
   >();
 
+  /** peer → message_id of the placeholder post used for streaming updates. */
+  private streamMsgId = new Map<string, string>();
+
+  /** open_id → resolved display name (avoids repeated contact API calls). */
+  private userNameCache = new Map<string, string>();
+
   onMessage?: (msg: ImInboundMessage) => void;
   onStatusChange?: (status: ImStatus) => void;
 
@@ -134,11 +142,48 @@ export class FeishuAdapter implements ImChannelAdapter {
   async stop(): Promise<void> {
     await this.conn?.stop();
     this.conn = null;
+    this.streamMsgId.clear();
+    this.userNameCache.clear();
     this.setStatus("off");
   }
 
   getStatus(): ImStatus {
     return this.status;
+  }
+
+  /**
+   * Resolve a Feishu open_id to a display name. The receive_v1 event only
+   * carries the open_id, so we look up the contact API (cached). Falls back to
+   * the open_id when the app lacks contact scope or the lookup fails.
+   */
+  private async resolveSenderName(openId: string): Promise<string> {
+    if (!openId) return openId;
+    const cached = this.userNameCache.get(openId);
+    if (cached) return cached;
+    if (!this.conn) {
+      this.userNameCache.set(openId, openId);
+      return openId;
+    }
+    try {
+      const res = await this.conn.client.contact.user.get({
+        path: { user_id: openId },
+        params: { user_id_type: "open_id" },
+      });
+      const name =
+        res?.data?.user?.name ??
+        res?.data?.user?.nickname ??
+        res?.data?.user?.en_name ??
+        openId;
+      this.userNameCache.set(openId, name);
+      return name;
+    } catch (err) {
+      console.warn(
+        "[im:feishu] resolve sender name failed (contact scope required?):",
+        err,
+      );
+      this.userNameCache.set(openId, openId);
+      return openId;
+    }
   }
 
   /** Handle an im.message.receive_v1 event (already deduped + self-echo filtered). */
@@ -229,10 +274,107 @@ export class FeishuAdapter implements ImChannelAdapter {
       images,
       raw: {
         isGroup,
-        senderNick: data?.sender?.sender_id?.open_id,
+        senderNick: await this.resolveSenderName(senderOpenId),
         msgId: msg.message_id,
       },
     });
+  }
+
+  /** Build a Feishu send target for a peer from stored reply routing info. */
+  private targetFor(target: string): FeishuSendTarget {
+    const info = this.peerInfo.get(target);
+    return {
+      receiveIdType: info?.receiveIdType ?? "chat_id",
+      receiveId: target,
+      replyToMessageId: info?.replyToMessageId,
+    };
+  }
+
+  /**
+   * Streaming — begin: create a placeholder post message so subsequent
+   * streamText updates grow the same message in place.
+   */
+  async beginStream(target: string): Promise<void> {
+    if (!this.conn) return;
+    const t = this.targetFor(target);
+    try {
+      const content = buildPostContent("💭 思考中…");
+      let messageId: string | undefined;
+      if (t.replyToMessageId) {
+        const res = await this.conn.client.im.message.reply({
+          path: { message_id: t.replyToMessageId },
+          data: { content, msg_type: "post" },
+        });
+        messageId = (res as any)?.data?.message_id;
+      } else {
+        const res = await this.conn.client.im.message.create({
+          params: { receive_id_type: t.receiveIdType },
+          data: {
+            receive_id: t.receiveId,
+            msg_type: "post",
+            content,
+          },
+        });
+        messageId = (res as any)?.data?.message_id;
+      }
+      if (messageId) this.streamMsgId.set(target, messageId);
+    } catch (err) {
+      console.warn("[im:feishu] beginStream failed:", err);
+      this.streamMsgId.delete(target);
+    }
+  }
+
+  /**
+   * Streaming — update: patch the placeholder message with the accumulated
+   * text. Gateway already throttles/accumulates, so this grows smoothly.
+   */
+  async streamText(target: string, text: string): Promise<void> {
+    const id = this.streamMsgId.get(target);
+    if (!id || !this.conn) return;
+    if (text.length > CHUNK_LIMIT) return; // too long; endStream handles it
+    try {
+      await this.conn.client.im.message.update({
+        path: { message_id: id },
+        data: { content: buildPostContent(text), msg_type: "post" },
+      });
+    } catch (err) {
+      console.warn("[im:feishu] streamText update failed:", err);
+    }
+  }
+
+  /**
+   * Streaming — end: finalize the placeholder message (patch if within
+   * limit, else delete placeholder + fall back to chunked sendText).
+   */
+  async endStream(target: string, text: string): Promise<void> {
+    const id = this.streamMsgId.get(target);
+    this.streamMsgId.delete(target);
+    if (!this.conn) return;
+    if (!id) {
+      await this.sendText(target, text);
+      return;
+    }
+    if (text.length <= CHUNK_LIMIT) {
+      try {
+        await this.conn.client.im.message.update({
+          path: { message_id: id },
+          data: { content: buildPostContent(text), msg_type: "post" },
+        });
+        return;
+      } catch (err) {
+        console.warn(
+          "[im:feishu] endStream update failed, fallback to sendText:",
+          err,
+        );
+      }
+    }
+    // Long reply: remove placeholder, then send the full text as chunks.
+    try {
+      await this.conn.client.im.message.delete({ path: { message_id: id } });
+    } catch {
+      /* placeholder already gone — ignore */
+    }
+    await this.sendText(target, text);
   }
 
   async sendText(target: string, text: string): Promise<void> {
@@ -289,7 +431,7 @@ export class FeishuAdapter implements ImChannelAdapter {
           file: opusBuffer,
         },
       });
-      const fileKey = (uploadRes as any)?.data?.file_key;
+      const fileKey = (uploadRes as any)?.file_key;
       if (!fileKey) {
         console.warn("[im:feishu] sendVoice: upload failed, no file_key");
         return false;

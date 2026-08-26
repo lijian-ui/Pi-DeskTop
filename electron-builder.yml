@@ -7,6 +7,11 @@ directories:
 asar: true
 asarUnpack:
   - "node_modules/node-pty/**/*"
+  # @ffmpeg-installer/ffmpeg ships a prebuilt ffmpeg binary (executable) inside
+  # its platform sub-package (e.g. @ffmpeg-installer/win32-x64). The binary must
+  # be unpacked outside the asar archive to be executable; unpack the whole
+  # @ffmpeg-installer tree to keep the JS and binary co-located.
+  - "node_modules/@ffmpeg-installer/**/*"
 # node-pty ships prebuilt binaries (prebuilds/win32-x64/pty.node etc.) and is
 # N-API (ABI-stable), so it does NOT need to be rebuilt for Electron on Windows.
 # We keep npmRebuild:false here so electron-builder never runs node-gyp (which

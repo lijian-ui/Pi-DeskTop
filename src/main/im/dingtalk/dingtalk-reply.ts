@@ -249,6 +249,49 @@ export async function sendDingtalkFile(
 }
 
 /**
+ * Send a voice message referencing a media_id previously uploaded via
+ * uploadDingtalkMedia with type "voice". DingTalk's voice template is
+ * `sampleAudio` (there is no `sampleVoice` msgKey — sending that returns
+ * invalidParameter.msgKey.invalid). msgParam needs both the media_id and the
+ * duration in milliseconds.
+ */
+export async function sendDingtalkVoice(
+  cfg: DingtalkCredentials,
+  target: string,
+  mediaId: string,
+  isGroup: boolean,
+  durationMs: number = 0,
+): Promise<void> {
+  const token = await getAccessToken(cfg);
+  const duration = durationMs && durationMs > 0 ? String(durationMs) : "60000";
+  const msgParam = JSON.stringify({ mediaId, duration });
+
+  if (isGroup) {
+    await axios.post(
+      `${DINGTALK_API}/v1.0/robot/groupMessages/send`,
+      {
+        robotCode: cfg.clientId,
+        openConversationId: target,
+        msgParam,
+        msgKey: "sampleAudio",
+      },
+      { headers: { "x-acs-dingtalk-access-token": token } },
+    );
+  } else {
+    await axios.post(
+      `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`,
+      {
+        robotCode: cfg.clientId,
+        userIds: [target],
+        msgParam,
+        msgKey: "sampleAudio",
+      },
+      { headers: { "x-acs-dingtalk-access-token": token } },
+    );
+  }
+}
+
+/**
  * Reply through the per-session webhook that DingTalk ships on every inbound
  * message (sessionWebhook). Group-only channel: unlike the v1.0 robot API
  * (which has NO @ support), the webhook endpoint can render mentions. The

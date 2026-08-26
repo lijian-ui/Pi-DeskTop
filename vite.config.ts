@@ -53,6 +53,11 @@ export default defineConfig({
                 // keep it external and let Electron resolve at runtime (same
                 // pattern as dingtalk-stream above).
                 "@larksuiteoapi/node-sdk",
+                // @ffmpeg-installer/ffmpeg ships a prebuilt ffmpeg binary hosted
+                // on the npm registry (not GitHub); keep it external so the binary
+                // stays in node_modules and is resolved at runtime (it must be
+                // asarUnpack'd by electron-builder to be executable).
+                "@ffmpeg-installer/ffmpeg",
               ],
             },
           },
