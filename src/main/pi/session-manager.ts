@@ -1347,7 +1347,7 @@ export class PiDeskSessionManager {
   }
 
   async steer(text: string, cwd?: string, sessionPath?: string): Promise<void> {
-    const unit = cwd ? this.units.get(cwd) : this.units.get(this.cwd ?? "");
+    const unit = this.units.get(this.resolveCwd(cwd));
     if (!unit) return;
     if (unit.runningPath && unit.runningPath !== sessionPath) {
       this.webContents?.send("pi:rejected", { reason: "cwd-busy", cwd: unit.cwd, sessionPath });
@@ -1357,7 +1357,7 @@ export class PiDeskSessionManager {
   }
 
   async followUp(text: string, cwd?: string, sessionPath?: string): Promise<void> {
-    const unit = cwd ? this.units.get(cwd) : this.units.get(this.cwd ?? "");
+    const unit = this.units.get(this.resolveCwd(cwd));
     if (!unit) return;
     if (unit.runningPath && unit.runningPath !== sessionPath) {
       this.webContents?.send("pi:rejected", { reason: "cwd-busy", cwd: unit.cwd, sessionPath });
@@ -1367,14 +1367,10 @@ export class PiDeskSessionManager {
   }
 
   async abort(cwd?: string): Promise<void> {
-    const unit = cwd ? this.units.get(cwd) : this.units.get(this.cwd ?? "");
+    const unit = this.units.get(this.resolveCwd(cwd));
     if (!unit) return;
     try {
       const session = unit.runtime.session as any;
-      // Kill any in-flight bash command FIRST — session.abort() alone only
-      // stops the agent loop and then waits for the bash child to finish on
-      // its own (the SDK calls abortBash only on dispose). Without this the
-      // stop button appears stuck while the command keeps running.
       if (session?.abortBash) session.abortBash();
       await unit.runtime.session?.abort();
     } catch {

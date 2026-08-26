@@ -52,6 +52,13 @@ export interface ImChannelAdapter {
   onStatusChange?: (status: ImStatus) => void;
   /** Send a text reply to a peer (target = the raw peer id from sessionKey). */
   sendText(target: string, text: string): Promise<void>;
+  /**
+   * Optional voice reply — synthesizes text → audio → sends as a voice
+   * message. Only channels that support voice (QQ) implement this.
+   * Returns true on success, false if voice send failed (caller falls
+   * back to sendText).
+   */
+  sendVoice?(target: string, text: string): Promise<boolean>;
   /** Optional "typing…" indicator. */
   sendTyping?(target: string): Promise<void>;
   /**

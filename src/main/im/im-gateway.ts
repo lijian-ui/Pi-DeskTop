@@ -15,7 +15,9 @@ import { ImSessionMap, IM_CHAT_SUBDIR, readSessionCwd } from "./im-session-map";
 import { DingtalkAdapter } from "./dingtalk/dingtalk-adapter";
 import { WeixinAdapter } from "./weixin/weixin-adapter";
 import { QqAdapter } from "./qq/qq-adapter";
-import { join } from "node:path";
+import { FeishuAdapter } from "./feishu/feishu-adapter";
+import { join, basename } from "node:path";
+import { stat } from "node:fs/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /** Split "/name args" → { name, args }. Multi-slash tolerated. */
@@ -80,6 +82,10 @@ const HELP_TEXT = [
   "- /model —— 查看可用模型列表",
   "- /model <名称> —— 切换当前会话的模型",
   "- /status —— 查看当前会话的工作目录与模型",
+  "- /workspaces —— 列出所有工作区",
+  "- /workspace <路径> —— 切换工作区（需 /new 生效）",
+  "- /sessions —— 列出全部会话",
+  "- /continue <会话id> —— 继续已有会话",
   "- /compact —— 压缩上下文（减少 token 占用）",
   "- /allow <ID> / /deny <ID> —— 允许 / 拒绝命令审批",
   "- /stop —— 停止当前正在运行的任务（含正在执行的命令）",
@@ -171,6 +177,8 @@ export class ImGateway {
       /** Sender nickname — fake @ prefix on the final reply (groups only). */
       senderNick?: string;
       isGroup?: boolean;
+      /** Cached TTS voice-only flag — skip all text streaming when true. */
+      voiceOnly?: boolean;
     }
   >();
   /**
@@ -188,6 +196,10 @@ export class ImGateway {
   private approvalCwdInfo = new Map<string, { channel: string; instanceId: string }>();
   /** instanceId → most recent peer — used for task-completion pushes. */
   private lastPeerByInstanceId = new Map<string, string>();
+  /** sessionKey → pending workspace cwd set by /workspace, consumed on /new. */
+  private pendingWorkspace = new Map<string, string>();
+  /** sessionKey → (序号 → sessionPath) cache from the last /sessions listing. */
+  private sessionListCache = new Map<string, Map<number, string>>();
 
   constructor(private piManager: PiDeskSessionManager) {
     this.sessionMap = new ImSessionMap(piManager);
@@ -339,6 +351,9 @@ export class ImGateway {
       // QQ is QR-login bound: appId + appSecret come from the scan.
       return Boolean(inst.config?.appId && inst.config?.appSecret);
     }
+    if (inst.type === "feishu") {
+      return Boolean(inst.config?.appId && inst.config?.appSecret);
+    }
     return false;
   }
 
@@ -350,6 +365,8 @@ export class ImGateway {
         return new WeixinAdapter(inst);
       case "qq":
         return new QqAdapter(inst);
+      case "feishu":
+        return new FeishuAdapter(inst);
       default:
         console.warn(`[im] channel type "${inst.type}" not implemented`);
         return null;
@@ -414,9 +431,17 @@ export class ImGateway {
         () => join(getAgentDir(), "chat", IM_CHAT_SUBDIR, msg.channel),
       );
     } else {
-      effectiveCwd = instance?.cwd
-        ? instance.cwd
-        : join(getAgentDir(), "chat", IM_CHAT_SUBDIR, msg.channel);
+      // /workspace sets a pending cwd that takes priority over the channel
+      // default — consumed here on the first message after /new.
+      const pendingCwd = this.pendingWorkspace.get(msg.sessionKey);
+      if (pendingCwd) {
+        this.pendingWorkspace.delete(msg.sessionKey);
+        effectiveCwd = pendingCwd;
+      } else {
+        effectiveCwd = instance?.cwd
+          ? instance.cwd
+          : join(getAgentDir(), "chat", IM_CHAT_SUBDIR, msg.channel);
+      }
     }
 
     // Channel-level approval: track the peer for this cwd (used to send the
@@ -551,6 +576,10 @@ export class ImGateway {
       target: item.peer,
       senderNick: item.senderNick,
       isGroup: item.isGroup,
+      voiceOnly: (() => {
+        const inst = this.channels.find((c) => c.id === item.adapter.instanceId);
+        return !!(inst?.ttsReply && inst?.ttsVoiceOnly && item.adapter.sendVoice);
+      })(),
     });
     try {
       await this.piManager.prompt(item.text, item.images, item.effectiveCwd, sessionPath);
@@ -690,6 +719,121 @@ export class ImGateway {
       }
       return true;
     }
+    if (lower === "workspaces") {
+      // List all known workspaces: recent (memory) + inferred from session
+      // history (every session file's header carries a cwd). Dedup and mark
+      // the current session's cwd.
+      const recents = this.piManager.getRecentCwds();
+      const sessions = await this.piManager.listSessions().catch(() => []);
+      const cwdSet = new Set<string>(recents);
+      for (const s of sessions) {
+        if (s?.cwd) cwdSet.add(s.cwd);
+      }
+      const chatOnly = this.piManager.getChatOnlyCwd();
+      cwdSet.add(chatOnly);
+      const all = [...cwdSet].filter(Boolean);
+      if (all.length === 0) {
+        await ctx.adapter.sendText(ctx.peer, "📂 暂无工作区");
+        return true;
+      }
+      const lines = ["📂 可用工作区（带 ✅ 的是当前会话）："];
+      for (const cwd of all) {
+        const mark = cwd === ctx.cwd ? " ✅" : "";
+        lines.push(`- ${cwd}${mark}`);
+      }
+      lines.push("", "用 /workspace <路径> 切换工作区（需 /new 生效）");
+      await ctx.adapter.sendText(ctx.peer, lines.join("\n"));
+      return true;
+    }
+    if (lower === "workspace") {
+      const path = args.trim();
+      if (!path) {
+        // No arg → show current + pending.
+        const pending = this.pendingWorkspace.get(ctx.sessionKey);
+        const lines = [
+          `📁 当前工作区：${ctx.cwd}`,
+          pending ? `⏳ 待切换：${pending}（/new 后生效）` : "用 /workspace <路径> 设置待切换工作区",
+        ];
+        await ctx.adapter.sendText(ctx.peer, lines.join("\n"));
+        return true;
+      }
+      // Validate the path exists and is a directory.
+      try {
+        const s = await stat(path);
+        if (!s.isDirectory()) {
+          await ctx.adapter.sendText(ctx.peer, `⚠️ 不是目录：${path}`);
+          return true;
+        }
+      } catch {
+        await ctx.adapter.sendText(ctx.peer, `⚠️ 路径不存在：${path}`);
+        return true;
+      }
+      this.pendingWorkspace.set(ctx.sessionKey, path);
+      await ctx.adapter.sendText(
+        ctx.peer,
+        `✅ 已设置工作区：${path}\n下次 /new 将在此目录创建新会话`,
+      );
+      return true;
+    }
+    if (lower === "sessions") {
+      // List all Pi sessions (across every workspace). Each session is shown
+      // with a short number (1, 2, …) for easy /continue, plus the first
+      // message and workspace directory. The current session is marked ✅.
+      const sessions = await this.piManager.listSessions().catch(() => []);
+      if (!sessions.length) {
+        await ctx.adapter.sendText(ctx.peer, "📋 暂无会话");
+        return true;
+      }
+      const currentPath = this.sessionMap.pathOf(ctx.sessionKey);
+      const numMap = new Map<number, string>();
+      const lines = ["📋 全部会话（用 /continue <id或编号> 继续）："];
+      let num = 0;
+      for (const s of sessions) {
+        if (!s?.path) continue;
+        num++;
+        numMap.set(num, s.path);
+        const mark = s.path === currentPath ? " ✅" : "";
+        const preview = (s.firstMessage ?? "").slice(0, 40) || "(空)";
+        const cwdName = s.cwd ? basename(s.cwd) : "?";
+        lines.push(`${num}. ${preview} (${cwdName})${mark}`);
+      }
+      this.sessionListCache.set(ctx.sessionKey, numMap);
+      await ctx.adapter.sendText(ctx.peer, lines.join("\n"));
+      return true;
+    }
+    if (lower === "continue") {
+      const id = args.trim();
+      if (!id) {
+        await ctx.adapter.sendText(ctx.peer, "用法：/continue <id或编号>\n用 /sessions 查看可用会话");
+        return true;
+      }
+      // Try numeric shortcut first (from the last /sessions listing).
+      const num = Number(id);
+      let targetPath: string | undefined;
+      if (Number.isFinite(num) && num > 0) {
+        targetPath = this.sessionListCache.get(ctx.sessionKey)?.get(num);
+      }
+      if (!targetPath) {
+        // Fall back to matching by basename (with or without .jsonl) or full path.
+        const sessions = await this.piManager.listSessions().catch(() => []);
+        const match = sessions.find((s: any) => {
+          if (!s?.path) return false;
+          const base = basename(s.path, ".jsonl");
+          return base === id || basename(s.path) === id || s.path === id;
+        });
+        targetPath = match?.path;
+      }
+      if (!targetPath) {
+        await ctx.adapter.sendText(ctx.peer, `⚠️ 找不到会话：${id}\n用 /sessions 查看可用会话`);
+        return true;
+      }
+      await this.sessionMap.setMapping(ctx.sessionKey, targetPath);
+      await ctx.adapter.sendText(
+        ctx.peer,
+        `✅ 已切换到会话：${basename(targetPath, ".jsonl")}`,
+      );
+      return true;
+    }
     return false; // not a gateway command — forward to the LLM
   }
 
@@ -723,10 +867,10 @@ export class ImGateway {
         const lines: string[] = ["📋 可用模型："];
         let idx = 0;
         for (const p of usable) {
-          lines.push(`- 🔷 ${p.name}`);
+          lines.push(`🔷 ${p.name}`);
           for (const m of p.models) {
             idx += 1;
-            lines.push(`- ${idx}. ${m.id}`);
+            lines.push(`${idx}. ${m.id}`);
           }
         }
         lines.push("");
@@ -798,7 +942,7 @@ export class ImGateway {
       // tool-call cycles emit additional message_start events and would
       // otherwise re-create the card and discard the accumulated content.
       const pending = this.pending.get(sessionPath);
-      if (pending && pending.adapter.beginStream && !pending.streamStarted) {
+      if (pending && !pending.voiceOnly && pending.adapter.beginStream && !pending.streamStarted) {
         pending.streamStarted = true;
         pending.adapter.beginStream(pending.target).catch(() => {});
       }
@@ -811,7 +955,7 @@ export class ImGateway {
       // SDK emits a delta per token, far too fast for DingTalk's card API
       // which truncates frames over ~1K with "***").
       const pending = this.pending.get(sessionPath);
-      if (pending && pending.adapter.streamText) {
+      if (pending && !pending.voiceOnly && pending.adapter.streamText) {
         const delta: string = event.assistantMessageEvent?.delta ?? "";
         if (typeof delta === "string" && delta.length > 0) {
           pending.accumulated = (pending.accumulated ?? "") + delta;
@@ -833,7 +977,7 @@ export class ImGateway {
       // it with the real reply (smooth full-accumulated growth, no stacking,
       // no scrolling window). Exactly the "show tool, then reply" feel.
       const pending = this.pending.get(sessionPath);
-      if (pending && pending.adapter.streamText && event?.toolName) {
+      if (pending && !pending.voiceOnly && pending.adapter.streamText && event?.toolName) {
         const label = formatToolCall(event.toolName, event?.args);
         pending.adapter.streamText(pending.target, `🔧 正在调用工具：${label}`).catch(() => {});
       }
@@ -854,10 +998,37 @@ export class ImGateway {
         if (pending.isGroup && pending.senderNick) {
           finalText = `@${pending.senderNick} ${finalText}`;
         }
-        if (pending.adapter.endStream) {
-          pending.adapter.endStream(pending.target, finalText).catch(() => {});
-        } else {
-          pending.adapter.sendText(pending.target, finalText).catch(() => {});
+        // Check TTS voice reply config for this instance.
+        const inst = this.channels.find((c) => c.id === pending.adapter.instanceId);
+        const wantVoice = !!(text && pending.adapter.sendVoice && inst?.ttsReply);
+        const voiceOnly = !!pending.voiceOnly;
+        // voiceOnly: skip text, send voice only (fallback to text if voice fails)
+        if (!voiceOnly) {
+          if (pending.adapter.endStream) {
+            pending.adapter.endStream(pending.target, finalText).catch(() => {});
+          } else {
+            pending.adapter.sendText(pending.target, finalText).catch(() => {});
+          }
+        }
+        // TTS voice reply: synthesize + send as voice message.
+        if (wantVoice) {
+          pending.adapter
+            .sendVoice!(pending.target, text)
+            .then((ok) => {
+              if (!ok) {
+                console.warn("[im] voice reply failed");
+                // voiceOnly mode: voice failed → fallback to text
+                if (voiceOnly) {
+                  pending.adapter.sendText(pending.target, finalText).catch(() => {});
+                }
+              }
+            })
+            .catch((err) => {
+              console.warn("[im] voice reply error:", err);
+              if (voiceOnly) {
+                pending.adapter.sendText(pending.target, finalText).catch(() => {});
+              }
+            });
         }
         this.pending.delete(sessionPath);
       }

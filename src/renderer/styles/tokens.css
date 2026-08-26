@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --radius-2: 2px;
   --radius-4: 4px;
   --radius-6: 6px;
@@ -117,6 +118,7 @@
    renders dark until next-themes sets `data-theme="light"` on <html>.
    ════════════════════════════════════════════════════════════════ */
 [data-theme="light"] {
+  color-scheme: light;
   --bg-base-default: #FFFFFF;
   --bg-base-secondary: #F4F5F7;
   --bg-base-tertiary: #E9EBEF;

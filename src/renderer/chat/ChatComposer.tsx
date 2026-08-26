@@ -788,8 +788,27 @@ export default function ChatComposer() {
     // session is currently running in the background (cwd-level concurrency),
     // so a queued send is used even right after focusing a running task.
     if (isStreaming || (currentPath ? runningPaths.has(currentPath) : false)) {
-      enqueueMessage(fullBody, stagedImages);
+      enqueueMessage(body, stagedImages, attachments.length ? attachments : undefined);
       return;
+    }
+    // Optimistically insert the user bubble with structured attachments so the
+    // UI can render collapsible reference cards. The SDK's message_start event
+    // for this user message is deduped in reduceMessageEvent (last msg is user).
+    // Use mutateBuffer (not addMessage) so the message enters messagesByPath —
+    // otherwise the next SDK event overwrites agent-store.messages and loses
+    // the attachments.
+    const userMsg = {
+      id: `user-${Date.now()}`,
+      role: "user" as const,
+      content: body,
+      attachments: attachments.length ? attachments : undefined,
+      images: stagedImages.length ? stagedImages : undefined,
+      timestamp: Date.now(),
+    };
+    if (currentPath) {
+      useSessionStore.getState().mutateBuffer(currentPath, (msgs) => [...msgs, userMsg]);
+    } else {
+      useAgentStore.getState().addMessage(userMsg);
     }
     window.piDesk.prompt(fullBody, images, currentCwd, currentPath ?? undefined).catch((err: any) => {
       setError(err?.message ?? t("chat.failedToSend"));
@@ -797,8 +816,7 @@ export default function ChatComposer() {
   };
 
   const handleStop = () => {
-    // A manual stop halts everything: clear the pending queue (otherwise the
-    // queued messages would auto-send right after the run settles) and abort.
+
     clearQueue();
     window.piDesk.abort(currentCwd).catch((err: any) => {
       setError(err?.message ?? t("chat.failedToStop"));

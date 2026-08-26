@@ -36,6 +36,13 @@ export interface PiDeskAPI {
   onScheduledTaskCompleted(
     callback: (info: { taskId: string; sessionPath: string }) => void
   ): () => void;
+  // TTS
+  getTtsConfig(): Promise<TtsConfig>;
+  saveTtsConfig(cfg: TtsConfig): Promise<void>;
+  ttsSynthesize(text: string): Promise<{ audioBase64: string; format: string }>;
+  ttsSynthesizeStream(text: string, requestId: string): Promise<void>;
+  onTtsChunk(callback: (data: { requestId: string; pcmBase64: string }) => void): () => void;
+  onTtsDone(callback: (data: { requestId: string }) => void): () => void;
   setModel(provider: string, modelId: string, cwd?: string): Promise<void>;
   cycleModel(): Promise<void>;
   getAvailableModels(): Promise<any[]>;
@@ -305,7 +312,7 @@ export interface ContextFilesConfig {
 }
 
 /** IM 网关：渠道类型。 */
-export type ImChannelType = "dingtalk" | "weixin" | "qq";
+export type ImChannelType = "dingtalk" | "weixin" | "qq" | "feishu";
 
 /** IM 网关：一个已配置的渠道实例（一个机器人）。 */
 export interface ImChannelInstance {
@@ -317,6 +324,10 @@ export interface ImChannelInstance {
   config: Record<string, string>;
   /** 可选默认工作区：该渠道的 IM 会话以该目录为 cwd。缺省 → chat/im/<channel>。 */
   cwd?: string;
+  /** When true, AI replies are also sent as voice messages (QQ + TTS). */
+  ttsReply?: boolean;
+  /** When true + ttsReply, only send voice (skip text reply). */
+  ttsVoiceOnly?: boolean;
 }
 
 /** IM 网关配置（多渠道实例数组）。 */
@@ -509,6 +520,23 @@ export interface DirEntry {
   path: string;
   isDirectory: boolean;
   isSymlink: boolean;
+}
+
+/** TTS configuration item (one provider config). */
+export interface TtsConfigItem {
+  id: string;
+  name: string;
+  model: "mimo-v2.5-tts";
+  apiKey: string;
+  voice: string;
+  style: string;
+}
+
+/** Top-level TTS config. */
+export interface TtsConfig {
+  configs: TtsConfigItem[];
+  activeConfigId: string | null;
+  streamEnabled: boolean;
 }
 
 declare global {

@@ -1,7 +1,9 @@
-import { memo, useState } from "react";
-import { Copy, Check } from "lucide-react";
+import { memo, useState, useRef, useEffect } from "react";
+import { Copy, Check, Volume2, Loader2, Square } from "lucide-react";
 import type { Message } from "../store/agent-store";
 import { useTranslation } from "react-i18next";
+import { useTtsStore } from "../store/tts-store";
+import { PcmStreamPlayer } from "./pcm-player";
 import Markdown from "./Markdown";
 import ThinkingTools from "./ThinkingTools";
 import styles from "./AssistantTurn.module.css";
@@ -25,6 +27,32 @@ interface Props {
 function AssistantTurn({ messages, highlight }: Props) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  const [ttsLoading, setTtsLoading] = useState(false);
+  const [ttsPlaying, setTtsPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const pcmPlayerRef = useRef<PcmStreamPlayer | null>(null);
+  const ttsRequestIdRef = useRef<string | null>(null);
+  const prevStreamingRef = useRef(false);
+  const ttsConfig = useTtsStore((s) => s.config);
+  const ttsLoaded = useTtsStore((s) => s.loaded);
+  const ttsLoad = useTtsStore((s) => s.load);
+
+  useEffect(() => {
+    if (!ttsLoaded) ttsLoad();
+  }, [ttsLoaded, ttsLoad]);
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      if (pcmPlayerRef.current) {
+        pcmPlayerRef.current.stop();
+        pcmPlayerRef.current = null;
+      }
+    };
+  }, []);
 
   // 最终回复 = 有正文内容（content 非空）的最后一条 assistant 消息；
   // 如果都在流式中还没有正文，则取最后一条消息（用于显示打字指示）。
@@ -57,6 +85,83 @@ function AssistantTurn({ messages, highlight }: Props) {
         setTimeout(() => setCopied(false), 1500);
       })
       .catch(() => {});
+  };
+
+  const hasTts = !!ttsConfig.activeConfigId && ttsConfig.configs.some((c) => c.id === ttsConfig.activeConfigId);
+
+  // ── Streaming TTS: auto-play when LLM streaming finishes & streamEnabled ──
+  useEffect(() => {
+    const wasStreaming = prevStreamingRef.current;
+    prevStreamingRef.current = isStreaming;
+    if (wasStreaming && !isStreaming && finalContent.trim() && hasTts && ttsConfig.streamEnabled) {
+      const requestId = `tts-stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      ttsRequestIdRef.current = requestId;
+      const player = new PcmStreamPlayer();
+      pcmPlayerRef.current = player;
+      player.start();
+      setTtsPlaying(true);
+
+      const offChunk = window.piDesk.onTtsChunk((data) => {
+        if (data.requestId === requestId && !player.isStopped) {
+          player.feed(data.pcmBase64);
+        }
+      });
+      const offDone = window.piDesk.onTtsDone((data) => {
+        if (data.requestId === requestId) {
+          setTtsPlaying(false);
+          ttsRequestIdRef.current = null;
+          offChunk();
+          offDone();
+        }
+      });
+
+      window.piDesk
+        .ttsSynthesizeStream(finalContent, requestId)
+        .catch(() => {
+          setTtsPlaying(false);
+          ttsRequestIdRef.current = null;
+          offChunk();
+          offDone();
+        });
+    }
+  }, [isStreaming, finalContent, hasTts, ttsConfig.streamEnabled]);
+
+  const speak = async () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+      setTtsPlaying(false);
+      return;
+    }
+    if (pcmPlayerRef.current) {
+      pcmPlayerRef.current.stop();
+      pcmPlayerRef.current = null;
+      ttsRequestIdRef.current = null;
+      setTtsPlaying(false);
+      return;
+    }
+    setTtsLoading(true);
+    try {
+      const { audioBase64, format } = await window.piDesk.ttsSynthesize(finalContent);
+      const mime = format === "wav" ? "audio/wav" : `audio/${format}`;
+      const audio = new Audio(`data:${mime};base64,${audioBase64}`);
+      audioRef.current = audio;
+      audio.onended = () => {
+        setTtsPlaying(false);
+        audioRef.current = null;
+      };
+      audio.onerror = () => {
+        setTtsPlaying(false);
+        setTtsLoading(false);
+        audioRef.current = null;
+      };
+      setTtsLoading(false);
+      setTtsPlaying(true);
+      await audio.play();
+    } catch {
+      setTtsLoading(false);
+      setTtsPlaying(false);
+    }
   };
 
   const time = finalMsg?.timestamp
@@ -97,22 +202,49 @@ function AssistantTurn({ messages, highlight }: Props) {
             <Markdown content={finalContent} />
           </div>
         )}
-        {finalContent.trim() && (
+        {(finalContent.trim() || finalMsg?.stoppedByUser) && (
           <div className={styles.meta}>
             <span className={styles.time}>{time}</span>
             {finalMsg?.stoppedByUser && (
               <span className={styles.stoppedBadge}>{t("chat.stoppedByUser")}</span>
             )}
-            <button
-              className={styles.copyBtn}
-              onClick={copy}
-              title={t("chat.copy")}
-            >
-              {copied ? <Check size={12} /> : <Copy size={12} />}
-              <span className={styles.copyLabel}>
-                {copied ? t("chat.copied") : t("chat.copy")}
-              </span>
-            </button>
+            {finalContent.trim() && (
+              <>
+                <button
+                  className={styles.copyBtn}
+                  onClick={copy}
+                  title={t("chat.copy")}
+                >
+                  {copied ? <Check size={12} /> : <Copy size={12} />}
+                  <span className={styles.copyLabel}>
+                    {copied ? t("chat.copied") : t("chat.copy")}
+                  </span>
+                </button>
+                {hasTts && (
+                  <button
+                    className={styles.copyBtn}
+                    onClick={speak}
+                    title={ttsPlaying ? t("chat.stopSpeak") : t("chat.speak")}
+                    disabled={ttsLoading}
+                  >
+                    {ttsLoading ? (
+                      <Loader2 size={12} className={styles.spin} />
+                    ) : ttsPlaying ? (
+                      <Square size={12} />
+                    ) : (
+                      <Volume2 size={12} />
+                    )}
+                    <span className={styles.copyLabel}>
+                      {ttsLoading
+                        ? t("chat.speakingLoading")
+                        : ttsPlaying
+                          ? t("chat.stopSpeak")
+                          : t("chat.speak")}
+                    </span>
+                  </button>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>

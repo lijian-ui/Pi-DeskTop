@@ -115,7 +115,22 @@ npm run build:electron   # 产出 release/ 下的 .dmg + .zip
 
 ### 斜杠命令
 
-`/model`（切换模型）· `/status`（查看目录与模型）· `/compact`（压缩上下文）· `/stop`（停止当前运行，含正在执行的命令）· `/allow` `/deny` `/allow_always`（审批响应，见下）· `/reset` `/clear` `/new`（新会话）· `/help`
+| 命令 | 说明 |
+|---|---|
+| `/model` | 查看可用模型列表 |
+| `/model <名称或编号>` | 切换当前会话的模型 |
+| `/status` | 查看当前会话的工作目录与模型 |
+| `/workspaces` | 列出所有工作区 |
+| `/workspace <路径>` | 切换工作区（需 `/new` 生效） |
+| `/sessions` | 列出全部会话 |
+| `/continue <id或编号>` | 继续已有会话 |
+| `/compact` | 压缩上下文（减少 token 占用） |
+| `/stop` | 停止当前正在运行的任务（含正在执行的命令） |
+| `/allow <ID>` | 允许命令审批 |
+| `/deny <ID>` | 拒绝命令审批 |
+| `/allow_always <ID>` | 允许并加入白名单 |
+| `/reset` `/clear` `/new` | 开启新会话 |
+| `/help` | 显示可用命令列表 |
 
 ### 命令审批（安全）
 

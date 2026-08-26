@@ -91,6 +91,39 @@
   border-left: 2px solid var(--status-primary-default);
 }
 
+/* 思考过程折叠开关：独立于外层面板，始终默认折叠，用户手动展开查看。 */
+.thinkingToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  width: 100%;
+  padding: var(--spacer-4) var(--spacer-8);
+  margin-bottom: var(--spacer-8);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-neutral-l1);
+  cursor: pointer;
+  user-select: none;
+  text-align: left;
+  font: inherit;
+  color: var(--text-secondary);
+  transition: background 0.12s ease;
+}
+
+.thinkingToggle:hover {
+  background: var(--bg-overlay-l1);
+}
+
+.thinkingToggleChevron {
+  display: inline-flex;
+  color: var(--text-tertiary);
+}
+
+.thinkingToggleLabel {
+  font-weight: var(--font-weight-medium);
+  color: var(--text-default);
+}
+
 .intermediateSection {
   margin-bottom: var(--spacer-8);
 }

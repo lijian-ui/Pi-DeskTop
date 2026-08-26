@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /** Channel protocol type. Add new channels here (qq / feishu / …). */
-export type ImChannelType = "dingtalk" | "weixin" | "qq";
+export type ImChannelType = "dingtalk" | "weixin" | "qq" | "feishu";
 
 /** One configured channel instance (a robot / bot on a specific platform). */
 export interface ImChannelInstance {
@@ -30,7 +30,8 @@ export interface ImChannelInstance {
    *  - dingtalk: clientId / clientSecret
    *  - weixin:   token / botId / baseUrl / userId — written by the QR login
    *    flow (no appId/appSecret; WeChat binds via scan).
-   *  - qq:       appId / appSecret — written by the QR binding flow. */
+   *  - qq:       appId / appSecret — written by the QR binding flow.
+   *  - feishu:   appId / appSecret / encryptKey? / verificationToken? / brand? */
   config: Record<string, string>;
   /**
    * Optional default workspace for this channel. IM conversations are
@@ -39,6 +40,10 @@ export interface ImChannelInstance {
    * already-mapped sessions keep their original cwd.
    */
   cwd?: string;
+  /** When true, AI replies are also sent as voice messages (QQ + TTS). */
+  ttsReply?: boolean;
+  /** When true + ttsReply, only send voice (skip text reply). */
+  ttsVoiceOnly?: boolean;
 }
 
 export interface ImConfig {

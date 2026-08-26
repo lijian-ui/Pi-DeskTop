@@ -1,6 +1,6 @@
 {
   "name": "pi-desktop",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "Desktop shell for Pi AI coding agent",
@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@larksuiteoapi/node-sdk": "^1.73.0",
     "@lobehub/icons": "^5.15.0",
     "@tencent-connect/qqbot-connector": "^1.2.0",
     "@tencent-connect/qqbot-nodejs": "^1.0.4",

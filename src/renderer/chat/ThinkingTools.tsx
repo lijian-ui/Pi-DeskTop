@@ -36,7 +36,11 @@ function ThinkingTools({ messages }: Props) {
   // 保证 hooks 调用次数稳定（组件可能在同一会话中被复用渲染）。
   const streamingOrRunning =
     messages.some((m) => m.isStreaming) || tools.some((tool) => tool.isRunning);
+  // 折叠面板：流式展开、完成折叠（由下方 useEffect 同步活跃态翻转）。
   const [expanded, setExpanded] = useState(streamingOrRunning);
+  // 思考内容默认始终折叠（流式/完成态均折叠），用户手动点开「思考过程」查看。
+  // 大段思考不撑爆回复区；与外层面板独立，不受展开/折叠自动同步影响。
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
 
   // 仅在活跃状态翻转时自动同步面板展开/折叠：
   //  - 空闲 → 运行中：自动展开（流式中的思考/工具实时可见）
@@ -86,26 +90,47 @@ function ThinkingTools({ messages }: Props) {
       </button>
       {expanded && (
         <div className={styles.body}>
-          {messages.map((msg) => (
-            <div key={msg.id} id={`msg-${msg.id}`} className={styles.step}>
-              {!!msg.thinking?.trim() && (
-                <div className={styles.thinkingContent}>{msg.thinking}</div>
-              )}
-              {!!msg.content?.trim() && (
-                <div className={styles.intermediateSection}>
-                  <div className={styles.intermediateLabel}>
-                    {t("chat.intermediateReply")}
+          {hasThinking && (
+            <button
+              type="button"
+              className={styles.thinkingToggle}
+              onClick={() => setThinkingExpanded((e) => !e)}
+              aria-expanded={thinkingExpanded}
+            >
+              <span className={styles.thinkingToggleChevron}>
+                {thinkingExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              </span>
+              <span className={styles.thinkingToggleLabel}>{t("chat.thinking")}</span>
+            </button>
+          )}
+          {messages.map((msg) => {
+            const thinking = thinkingExpanded ? msg.thinking?.trim() : "";
+            const content = msg.content?.trim();
+            const tools = msg.toolExecutions ?? [];
+            // 仅当该 step 有可见内容（展开的思考 / 中间回复 / 工具）才渲染，
+            // 避免折叠态下留下空的 step 分隔线。
+            if (!thinking && !content && tools.length === 0) return null;
+            return (
+              <div key={msg.id} id={`msg-${msg.id}`} className={styles.step}>
+                {!!thinking && (
+                  <div className={styles.thinkingContent}>{thinking}</div>
+                )}
+                {!!content && (
+                  <div className={styles.intermediateSection}>
+                    <div className={styles.intermediateLabel}>
+                      {t("chat.intermediateReply")}
+                    </div>
+                    <div className={styles.intermediateContent}>
+                      <Markdown content={msg.content} />
+                    </div>
                   </div>
-                  <div className={styles.intermediateContent}>
-                    <Markdown content={msg.content} />
-                  </div>
-                </div>
-              )}
-              {(msg.toolExecutions ?? []).map((tool) => (
-                <ToolExecution key={tool.id} execution={tool} />
-              ))}
-            </div>
-          ))}
+                )}
+                {tools.map((tool) => (
+                  <ToolExecution key={tool.id} execution={tool} />
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

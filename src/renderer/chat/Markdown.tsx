@@ -102,8 +102,11 @@ function CodeBlock(props: any) {
   const { t } = useTranslation();
   const { className, children } = props;
   const [copied, setCopied] = useState(false);
+  const codeRef = useRef<HTMLElement>(null);
 
-  const raw = String(children ?? "").replace(/\n$/, "");
+  const raw = (children ?? "")
+    .toString()
+    .replace(/^\n+|\n+$/g, "");
   const match = /language-(\w+)/.exec(className || "");
   const isBlock = !!match || raw.includes("\n");
 
@@ -118,8 +121,12 @@ function CodeBlock(props: any) {
   }
 
   const copy = () => {
+    // Extract text from the rendered code element (rehype-highlight may
+    // wrap tokens in <span> so React children are not plain strings).
+    const node = codeRef.current;
+    const text = node ? node.textContent ?? "" : raw;
     navigator.clipboard
-      ?.writeText(raw)
+      ?.writeText(text)
       .then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
@@ -142,7 +149,9 @@ function CodeBlock(props: any) {
         </button>
       </div>
       <pre className={styles.codePre}>
-        <code className={className}>{children}</code>
+        <code ref={codeRef} className={className}>
+          {children}
+        </code>
       </pre>
     </div>
   );

@@ -19,7 +19,7 @@ import type {
 import styles from "./ImChannelModal.module.css";
 
 /** Channel types the UI lets the user pick from. */
-const CHANNEL_TYPES: ImChannelType[] = ["dingtalk", "weixin", "qq"];
+const CHANNEL_TYPES: ImChannelType[] = ["dingtalk", "weixin", "qq", "feishu"];
 
 function newId(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `ch-${Date.now()}`;
@@ -33,11 +33,18 @@ function newId(): string {
  */
 const TYPE_FIELDS: Record<
   ImChannelType,
-  { key: string; labelKey: string; secret?: boolean }[]
+  { key: string; labelKey: string; secret?: boolean; optional?: boolean }[]
 > = {
   dingtalk: [
     { key: "clientId", labelKey: "im.clientId" },
     { key: "clientSecret", labelKey: "im.clientSecret", secret: true },
+  ],
+  feishu: [
+    { key: "appId", labelKey: "im.feishuAppId" },
+    { key: "appSecret", labelKey: "im.feishuAppSecret", secret: true },
+    { key: "encryptKey", labelKey: "im.feishuEncryptKey", secret: true, optional: true },
+    { key: "verificationToken", labelKey: "im.feishuVerificationToken", secret: true, optional: true },
+    { key: "brand", labelKey: "im.feishuBrand", optional: true },
   ],
   weixin: [],
   qq: [],
@@ -45,6 +52,7 @@ const TYPE_FIELDS: Record<
 
 const NOT_IMPL: Record<ImChannelType, string | null> = {
   dingtalk: null,
+  feishu: null,
   weixin: null,
   qq: null,
 };
@@ -65,6 +73,8 @@ export default function ImChannelModal({
     editInstance?.config ?? {},
   );
   const [workspace, setWorkspace] = useState(editInstance?.cwd ?? "");
+  const [ttsReply, setTtsReply] = useState(editInstance?.ttsReply ?? false);
+  const [ttsVoiceOnly, setTtsVoiceOnly] = useState(editInstance?.ttsVoiceOnly ?? false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -208,7 +218,7 @@ export default function ImChannelModal({
       // QQ: binding must have completed (appId/appSecret written).
       return Boolean(config["appId"] && config["appSecret"]);
     }
-    return fields.every((f) => (config[f.key] ?? "").trim() !== "");
+    return fields.every((f) => f.optional || (config[f.key] ?? "").trim() !== "");
   }, [name, config, fields, type]);
 
   const handlePickWorkspace = async () => {
@@ -229,6 +239,8 @@ export default function ImChannelModal({
       enabled: editInstance?.enabled ?? true,
       config,
       cwd: trimmedWs ? trimmedWs : undefined,
+      ttsReply: (type === "qq" || type === "feishu") ? ttsReply : undefined,
+      ttsVoiceOnly: (type === "qq" || type === "feishu") ? ttsVoiceOnly : undefined,
     };
     try {
       await onSave(instance);
@@ -521,13 +533,13 @@ export default function ImChannelModal({
               <label key={f.key} className={styles.field}>
                 <span className={styles.fieldLabel}>
                   {t(f.labelKey)}
-                  <span className={styles.required}>*</span>
+                  {!f.optional && <span className={styles.required}>*</span>}
                 </span>
                 <input
                   className={styles.fieldInput}
                   type={f.secret ? "password" : "text"}
                   value={config[f.key] ?? ""}
-                  placeholder={f.secret ? "••••••••" : ""}
+                  placeholder={f.secret ? "••••••••" : f.optional ? t("common.optional") : ""}
                   onChange={(e) =>
                     setConfig({ ...config, [f.key]: e.target.value })
                   }
@@ -561,6 +573,54 @@ export default function ImChannelModal({
               </label>
             </div>
           </div>
+
+          {/* TTS voice reply (QQ + Feishu) */}
+          {(type === "qq" || type === "feishu") && (
+            <div className={styles.field}>
+              <div className={styles.approvalRow}>
+                <div className={styles.approvalCopy}>
+                  <span className={styles.fieldLabel}>{t("im.ttsReply")}</span>
+                  <span className={styles.approvalHint}>{t("im.ttsReplyHint")}</span>
+                </div>
+                <label
+                  className={`${styles.approvalSwitch} ${
+                    ttsReply ? styles.approvalSwitchOn : ""
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={ttsReply}
+                    onChange={(e) => setTtsReply(e.target.checked)}
+                  />
+                  <span className={styles.approvalSlider} />
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* Voice-only mode (QQ/Feishu + ttsReply only) */}
+          {(type === "qq" || type === "feishu") && ttsReply && (
+            <div className={styles.field}>
+              <div className={styles.approvalRow}>
+                <div className={styles.approvalCopy}>
+                  <span className={styles.fieldLabel}>{t("im.ttsVoiceOnly")}</span>
+                  <span className={styles.approvalHint}>{t("im.ttsVoiceOnlyHint")}</span>
+                </div>
+                <label
+                  className={`${styles.approvalSwitch} ${
+                    ttsVoiceOnly ? styles.approvalSwitchOn : ""
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={ttsVoiceOnly}
+                    onChange={(e) => setTtsVoiceOnly(e.target.checked)}
+                  />
+                  <span className={styles.approvalSlider} />
+                </label>
+              </div>
+            </div>
+          )}
 
           {/* 默认工作区（可选） */}
           <div className={styles.field}>

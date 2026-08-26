@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   X, Settings as SystemIcon, Palette, Brain, Cpu,
   Bot as AssistantIcon, Database, Keyboard, Shield, Languages,
-  Layers, Wrench, HelpCircle,
+  Layers, Wrench, HelpCircle, Headphones,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUIStore } from "../store/ui-store";
@@ -14,6 +14,7 @@ import MemoryPage from "./MemoryPage";
 import SoulSettings from "./SoulSettings";
 import ToolsSettings from "./ToolsSettings";
 import SystemSettings from "./SystemSettings";
+import TtsPage from "./TtsPage";
 import HelpIntro from "../help/sections/HelpIntro";
 import HelpFaq from "../help/sections/HelpFaq";
 import HelpFeedback from "../help/sections/HelpFeedback";
@@ -32,6 +33,7 @@ type SettingsSection =
   | "shortcuts"
   | "security"
   | "context"
+  | "tts"
   | "language"
   | "help";
 
@@ -49,6 +51,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: "tools", icon: Wrench, labelKey: "settings.tools" },
   { key: "security", icon: Shield, labelKey: "settings.security" },
   { key: "context", icon: Layers, labelKey: "settings.context" },
+  { key: "tts", icon: Headphones, labelKey: "settings.tts" },
   { key: "language", icon: Languages, labelKey: "lang.switch" },
   { key: "personalization", icon: Palette, labelKey: "settings.personalization" },
   { key: "shortcuts", icon: Keyboard, labelKey: "settings.shortcuts" },
@@ -104,6 +107,8 @@ export default function SettingsPage() {
             <SecurityPage />
           ) : activeSection === "context" ? (
             <ContextPage />
+          ) : activeSection === "tts" ? (
+            <TtsPage />
           ) : activeSection === "memory" ? (
             <MemoryPage />
           ) : activeSection === "assistant" ? (

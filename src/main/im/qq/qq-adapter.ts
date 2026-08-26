@@ -14,17 +14,21 @@
  * Outbound: `bot.sendText({ scope, targetId }, text)`. QQ renders markdown
  * natively when the bot has markdown permission, so no filtering is needed.
  */
-import { statSync } from "node:fs";
-import { basename } from "node:path";
+import { statSync, writeFileSync, unlinkSync } from "node:fs";
+import { basename, join } from "node:path";
+import { tmpdir } from "node:os";
 import type {
   MediaFileType,
   QQBot,
   QQBotInboundMessage,
   StreamSession,
 } from "@tencent-connect/qqbot-nodejs";
+import { MediaFileType as MediaFileTypeVal } from "@tencent-connect/qqbot-nodejs";
+import { audioFileToSilkBase64 } from "@tencent-connect/qqbot-nodejs/protocol";
 
 import type { ImChannelAdapter, ImImage, ImInboundMessage, ImStatus } from "../types";
 import type { ImChannelInstance } from "../im-config";
+import { getActiveTtsConfig, synthesizeSpeech } from "../../tts/tts-service";
 
 const BASE_BACKOFF_DELAY = 2_000;
 const MAX_BACKOFF_DELAY = 30_000;
@@ -334,6 +338,46 @@ export class QqAdapter implements ImChannelAdapter {
     // messages, replace the reference with a short note.
     const enriched = await this.sendMediaForText(rt, text);
     await bot.sendText(rt, enriched);
+  }
+
+  /**
+   * Voice reply: text → MiMo TTS → WAV → SILK Base64 → QQ voice message.
+   * Returns true on success, false on any failure (caller falls back to text).
+   */
+  async sendVoice(target: string, text: string): Promise<boolean> {
+    const bot = this.bot;
+    if (!bot) return false;
+    const rt = this.parseTarget(target);
+    if (!rt) return false;
+    try {
+      const ttsConfig = await getActiveTtsConfig();
+      if (!ttsConfig) {
+        console.warn("[im:qq] sendVoice: no active TTS config");
+        return false;
+      }
+      const { audioBase64, format } = await synthesizeSpeech(ttsConfig, text);
+      const wavPath = join(tmpdir(), `tts-${Date.now()}.wav`);
+      writeFileSync(wavPath, Buffer.from(audioBase64, "base64"));
+      try {
+        const silkBase64 = await audioFileToSilkBase64(wavPath);
+        if (!silkBase64) {
+          console.warn("[im:qq] sendVoice: SILK conversion failed");
+          return false;
+        }
+        await bot.sendMedia({
+          target: rt,
+          fileType: MediaFileTypeVal.VOICE,
+          fileData: silkBase64,
+        });
+        console.log("[im:qq] voice reply sent OK");
+        return true;
+      } finally {
+        try { unlinkSync(wavPath); } catch { /* ignore */ }
+      }
+    } catch (err) {
+      console.warn("[im:qq] sendVoice failed:", err);
+      return false;
+    }
   }
 
   /** Send an inline-keyboard (button) message — used for command approval. */

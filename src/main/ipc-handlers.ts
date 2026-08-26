@@ -6,6 +6,13 @@ import type { TerminalManager } from "./pi/terminal-manager";
 import { getImGateway } from "./index";
 import { readImConfig, writeImConfig, type ImConfig } from "./im/im-config";
 import {
+  readTtsConfig,
+  writeTtsConfig,
+  synthesizeSpeech,
+  synthesizeSpeechStream,
+  type TtsConfig,
+} from "./tts/tts-service";
+import {
   startLogin as startWeixinLogin,
   getLoginStatus as getWeixinLoginStatus,
   submitVerifyCode as submitWeixinVerifyCode,
@@ -756,4 +763,38 @@ export function registerIpcHandlers(
   ipcMain.handle("pi:terminal:kill", async (_, { id }: { id: string }) => {
     terminalManager.kill(id);
   });
+
+  // ── TTS (text-to-speech) ──
+  ipcMain.handle("pi:getTtsConfig", async () => {
+    return readTtsConfig();
+  });
+
+  ipcMain.handle("pi:saveTtsConfig", async (_, cfg: TtsConfig) => {
+    await writeTtsConfig(cfg);
+  });
+
+  ipcMain.handle("pi:ttsSynthesize", async (_, { text }: { text: string }) => {
+    const cfg = await readTtsConfig();
+    const active = cfg.configs.find((c) => c.id === cfg.activeConfigId);
+    if (!active) throw new Error("No active TTS configuration");
+    return synthesizeSpeech(active, text);
+  });
+
+  ipcMain.handle(
+    "pi:ttsSynthesizeStream",
+    async (_, { text, requestId }: { text: string; requestId: string }) => {
+      const cfg = await readTtsConfig();
+      const active = cfg.configs.find((c) => c.id === cfg.activeConfigId);
+      if (!active) throw new Error("No active TTS configuration");
+      const wc = BrowserWindow.getFocusedWindow()?.webContents;
+      await synthesizeSpeechStream(active, text, (pcmBase64) => {
+        if (wc && !wc.isDestroyed()) {
+          wc.send("pi:ttsChunk", { requestId, pcmBase64 });
+        }
+      });
+      if (wc && !wc.isDestroyed()) {
+        wc.send("pi:ttsDone", { requestId });
+      }
+    },
+  );
 }

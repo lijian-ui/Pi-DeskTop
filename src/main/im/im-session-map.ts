@@ -96,6 +96,12 @@ export class ImSessionMap {
     await this.persist();
   }
 
+  /** Point a conversation key at an existing Pi session file (for /continue). */
+  async setMapping(sessionKey: string, sessionPath: string): Promise<void> {
+    this.map[sessionKey] = sessionPath;
+    await this.persist();
+  }
+
   /**
    * All session keys owned by one channel instance (prefix
    * `<channel>:<instanceId>:`).

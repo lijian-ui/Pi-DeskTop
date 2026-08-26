@@ -3,7 +3,7 @@ import type { Message } from "../store/agent-store";
 import type { CodeAttachment } from "../store/ui-store";
 import SkillInvocation from "./SkillInvocation";
 import Markdown from "./Markdown";
-import { Code2, SquareTerminal } from "lucide-react";
+import { Code2, SquareTerminal, ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toDataUrl } from "../utils/image";
 import styles from "./UserMessage.module.css";
@@ -25,6 +25,7 @@ function labelOf(filePath: string): string {
 /** One code/terminal-reference card inside a user message bubble. */
 function RefCard({ att }: { att: CodeAttachment }) {
   const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
   const isTerminal = att.kind === "terminal";
   const lang = isTerminal ? "text" : langOf(att.filePath);
   const lr = isTerminal
@@ -34,7 +35,12 @@ function RefCard({ att }: { att: CodeAttachment }) {
       : `${att.startLine}-${att.endLine}`;
   return (
     <div className={styles.refCard}>
-      <div className={styles.refCardHeader}>
+      <div
+        className={styles.refCardHeader}
+        onClick={() => setExpanded((v) => !v)}
+        role="button"
+        aria-expanded={expanded}
+      >
         {isTerminal ? (
           <SquareTerminal size={13} className={styles.refCardIcon} />
         ) : (
@@ -47,10 +53,16 @@ function RefCard({ att }: { att: CodeAttachment }) {
           {isTerminal ? t("terminal.outputRef") : labelOf(att.filePath)}
         </span>
         <span className={styles.refCardLines}>{lr}</span>
+        <ChevronRight
+          size={13}
+          className={`${styles.refCardChevron} ${expanded ? styles.refCardChevronOpen : ""}`}
+        />
       </div>
-      <div className={styles.refCardBody}>
-        <Markdown content={`\`\`\`${lang}\n${att.content}\n\`\`\``} />
-      </div>
+      {expanded && (
+        <div className={styles.refCardBody}>
+          <Markdown content={`\`\`\`${lang}\n${att.content}\n\`\`\``} />
+        </div>
+      )}
     </div>
   );
 }

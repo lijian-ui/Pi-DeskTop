@@ -29,6 +29,9 @@ export interface Message {
 export interface QueuedMessage {
   id: string;
   content: string;
+  /** Code references staged with the queued message; forwarded when the queue
+   *  drains so the user bubble can render them as collapsible cards. */
+  attachments?: CodeAttachment[];
   /** Images staged with the queued message; forwarded when the queue drains. */
   images?: ImageAttachment[];
 }
@@ -90,7 +93,7 @@ interface AgentState {
   setError: (error: string | null) => void;
 
   // ── Message queue (streaming-time send) ──
-  enqueueMessage: (content: string, images?: ImageAttachment[]) => void;
+  enqueueMessage: (content: string, images?: ImageAttachment[], attachments?: CodeAttachment[]) => void;
   updateQueuedMessage: (id: string, content: string) => void;
   removeQueuedMessage: (id: string) => void;
   clearQueue: () => void;
@@ -210,13 +213,14 @@ export const useAgentStore = create<AgentState>((set) => ({
   setError: (error) => set({ error }),
 
   // ── Message queue ──
-  enqueueMessage: (content, images) =>
+  enqueueMessage: (content, images, attachments) =>
     set((state) => ({
       messageQueue: [
         ...state.messageQueue,
         {
           id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           content,
+          attachments: attachments?.length ? attachments : undefined,
           images: images?.length ? images : undefined,
         },
       ],

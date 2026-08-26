@@ -90,3 +90,16 @@ pre code {
   padding: 0;
   border-radius: 0;
 }
+
+/* Native <select> dropdown options — color-scheme alone is unreliable on
+   Windows/Electron, so force explicit background + color on <option> per
+   theme. This makes the IM channel-type picker (and any other <select>)
+   match the active theme instead of always rendering white-on-black. */
+option {
+  background: #1e1f22;
+  color: #e6e7e9;
+}
+[data-theme="light"] option {
+  background: #ffffff;
+  color: #1a1b1d;
+}

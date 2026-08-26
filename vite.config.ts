@@ -49,6 +49,10 @@ export default defineConfig({
                 "@tencent-connect/qqbot-connector",
                 "@tencent-connect/qqbot-nodejs",
                 "qrcode-terminal",
+                // Feishu/Lark SDK — large CJS package with dynamic requires;
+                // keep it external and let Electron resolve at runtime (same
+                // pattern as dingtalk-stream above).
+                "@larksuiteoapi/node-sdk",
               ],
             },
           },

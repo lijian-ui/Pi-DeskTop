@@ -2,7 +2,7 @@
  * IM channel type icon — small colored tile per platform.
  * Fallback to a neutral message glyph for unknown types.
  */
-import { MessageCircle, MessageSquare, Bot } from "lucide-react";
+import { MessageCircle, MessageSquare, Bot, Bird } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ImChannelType } from "../../preload/api";
 
@@ -10,6 +10,7 @@ const ICONS: Record<string, LucideIcon> = {
   dingtalk: MessageCircle,
   weixin: MessageSquare,
   qq: Bot,
+  feishu: Bird,
 };
 
 export default function ImChannelIcon({

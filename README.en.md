@@ -99,7 +99,26 @@ Configure bots on the **"IM Gateway"** page and chat with the AI from your phone
 | **WeChat** | **QR scan login** (official iLink protocol, no AppID/AppSecret) | phone WeChat scan |
 | **QQ** | **QR scan login** (official bot SDK) | phone QQ scan (writes AppID + AppSecret automatically) |
 
-Capabilities: text / image (multimodal) / voice (server-side ASR) / file sending & receiving, quoted-message context, streaming replies (DingTalk AI cards, QQ typewriter), slash commands (`/model` `/status` `/compact` `/stop` `/reset` ...), **channel command approval** (QQ inline buttons; text commands `/allow` `/deny` `/allow_always` or `allow:1` on DingTalk/WeChat — channel approval overrides the desktop global mode, the danger blacklist is always enforced), "allow & remember" whitelisting, and **scheduled-task result push** to a chosen channel.
+Capabilities: text / image (multimodal) / voice (server-side ASR) / file sending & receiving, quoted-message context, streaming replies (DingTalk AI cards, QQ typewriter), slash commands (see below), **channel command approval** (QQ inline buttons; text commands `/allow` `/deny` `/allow_always` or `allow:1` on DingTalk/WeChat — channel approval overrides the desktop global mode, the danger blacklist is always enforced), "allow & remember" whitelisting, and **scheduled-task result push** to a chosen channel.
+
+### Slash Commands
+
+| Command | Description |
+|---|---|
+| `/model` | List available models |
+| `/model <name or number>` | Switch the current session's model |
+| `/status` | Show current workspace and model |
+| `/workspaces` | List all workspaces |
+| `/workspace <path>` | Switch workspace (takes effect on `/new`) |
+| `/sessions` | List all sessions |
+| `/continue <id or number>` | Continue an existing session |
+| `/compact` | Compact context (reduce token usage) |
+| `/stop` | Stop the running task (including in-progress commands) |
+| `/allow <ID>` | Approve a command approval request |
+| `/deny <ID>` | Deny a command approval request |
+| `/allow_always <ID>` | Approve and add to whitelist |
+| `/reset` `/clear` `/new` | Start a new session |
+| `/help` | Show available commands |
 
 ## Runtime Config (Windows: `~/.pi/agent/` · macOS: `~/Documents/PiAgent/`)
 

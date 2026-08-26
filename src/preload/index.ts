@@ -305,6 +305,22 @@ const piAPI = {
     ipcRenderer.on("scheduledTask:completed", listener);
     return () => ipcRenderer.removeListener("scheduledTask:completed", listener);
   },
+  // ── TTS ──
+  getTtsConfig: () => ipcRenderer.invoke("pi:getTtsConfig"),
+  saveTtsConfig: (cfg: any) => ipcRenderer.invoke("pi:saveTtsConfig", cfg),
+  ttsSynthesize: (text: string) => ipcRenderer.invoke("pi:ttsSynthesize", { text }),
+  ttsSynthesizeStream: (text: string, requestId: string) =>
+    ipcRenderer.invoke("pi:ttsSynthesizeStream", { text, requestId }),
+  onTtsChunk: (callback: (data: { requestId: string; pcmBase64: string }) => void) => {
+    const listener = (_: any, payload: any) => callback(payload);
+    ipcRenderer.on("pi:ttsChunk", listener);
+    return () => ipcRenderer.removeListener("pi:ttsChunk", listener);
+  },
+  onTtsDone: (callback: (data: { requestId: string }) => void) => {
+    const listener = (_: any, payload: any) => callback(payload);
+    ipcRenderer.on("pi:ttsDone", listener);
+    return () => ipcRenderer.removeListener("pi:ttsDone", listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("piDesk", piAPI);

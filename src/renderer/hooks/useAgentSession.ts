@@ -1,10 +1,27 @@
 import { useEffect, useRef } from "react";
 import { useAgentStore, type Message } from "../store/agent-store";
+import type { CodeAttachment } from "../store/ui-store";
 import { useSessionStore } from "../store/session-store";
 import { useWorkspaceStore } from "../store/workspace-store";
 import { extractText, extractImages } from "../utils/content-utils";
 
 let msgCounter = 0;
+
+/** Map a file path to a (best-effort) language id for a fenced code block. */
+function langOf(filePath: string): string {
+  const base = filePath.split(/[\\/]/).pop() || "";
+  const i = base.lastIndexOf(".");
+  return i > 0 ? base.slice(i + 1).toLowerCase() : "";
+}
+
+/** Rebuild the fenced-block text sent to the LLM from a code attachment. */
+function attachmentToText(a: CodeAttachment): string {
+  if (a.kind === "terminal") {
+    return `Terminal output:\n\`\`\`text\n${a.content}\n\`\`\``;
+  }
+  const lr = a.startLine === a.endLine ? `${a.startLine}` : `${a.startLine}-${a.endLine}`;
+  return `${a.filePath}:${lr}\n\`\`\`${langOf(a.filePath)}\n${a.content}\n\`\`\``;
+}
 
 /**
  * Debounced session-list refresh: every message_end previously triggered a
@@ -179,19 +196,29 @@ function drainQueue() {
     // vanished when the reply finished, so a 1-item queue lingered through
     // the whole reply). On failure we put it back at the head below.
     useAgentStore.getState().removeQueuedMessage(next.id);
-    s.addMessage({
-      id: `user-${Date.now()}`,
-      role: "user",
-      content: next.content,
-      images: next.images,
-      timestamp: Date.now(),
-    });
     const session = useSessionStore.getState();
     const path = session.currentPath;
     const cwd =
       session.sessions.find((x) => x.path === path)?.cwd ||
       session.currentCwd ||
       useWorkspaceStore.getState().cwd;
+    // Optimistically insert the user bubble with structured attachments. Use
+    // mutateBuffer (not addMessage) so the message enters messagesByPath —
+    // otherwise the next SDK event overwrites agent-store.messages and loses
+    // the attachments.
+    const userMsg = {
+      id: `user-${Date.now()}`,
+      role: "user" as const,
+      content: next.content,
+      attachments: next.attachments,
+      images: next.images,
+      timestamp: Date.now(),
+    };
+    if (path) {
+      session.mutateBuffer(path, (msgs) => [...msgs, userMsg]);
+    } else {
+      s.addMessage(userMsg);
+    }
     // Forward the images that were staged when the message was queued —
     // otherwise a picture attached during streaming would be silently dropped.
     const images = next.images?.length
@@ -201,8 +228,13 @@ function drainQueue() {
           mimeType: a.mimeType,
         }))
       : undefined;
+    // Rebuild the full payload (user text + expanded code references) sent to
+    // the LLM. The user bubble only shows `next.content` + collapsible cards,
+    // but the model still needs the literal source.
+    const refsText = next.attachments?.map(attachmentToText).join("\n\n") ?? "";
+    const fullBody = [next.content, refsText].filter(Boolean).join("\n\n");
     window.piDesk
-      .prompt(next.content, images, cwd, path ?? undefined)
+      .prompt(fullBody, images, cwd, path ?? undefined)
       .then(() => {
         // Already dequeued at send time — nothing to remove here.
       })

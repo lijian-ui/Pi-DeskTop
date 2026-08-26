@@ -37,8 +37,7 @@ npm-debug.log*
 nul
 
 # ── 参考项目（仅本地分析用，不纳入版本）──
-参考项目/dingtalk-openclaw-connector/
-参考项目/tencent-weixin-openclaw-weixin-2.4.3
+参考项目/
 
 # ── 本地临时文件 ──
 *.tmp
@@ -46,3 +45,9 @@ nul
 
 # ── 宣传视频 / 截图等媒体素材（体积大，不入库）──
 video/
+
+# ── 开发辅助 / 误创建文件 / 钩子草稿（不入库）──
+# dev/ 为开发临时目录（当前仅含误写入的 dev/null 打包产物）
+dev/
+# git 提交钩子遗留的草稿消息
+COMMIT_MSG*.txt

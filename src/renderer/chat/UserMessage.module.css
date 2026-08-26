@@ -94,7 +94,13 @@
   gap: var(--spacer-6);
   padding: var(--spacer-6) var(--spacer-10);
   background: var(--bg-base-tertiary);
-  border-bottom: 1px solid var(--border-neutral-l2);
+
+  cursor: pointer;
+  user-select: none;
+}
+
+.refCardHeader:hover {
+  background: var(--bg-base-hover, var(--bg-base-tertiary));
 }
 
 .refCardIcon {
@@ -123,4 +129,16 @@
 .refCardBody {
   margin: 0;
   overflow-x: auto;
+  border-top: 1px solid var(--border-neutral-l2);
+}
+
+.refCardChevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+  transform: rotate(0deg);
+}
+
+.refCardChevronOpen {
+  transform: rotate(90deg);
 }
