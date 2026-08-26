@@ -547,42 +547,46 @@ async sendKeyboard(
     const info = this.peerInfo.get(target);
     if (!info) return false;
     if (!isFfmpegAvailable()) {
-      console.warn("[im:dingtalk] sendVoice: ffmpeg not available");
+      console.warn("[im.voice][dingtalk] sendVoice aborted: ffmpeg not available");
       return false;
     }
+    console.log("[im.voice][dingtalk] sendVoice start; textLen=", text.length, "isGroup=", info.isGroup);
     try {
       const ttsConfig = await getActiveTtsConfig();
       if (!ttsConfig) {
-        console.warn("[im:dingtalk] sendVoice: no active TTS config");
+        console.warn("[im.voice][dingtalk] sendVoice aborted: no active TTS config (tts-config.json activeConfigId?)");
         return false;
       }
       const { audioBase64 } = await synthesizeSpeech(ttsConfig, text);
       const wavBuffer = Buffer.from(audioBase64, "base64");
+      console.log("[im.voice][dingtalk] TTS ok; wavBytes=", wavBuffer.length);
       const amrBuffer = wavToAmr(wavBuffer);
       if (!amrBuffer) {
-        console.warn("[im:dingtalk] sendVoice: WAV→AMR conversion failed");
+        console.warn("[im.voice][dingtalk] WAV→AMR conversion failed (ffmpeg amr_nb encoder missing?) wavBytes=", wavBuffer.length);
         return false;
       }
+      console.log("[im.voice][dingtalk] amrBytes=", amrBuffer.length);
       // uploadDingtalkMedia streams from a file path, so persist the AMR first.
       const amrPath = join(tmpdir(), `tts-${Date.now()}.amr`);
       writeFileSync(amrPath, amrBuffer);
       try {
         const up = await uploadDingtalkMedia(this.credentials, amrPath, "voice");
         if (!up) {
-          console.warn("[im:dingtalk] sendVoice: upload failed");
+          console.warn("[im.voice][dingtalk] upload failed (uploadDingtalkMedia returned null)");
           return false;
         }
         const durationMs = getAudioDurationMs(amrPath);
+        console.log("[im.voice][dingtalk] uploaded mediaId=", up.mediaId, "durationMs=", durationMs);
         // sampleAudio's mediaId field references the media_id returned by
         // /media/upload (same as sampleImageMsg/sampleFile), NOT a download URL.
         await sendDingtalkVoice(this.credentials, target, up.mediaId, info.isGroup, durationMs);
-        console.log("[im:dingtalk] voice reply sent OK");
+        console.log("[im:voice][dingtalk] voice reply sent OK; amrBytes=", amrBuffer.length);
         return true;
       } finally {
         try { unlinkSync(amrPath); } catch { /* ignore */ }
       }
     } catch (err) {
-      console.warn("[im:dingtalk] sendVoice failed:", err);
+      console.warn("[im.voice][dingtalk] sendVoice failed:", err);
       return false;
     }
   }

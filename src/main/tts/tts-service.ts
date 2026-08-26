@@ -86,6 +86,7 @@ export async function synthesizeSpeech(
   messages.push({ role: "assistant", content: text });
 
 
+  console.log("[tts] synthesize start; textLen=", text.length, "voice=", config.voice, "hasApiKey=", !!config.apiKey);
   const res = await axios.post(
     `${MIMO_BASE_URL}/chat/completions`,
     {
@@ -103,7 +104,11 @@ export async function synthesizeSpeech(
   );
 
   const audioData = res.data?.choices?.[0]?.message?.audio?.data;
-  if (!audioData) throw new Error("TTS API returned no audio data");
+  if (!audioData) {
+    console.error("[tts] synthesize returned no audio data; body=", JSON.stringify(res.data).slice(0, 400));
+    throw new Error("TTS API returned no audio data");
+  }
+  console.log("[tts] synthesize ok; audioBase64Len=", audioData.length);
   return { audioBase64: audioData, format: "wav" };
 }
 

@@ -7,6 +7,11 @@ import { ImGateway, startGatewayFromConfig } from "./im/im-gateway";
 import { setupApplicationMenu } from "./menu";
 import { createTray } from "./tray";
 import { setupAutoUpdater, disposeAutoUpdater } from "./app-updater";
+import { installConsoleToFile } from "./logger";
+
+// Mirror all console output to ~/.pi/agent/logs/YYYY-MM-DD.log so the packaged
+// build (no DevTools) leaves an inspectable trail. Must run before anything logs.
+installConsoleToFile();
 
 let terminalManager: TerminalManager | null = null;
 let imGateway: ImGateway | null = null;

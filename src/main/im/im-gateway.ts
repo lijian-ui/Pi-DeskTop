@@ -1002,6 +1002,16 @@ export class ImGateway {
         const inst = this.channels.find((c) => c.id === pending.adapter.instanceId);
         const wantVoice = !!(text && pending.adapter.sendVoice && inst?.ttsReply);
         const voiceOnly = !!pending.voiceOnly;
+        console.log("[im.voice] dispatch decision", {
+          wantVoice,
+          voiceOnly,
+          hasText: !!text,
+          hasSendVoice: !!pending.adapter.sendVoice,
+          ttsReply: inst?.ttsReply,
+          textLen: text?.length ?? 0,
+          instanceId: inst?.id,
+          type: inst?.type,
+        });
         // voiceOnly: skip text, send voice only (fallback to text if voice fails)
         if (!voiceOnly) {
           if (pending.adapter.endStream) {

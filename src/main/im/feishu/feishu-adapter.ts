@@ -404,24 +404,27 @@ export class FeishuAdapter implements ImChannelAdapter {
   async sendVoice(target: string, text: string): Promise<boolean> {
     if (!this.conn) return false;
     if (!isFfmpegAvailable()) {
-      console.warn("[im:feishu] sendVoice: ffmpeg not available");
+      console.warn("[im.voice][feishu] sendVoice aborted: ffmpeg not available");
       return false;
     }
     const info = this.peerInfo.get(target);
     if (!info) return false;
+    console.log("[im.voice][feishu] sendVoice start; textLen=", text.length, "peerInfo=", !!info);
     try {
       const ttsConfig = await getActiveTtsConfig();
       if (!ttsConfig) {
-        console.warn("[im:feishu] sendVoice: no active TTS config");
+        console.warn("[im.voice][feishu] sendVoice aborted: no active TTS config (tts-config.json activeConfigId?)");
         return false;
       }
       const { audioBase64 } = await synthesizeSpeech(ttsConfig, text);
       const wavBuffer = Buffer.from(audioBase64, "base64");
+      console.log("[im.voice][feishu] TTS ok; wavBytes=", wavBuffer.length);
       const opusBuffer = wavToOpus(wavBuffer);
       if (!opusBuffer) {
-        console.warn("[im:feishu] sendVoice: WAV→Opus conversion failed");
+        console.warn("[im.voice][feishu] WAV→Opus conversion failed (ffmpeg opus encoder missing?) wavBytes=", wavBuffer.length);
         return false;
       }
+      console.log("[im.voice][feishu] opusBytes=", opusBuffer.length);
       const client = this.conn.client;
       const fileName = `voice-${Date.now()}.opus`;
       const uploadRes = await client.im.file.create({
@@ -433,7 +436,7 @@ export class FeishuAdapter implements ImChannelAdapter {
       });
       const fileKey = (uploadRes as any)?.file_key;
       if (!fileKey) {
-        console.warn("[im:feishu] sendVoice: upload failed, no file_key");
+        console.warn("[im.voice][feishu] upload failed, no file_key; uploadRes=", JSON.stringify(uploadRes));
         return false;
       }
       const content = JSON.stringify({ file_key: fileKey });
@@ -457,10 +460,10 @@ export class FeishuAdapter implements ImChannelAdapter {
           },
         });
       }
-      console.log("[im:feishu] voice reply sent OK");
+      console.log("[im.voice][feishu] voice reply sent OK; opusBytes=", opusBuffer.length);
       return true;
     } catch (err) {
-      console.warn("[im:feishu] sendVoice failed:", err);
+      console.warn("[im.voice][feishu] sendVoice failed:", err);
       return false;
     }
   }

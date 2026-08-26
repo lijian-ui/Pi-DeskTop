@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { app } from "electron";
 
 // Resolve a usable ffmpeg binary. @ffmpeg-installer/ffmpeg hosts its prebuilt
 // binary on the npm registry (NOT GitHub), so it installs in restricted networks
@@ -16,7 +17,14 @@ try {
 } catch {
   ffmpegPath = null;
 }
-const FFMPEG_BIN = ffmpegPath ?? "ffmpeg";
+// In a packaged build, require("@ffmpeg-installer/ffmpeg").path resolves inside
+// app.asar — a read-only archive where the binary cannot be executed. electron-builder's
+// asarUnpack extracts the real exe to app.asar.unpacked, so rewrite the path there.
+let FFMPEG_BIN = ffmpegPath ?? "ffmpeg";
+if (app.isPackaged && ffmpegPath && ffmpegPath.includes("app.asar")) {
+  const unpacked = ffmpegPath.replace("app.asar", "app.asar.unpacked");
+  if (existsSync(unpacked)) FFMPEG_BIN = unpacked;
+}
 
 let ffmpegChecked = false;
 let ffmpegAvailable = false;
@@ -31,6 +39,7 @@ export function isFfmpegAvailable(): boolean {
     ffmpegAvailable = false;
   }
   ffmpegChecked = true;
+  console.log("[ffmpeg] availability=", ffmpegAvailable, "bin=", FFMPEG_BIN, "resolvedPath=", ffmpegPath);
   return ffmpegAvailable;
 }
 
@@ -54,7 +63,8 @@ export function wavToOpus(wavBuffer: Buffer): Buffer | null {
       outPath,
     ], { stdio: "ignore", timeout: 30000 });
     return readFileSync(outPath);
-  } catch {
+  } catch (e) {
+    console.warn("[ffmpeg] wavToOpus failed", e);
     return null;
   } finally {
     try { unlinkSync(inPath); } catch { /* ignore */ }
@@ -81,7 +91,8 @@ export function wavToAmr(wavBuffer: Buffer): Buffer | null {
       outPath,
     ], { stdio: "ignore", timeout: 30000 });
     return readFileSync(outPath);
-  } catch {
+  } catch (e) {
+    console.warn("[ffmpeg] wavToAmr failed", e);
     return null;
   } finally {
     try { unlinkSync(inPath); } catch { /* ignore */ }
@@ -97,6 +108,7 @@ export function wavToAmr(wavBuffer: Buffer): Buffer | null {
 export function getAudioDurationMs(filePath: string): number {
   if (!isFfmpegAvailable()) return 0;
   let stderr = "";
+  let duration = 0;
   try {
     execFileSync(FFMPEG_BIN, ["-i", filePath], {
       stdio: ["ignore", "ignore", "pipe"],
@@ -109,10 +121,14 @@ export function getAudioDurationMs(filePath: string): number {
       (e?.output?.[2]?.toString?.() ?? "");
   }
   const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)(?:\.(\d+))?/);
-  if (!m) return 0;
+  if (!m) {
+    console.warn("[ffmpeg] getAudioDurationMs: no Duration parsed; stderr tail=", stderr.slice(-200));
+    return 0;
+  }
   const h = Number(m[1]);
   const min = Number(m[2]);
   const s = Number(m[3]);
   const frac = m[4] ? `0.${m[4]}` : "0";
-  return Math.round((h * 3600 + min * 60 + s + parseFloat(frac)) * 1000);
+  duration = Math.round((h * 3600 + min * 60 + s + parseFloat(frac)) * 1000);
+  return duration;
 }
