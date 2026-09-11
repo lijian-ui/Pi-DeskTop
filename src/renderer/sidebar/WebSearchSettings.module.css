@@ -1,0 +1,205 @@
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--spacer-32) var(--spacer-24);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-24);
+}
+
+.loading {
+  padding: var(--spacer-32);
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+.error {
+  margin: 0;
+  color: var(--status-error-default);
+  font-size: var(--body-sm-font-size);
+}
+
+/* ── Section ── */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-12);
+}
+
+.sectionTitle {
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-default);
+  margin: 0;
+}
+
+.sectionDesc {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.subTitle {
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-default);
+  margin: var(--spacer-8) 0 0;
+}
+
+/* ── Form fields ── */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-6);
+  min-width: 0;
+}
+
+.fieldLabel {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-secondary);
+  font-weight: var(--font-weight-medium);
+}
+
+.input {
+  height: 38px;
+  padding: 0 var(--spacer-12, 12px);
+  background: var(--bg-overlay-l2);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  outline: none;
+  width: 100%;
+  min-width: 0;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.input:focus {
+  border-color: var(--border-brand);
+  background: var(--bg-overlay-l3);
+}
+
+.input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--spacer-12);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-10, 10px);
+  cursor: pointer;
+  font-size: var(--body-sm-font-size);
+  color: var(--text-default);
+}
+
+.row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--bg-brand);
+}
+
+/* ── Provider rows ── */
+.providerRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-6);
+  padding: var(--spacer-12);
+  background: var(--bg-overlay-l1);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+}
+
+.providerHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-10, 10px);
+}
+
+.providerName {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-default);
+  cursor: pointer;
+}
+
+.providerName input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--bg-brand);
+}
+
+.statusOk {
+  font-size: var(--body-xs-font-size);
+  color: var(--status-success-default);
+}
+
+.statusFail {
+  font-size: var(--body-xs-font-size);
+  color: var(--status-error-default);
+}
+
+/* ── Actions ── */
+.actions {
+  display: flex;
+  gap: var(--spacer-10);
+  align-items: center;
+  padding-top: var(--spacer-4);
+}
+
+.saveBtn {
+  padding: var(--spacer-10) var(--spacer-24);
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-brand);
+  color: var(--text-onbrand);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.saveBtn:hover:not(:disabled) {
+  background: var(--bg-brand-hover);
+}
+
+.saveBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.saveBtnSuccess {
+  background: var(--bg-brand-hover);
+}
+
+.clearBtn {
+  padding: var(--spacer-10) var(--spacer-24);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.clearBtn:hover:not(:disabled) {
+  border-color: var(--border-brand);
+  background: var(--bg-overlay-l2);
+}
+
+.clearBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

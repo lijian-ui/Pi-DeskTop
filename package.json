@@ -1,6 +1,6 @@
 {
   "name": "pi-desktop",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "Desktop shell for Pi AI coding agent",
@@ -18,7 +18,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@earendil-works/pi-ai": "^0.84.4",
+    "@earendil-works/pi-coding-agent": "^0.84.4",
+    "@earendil-works/pi-tui": "^0.84.4",
     "@larksuiteoapi/node-sdk": "^1.73.0",
     "@lobehub/icons": "^5.15.0",
     "@tencent-connect/qqbot-connector": "^1.2.0",
@@ -33,7 +35,9 @@
     "electron-updater": "^6.8.9",
     "extract-zip": "^2.0.1",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "better-sqlite3": "^13.0.3",
     "form-data": "^4.0.6",
+    "strip-ansi": "7.2.0",
     "highlight.js": "^11.11.1",
     "i18next": "^26.3.6",
     "lucide-react": "^0.511.0",
@@ -46,6 +50,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-i18next": "^17.0.11",
+    "typebox": "1.3.7",
     "react-markdown": "^9.0.3",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",

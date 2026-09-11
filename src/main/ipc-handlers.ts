@@ -24,14 +24,32 @@ import {
   cancelLogin as cancelQqLogin,
 } from "./im/qq/qq-login";
 import {
-  searchNpmPackages,
-  getInstalledPackages,
-  installPackage,
-  removePackage,
-  getPackageDetail,
-  checkForPackageUpdates,
-  updatePackage,
-} from "./pi/package-manager";
+  readWebSearchConfig,
+  writeWebSearchConfig,
+  type WebSearchConfig,
+} from "./websearch/config";
+import { testProviders } from "./websearch/index";
+import { replayTodoFromEntries } from "./pi/todo/todo-state";
+import {
+  applyExtensionToolFeatureUpdates,
+  readExtensionToolFeaturesSync,
+} from "./pi/tool-catalog";
+import type { ExtensionToolFeatureUpdate } from "../shared/tool-catalog-types";
+import { tryAnswerAskUser } from "./pi/ask-user/ask-user-registry";
+import type { AskUserAnswerPayload } from "../shared/ask-user-types";
+import {
+  memoryGlobalDir,
+  listMemories,
+  searchMemoriesView,
+  updateMemory,
+  deleteMemory,
+  setPinned,
+  resolveConflict,
+  getMemoryEpisodic,
+} from "./pi/memory/memory-panel";
+import { takeSnapshot, listSnapshots } from "./pi/memory/snapshot";
+import { getMemoryConfigView, saveMemoryConfigView } from "./pi/memory/memory-config-panel";
+import type { MemoryConfigPatch } from "./pi/memory/config";
 
 // Lazily-resolved Pi manager. registerIpcHandlers() is invoked BEFORE the SDK
 // finishes initializing (so handlers exist from the first millisecond and the
@@ -99,6 +117,14 @@ export function registerIpcHandlers(
     pmgr.setBashGuardMode(mode);
   });
 
+  // ask_user_question — renderer submits the user's answers (or cancel);
+  // resolves the pending tool call in the main process. Returns false when
+  // the questionnaire was already settled (timed out / aborted / answered).
+  ipcMain.handle("pi:askUserAnswer", async (_, payload: AskUserAnswerPayload) => {
+    return tryAnswerAskUser(payload.id, payload);
+  });
+
+
   ipcMain.handle("pi:getBashGuardConfig", async () => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
     return pmgr.getBashGuardConfig();
@@ -130,6 +156,21 @@ export function registerIpcHandlers(
     await pmgr.saveSoul(text);
   });
 
+  // ── Web 搜索（web_search / web_fetch 工具配置）──
+  ipcMain.handle("pi:getWebSearchConfig", async (): Promise<WebSearchConfig> => {
+    return readWebSearchConfig();
+  });
+
+  ipcMain.handle("pi:saveWebSearchConfig", async (_, config: WebSearchConfig) => {
+    await writeWebSearchConfig(config);
+    // 注：工具的「注册门控」在会话创建时读取配置；修改 enabled / provider 后，
+    // 新开会话才会重新注册工具。key / 超时等参数每次调用实时读取，无需重载。
+  });
+
+  ipcMain.handle("pi:testWebSearch", async (): Promise<ReturnType<typeof testProviders>> => {
+    return testProviders();
+  });
+
   // ── Scheduled tasks ──
   ipcMain.handle("pi:getScheduledTasks", async () => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
@@ -159,6 +200,34 @@ export function registerIpcHandlers(
     await pmgr.saveActiveTools(tools);
   });
 
+  // Extension-tool features (设置 → 可用工具 → 扩展工具): catalog read +
+  // batch save of each feature's enabled flag to its *-config.json.
+  ipcMain.handle("pi:getExtensionTools", async () => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    return readExtensionToolFeaturesSync();
+  });
+
+  ipcMain.handle(
+    "pi:saveExtensionTools",
+    async (_, updates: ExtensionToolFeatureUpdate[]) => {
+      if (!pmgr) throw new Error("Pi SDK not initialized");
+      await applyExtensionToolFeatureUpdates(updates);
+      await pmgr.reapplyToolSetToAllUnits();
+    },
+  );
+
+  // Chat-composer tool mode (极简/标准/办公) — session-scoped per cwd.
+  ipcMain.handle("pi:getSessionToolMode", async (_, cwd: string) => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    return pmgr.getSessionToolMode(cwd ?? "");
+  });
+
+  ipcMain.handle("pi:setSessionToolMode", async (_, cwd: string, mode: string) => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    const m = mode === "minimal" || mode === "office" ? mode : "standard";
+    await pmgr.setSessionToolMode(cwd ?? "", m);
+  });
+
   // ── Context-file import toggles (规则与记忆 → 导入设置) ──
   ipcMain.handle("pi:getContextFilesConfig", async () => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
@@ -186,61 +255,62 @@ export function registerIpcHandlers(
     await pmgr.removeRulesFile();
   });
 
-  // ── Pi Packages（扩展商店） ──
-  ipcMain.handle("pi:searchPackages", async (_, { keyword, from, size, category }) => {
-    try {
-      const { packages, total } = await searchNpmPackages(
-        keyword,
-        from ?? 0,
-        size ?? 50,
-        category,
-      );
-      return { ok: true, packages, total };
-    } catch (err: any) {
-      return { ok: false, error: err?.message ?? String(err) };
-    }
+  // ── Hermes 记忆浏览面板（可编辑）──
+  ipcMain.handle("pi:memoryList", async () => {
+    return listMemories(memoryGlobalDir());
   });
 
-  ipcMain.handle("pi:getPackageDetail", async (_, { name }) => {
-    try {
-      return { ok: true, detail: await getPackageDetail(name) };
-    } catch (err: any) {
-      return { ok: false, error: err?.message ?? String(err) };
-    }
+  ipcMain.handle("pi:memorySearch", async (_, { query }: { query: string }) => {
+    return searchMemoriesView(memoryGlobalDir(), typeof query === "string" ? query : "");
   });
 
-  ipcMain.handle("pi:getInstalledPackages", async () => {
-    try {
-      return { ok: true, packages: await getInstalledPackages() };
-    } catch (err: any) {
-      return { ok: false, error: err?.message ?? String(err) };
-    }
+  ipcMain.handle(
+    "pi:memoryUpdate",
+    async (_, { id, content, category }: { id: number; content?: string; category?: string | null }) => {
+      return updateMemory(memoryGlobalDir(), Number(id), {
+        content: typeof content === "string" ? content : undefined,
+        category: typeof category === "string" || category === null ? category : undefined,
+      });
+    },
+  );
+
+  ipcMain.handle("pi:memoryDelete", async (_, { id }: { id: number }) => {
+    return deleteMemory(memoryGlobalDir(), Number(id));
   });
 
-  ipcMain.handle("pi:installPackage", async (_, { source }) => {
-    const result = await installPackage(source);
-    if (result.ok && pmgr) await pmgr.invalidatePackageServices();
-    return result;
+  ipcMain.handle("pi:memorySetPinned", async (_, { id, pinned }: { id: number; pinned: boolean }) => {
+    setPinned(memoryGlobalDir(), Number(id), Boolean(pinned));
+    return { ok: true };
   });
 
-  ipcMain.handle("pi:removePackage", async (_, { source }) => {
-    const result = await removePackage(source);
-    if (result.ok && pmgr) await pmgr.invalidatePackageServices();
-    return result;
+  ipcMain.handle("pi:memoryResolveConflict", async (_, { id }: { id: number }) => {
+    resolveConflict(memoryGlobalDir(), Number(id));
+    return { ok: true };
   });
 
-  ipcMain.handle("pi:checkPackageUpdates", async () => {
-    try {
-      return { ok: true, updates: await checkForPackageUpdates() };
-    } catch (err: any) {
-      return { ok: false, error: err?.message ?? String(err) };
-    }
+  ipcMain.handle("pi:memoryEpisodic", async (_, { id, aroundCount }: { id: number; aroundCount?: number }) => {
+    return getMemoryEpisodic(
+      memoryGlobalDir(),
+      Number(id),
+      typeof aroundCount === "number" ? aroundCount : 40,
+    );
   });
 
-  ipcMain.handle("pi:updatePackage", async (_, { source }) => {
-    const result = await updatePackage(source);
-    if (result.ok && pmgr) await pmgr.invalidatePackageServices();
-    return result;
+  // ── 记忆库快照（7 天轮转 + 手动）──
+  ipcMain.handle("pi:memorySnapshotNow", async () => {
+    return takeSnapshot(memoryGlobalDir());
+  });
+
+  ipcMain.handle("pi:memoryListSnapshots", async () => {
+    return listSnapshots(memoryGlobalDir());
+  });
+
+  ipcMain.handle("pi:memoryGetConfig", async () => {
+    return getMemoryConfigView();
+  });
+
+  ipcMain.handle("pi:memorySaveConfig", async (_, patch: MemoryConfigPatch) => {
+    return saveMemoryConfigView(patch);
   });
 
   ipcMain.handle("pi:setModel", async (_, { provider, modelId, cwd }) => {
@@ -251,6 +321,18 @@ export function registerIpcHandlers(
   ipcMain.handle("pi:cycleModel", async () => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
     await pmgr.cycleModel();
+  });
+
+  // Thinking levels for the CURRENT model. The list is authoritative (the SDK
+  // clamps per provider/model), so the UI renders whatever comes back.
+  ipcMain.handle("pi:getThinkingLevels", async (_, { cwd }) => {
+    if (!pmgr) return { current: "off", available: [], supports: false };
+    return pmgr.getThinkingLevels(cwd);
+  });
+
+  ipcMain.handle("pi:setThinkingLevel", async (_, { level, cwd }) => {
+    if (!pmgr) throw new Error("Pi SDK not initialized");
+    await pmgr.setThinkingLevel(level, cwd);
   });
 
   ipcMain.handle("pi:getAvailableModels", async () => {
@@ -353,9 +435,36 @@ export function registerIpcHandlers(
     },
   );
 
+  // ── Todo snapshot (read-only; source of truth is the session .jsonl) ──
+  ipcMain.handle("pi:getTodoSnapshot", async (_, sessionPath: string) => {
+    if (!sessionPath) return null;
+    try {
+      const raw = await readFile(sessionPath, "utf-8");
+      const entries: any[] = [];
+      for (const line of raw.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          entries.push(JSON.parse(trimmed));
+        } catch {
+          // Skip a malformed row — never fail the whole snapshot read.
+        }
+      }
+      return replayTodoFromEntries(entries);
+    } catch {
+      return null; // session file missing / unreadable → no checklist yet
+    }
+  });
+
   ipcMain.handle("pi:getState", async (_, { cwd }) => {
     if (!pmgr) return null;
     return pmgr.getState(cwd);
+  });
+
+  // Full transcript (pre-compaction included) for the chat panel history reload.
+  ipcMain.handle("pi:getFullMessages", async (_, { cwd }) => {
+    if (!pmgr) return [];
+    return pmgr.getFullMessages(cwd);
   });
 
   ipcMain.handle("pi:setApiKey", async (_, { providerId, apiKey }) => {
@@ -444,6 +553,77 @@ export function registerIpcHandlers(
     if (!pmgr) throw new Error("Pi SDK not initialized");
     await pmgr.deleteCustomModel(providerId, modelId);
   });
+
+  // Fetch the list of models a custom OpenAI-compatible endpoint exposes via
+  // its /v1/models (or /models) endpoint. Used by the config UI's "Fetch
+  // available models" button so the user can pick which models to enable.
+  ipcMain.handle(
+    "pi:fetchRemoteModels",
+    async (_, { baseUrl, apiKey }: { baseUrl: string; apiKey?: string }) => {
+      if (!baseUrl || !baseUrl.trim()) {
+        throw new Error("Base URL 不能为空");
+      }
+      const norm = baseUrl.trim().replace(/\/+$/, "");
+      // OpenAI-compatible endpoints serve models at /v1/models; some expose it
+      // directly at /models. Try both, preferring the one matching the base.
+      const candidates = norm.endsWith("/v1")
+        ? [`${norm}/models`]
+        : [`${norm}/v1/models`, `${norm}/models`];
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15_000);
+      try {
+        let lastErr: unknown;
+        for (const url of candidates) {
+          try {
+            const headers: Record<string, string> = {
+              Accept: "application/json",
+            };
+            if (apiKey && apiKey.trim()) {
+              headers["Authorization"] = `Bearer ${apiKey.trim()}`;
+            }
+            const res = await fetch(url, { headers, signal: ctrl.signal });
+            if (!res.ok) {
+              if (res.status === 401 || res.status === 403) {
+                // Keyed endpoints (e.g. AgnesAI cloud) reject even an empty or
+                // invalid token with 401 — tell the user exactly what to do
+                // instead of surfacing a bare "HTTP 401 Unauthorized".
+                lastErr = new Error(
+                  `HTTP ${res.status} ${res.statusText}：该端点需要有效的 API Key，请先在上方「API Key」字段填写正确的密钥后重试。`,
+                );
+              } else if (res.status === 404) {
+                lastErr = new Error(
+                  `HTTP 404：未找到模型列表接口（${url}），请检查 Base URL 是否正确（通常为 …/v1）。`,
+                );
+              } else {
+                lastErr = new Error(`HTTP ${res.status} ${res.statusText}`);
+              }
+              continue;
+            }
+            const json = (await res.json()) as any;
+            const list = Array.isArray(json?.data) ? json.data : null;
+            if (!list) {
+              lastErr = new Error("响应缺少 data 数组（非 OpenAI 兼容格式）");
+              continue;
+            }
+            const ids = list
+              .map((m: any) => (typeof m?.id === "string" ? m.id : null))
+              .filter((x: string | null): x is string => !!x && x.trim() !== "");
+            return Array.from(new Set(ids));
+          } catch (err) {
+            lastErr = err;
+            // AbortError means the whole request timed out — stop trying.
+            if ((err as NodeJS.ErrnoException)?.name === "AbortError") break;
+            continue;
+          }
+        }
+        throw lastErr instanceof Error
+          ? lastErr
+          : new Error("获取模型列表失败");
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  );
 
   // ── Session management ──
   ipcMain.handle("pi:listSessions", async () => {
@@ -616,6 +796,16 @@ export function registerIpcHandlers(
       return { kind: "text", content: buf.toString("utf-8"), size: st.size };
     } catch (err) {
       return { kind: "error", error: String(err) };
+    }
+  });
+
+  // Lightweight stat for artifact file-size display.
+  ipcMain.handle("pi:statFile", async (_, { filePath }: { filePath: string }) => {
+    try {
+      const s = await stat(filePath);
+      return s.isFile() ? { size: s.size } : null;
+    } catch {
+      return null;
     }
   });
 

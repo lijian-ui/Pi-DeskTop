@@ -1,0 +1,150 @@
+/* Right-side Todo checklist panel — lower block of the chat right rail (model
+   drives it via the `todo` tool; the UI is a read-only projection). Width,
+   left border and background come from the rail container; this block fills
+   whatever vertical space the subagent block above leaves. Visibility is
+   controlled from the titlebar Todo toggle; when closed nothing renders. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  padding: var(--spacer-8) var(--spacer-12);
+  border-bottom: 1px solid var(--border-neutral-l1);
+  flex-shrink: 0;
+}
+
+.headerTitle {
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+
+.progress {
+  color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--icon-secondary, var(--text-tertiary));
+  cursor: pointer;
+}
+
+.iconBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--spacer-6) var(--spacer-12) var(--spacer-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-2);
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacer-8);
+  padding: var(--spacer-4) 0;
+}
+
+.rowBody {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.rowText {
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.doneText {
+  color: var(--text-tertiary);
+  font-size: var(--body-sm-font-size);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.dep {
+  color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+}
+
+.emptyHint {
+  padding: var(--spacer-12) 0;
+  color: var(--text-tertiary);
+  font-size: var(--body-sm-font-size);
+  text-align: center;
+}
+
+.doneToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  margin: var(--spacer-2) var(--spacer-12) var(--spacer-10);
+  padding: var(--spacer-4) 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.doneToggle:hover {
+  color: var(--text-brand);
+}
+
+/* Status dots — functional state only (no decorative animation). */
+.dotPending,
+.dotInProgress,
+.dotCompleted {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.dotPending {
+  border: 1.5px solid var(--icon-secondary, var(--text-tertiary));
+  background: transparent;
+}
+
+.dotInProgress {
+  background: var(--bg-brand);
+}
+
+.dotCompleted {
+  background: var(--bg-brand);
+  opacity: 0.55;
+}

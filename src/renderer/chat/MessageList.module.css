@@ -29,11 +29,24 @@
 }
 
 .historyHint {
-  text-align: center;
-  font-size: var(--body-xs-font-size);
+  align-self: center;
+  margin: 0;
+  border: 1px solid var(--border-neutral-l2);
+  background: var(--bg-base-default);
   color: var(--text-tertiary);
-  padding: var(--spacer-8) 0;
+  text-align: center;
+  font-family: inherit;
+  font-size: var(--body-xs-font-size);
+  line-height: 1.4;
+  padding: var(--spacer-4) var(--spacer-12);
+  border-radius: var(--radius-full);
+  cursor: pointer;
   user-select: none;
+}
+
+.historyHint:hover {
+  color: var(--text-default);
+  border-color: var(--border-neutral-l3, var(--border-neutral-l2));
 }
 
 .jumpButton {

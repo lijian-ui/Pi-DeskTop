@@ -1,6 +1,8 @@
-import { useEffect } from "react";
-import { Search, TerminalSquare, ChevronUp, ChevronDown, X } from "lucide-react";
+import { useEffect, useMemo } from "react";
+import { Search, TerminalSquare, ListTodo, ChevronUp, ChevronDown, X } from "lucide-react";
 import { useUIStore } from "../store/ui-store";
+import { useTodoStore } from "../store/todo-store";
+import { useSessionStore } from "../store/session-store";
 import { useTranslation } from "react-i18next";
 import styles from "./Titlebar.module.css";
 
@@ -17,7 +19,30 @@ export default function Titlebar() {
   const submitSearch = useUIStore((s) => s.submitSearch);
   const nextMatch = useUIStore((s) => s.nextMatch);
   const prevMatch = useUIStore((s) => s.prevMatch);
+  const todoPanelOpen = useUIStore((s) => s.todoPanelOpen);
+  const currentPath = useSessionStore((s) => s.currentPath);
+  const todoSnapshot = useTodoStore((s) =>
+    currentPath ? s.snapshots[currentPath] : undefined,
+  );
   const { t } = useTranslation();
+
+  // Todo toggle lives between the search and terminal buttons. It is shown
+  // only while the focused session actually has a live checklist (i.e. the
+  // right-side panel would have something to show); the panel itself is
+  // opened/closed through this button.
+  const hasTodoList = useMemo(
+    () => (todoSnapshot?.tasks ?? []).some((task) => task.status !== "deleted"),
+    [todoSnapshot],
+  );
+  const toggleTodoPanel = () => {
+    const ui = useUIStore.getState();
+    const next = !ui.todoPanelOpen;
+    ui.setTodoPanelOpen(next);
+    // Keep the per-session opt-out in sync with the toggle: opening the panel
+    // re-enables model auto-open for this session, closing records that the
+    // user dismissed it (model updates must not force it back open).
+    if (currentPath) useTodoStore.getState().setDismissed(currentPath, !next);
+  };
 
   // Global "find in conversation" shortcut: Ctrl+F on Windows/Linux,
   // Cmd+F on macOS. Opens the in-session search box (the input auto-focuses
@@ -115,6 +140,15 @@ export default function Titlebar() {
         >
           <Search size={16} />
         </button>
+        {hasTodoList && (
+          <button
+            className={`${styles.iconBtn} ${todoPanelOpen ? styles.iconBtnActive : ""}`}
+            onClick={toggleTodoPanel}
+            title="任务清单"
+          >
+            <ListTodo size={16} />
+          </button>
+        )}
         <button
           className={`${styles.iconBtn} ${terminalOpen ? styles.iconBtnActive : ""}`}
           onClick={toggleTerminal}

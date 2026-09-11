@@ -8,6 +8,16 @@ export interface ToolExecution {
   output?: string;
   isError: boolean;
   isRunning: boolean;
+  /** Resolved file path when this tool writes/edits a file (set at start). */
+  filePath?: string;
+}
+
+/** A file produced by the LLM during this turn (written via Write/Edit/etc.). */
+export interface Artifact {
+  /** Absolute or workspace-relative file path. */
+  filePath: string;
+  /** File size in bytes; resolved lazily via stat after mount. */
+  size: number | null;
 }
 
 export interface Message {
@@ -20,6 +30,8 @@ export interface Message {
   images?: ImageAttachment[];
   thinking?: string;
   toolExecutions?: ToolExecution[];
+  /** Files produced by the LLM this turn (written / edited / created). */
+  artifacts?: Artifact[];
   isStreaming?: boolean;
   /** Set when the user manually aborted this assistant message's generation. */
   stoppedByUser?: boolean;

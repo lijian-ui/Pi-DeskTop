@@ -37,6 +37,7 @@ interface ModelItem {
   id: string;
   name?: string;
   provider: string;
+  providerName?: string;
 }
 
 const modelKeyOf = (m: { provider: string; id?: string; modelId?: string }): string =>
@@ -116,6 +117,7 @@ export default function ScheduledTaskEditor({
                 id: String(m.id),
                 name: m.name ? String(m.name) : String(m.id),
                 provider: String(m.provider),
+                providerName: m.providerName ? String(m.providerName) : undefined,
               })),
           );
         }
@@ -297,7 +299,7 @@ export default function ScheduledTaskEditor({
                 >
                   <option value="">{t("scheduled.modelDefault")}</option>
                   {Object.entries(modelsByProvider).map(([provider, models]) => (
-                    <optgroup key={provider} label={provider}>
+                    <optgroup key={provider} label={(models[0]?.providerName) || provider}>
                       {models.map((m) => (
                         <option key={modelKeyOf(m)} value={modelKeyOf(m)}>
                           {m.name}

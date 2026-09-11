@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
 import { useAgentStore, type Message } from "../store/agent-store";
 import { useUIStore } from "../store/ui-store";
 import { useTranslation } from "react-i18next";
 import UserMessage from "./UserMessage";
 import AssistantTurn from "./AssistantTurn";
+// 复用 AssistantTurn 的「请求中…」打字气泡样式（头像 + 跳动圆点），
+// 避免在 MessageList 里重复一套动画 keyframes。
+import assistantStyles from "./AssistantTurn.module.css";
 import styles from "./MessageList.module.css";
 
 type RenderItem =
@@ -90,34 +93,69 @@ export default function MessageList() {
   // lazily revealed as the user scrolls up — avoids rendering hundreds of
   // heavy Markdown/code/Mermaid components for long sessions at once.
   const [visibleCount, setVisibleCount] = useState(BATCH_SIZE);
-  // When set, the next render should restore scrollTop so the viewport doesn't
-  // jump after we prepend earlier messages above the current position.
-  const pendingRestoreRef = useRef(0);
+  // When set, the next render restores scrollTop so the viewport stays anchored
+  // on the same content after we prepend earlier messages above it. We store the
+  // pre-prepend {scrollHeight, scrollTop} so the restore is exact (not off by the
+  // original scrollTop). 0 means "no restore pending".
+  const pendingRestoreRef = useRef<{ height: number; top: number } | 0>(0);
+  // Gates the auto-load in handleScroll. Set on scroll-triggered loads and
+  // cleared *unconditionally* in the effect below. It must never be cleared
+  // only on the success path: a scroll event can be swallowed (Clamped Scroll /
+  // programmatic scrollTo inside a nested scroll container), which used to
+  // leave this latched at `true` and permanently disabled loading more history.
   const loadingMoreRef = useRef(false);
 
   // Reset the visible window whenever a different session is loaded
-  // (detected by the first message's id changing), or when search closes
-  // (to restore virtual scrolling after search expanded all messages).
+  // (detected by the first message's id changing). Reset via revealEarlier's
+  // bookkeeping refs too, so no stale latch survives the session swap.
   const firstId = messages[0]?.id;
   const firstIdRef = useRef(firstId);
   useEffect(() => {
     if (firstId !== firstIdRef.current) {
       firstIdRef.current = firstId;
+      pendingRestoreRef.current = 0;
+      loadingMoreRef.current = false;
       setVisibleCount(BATCH_SIZE);
     }
   }, [firstId]);
 
   useEffect(() => {
     if (!searchOpen && visibleCount > BATCH_SIZE) {
+      pendingRestoreRef.current = 0;
+      loadingMoreRef.current = false;
       setVisibleCount(BATCH_SIZE);
     }
   }, [searchOpen]);
+
+  // Group the full message list into turns; turns are NOT chunked by
+  // virtual-scrolling so an assistant's turn (avatar + collapsible bubble)
+  // never gets split across page boundaries.
+  const renderItems = useMemo(() => buildRenderItems(messages), [messages]);
 
   const isNearBottom = () => {
     const list = listRef.current;
     if (!list) return true;
     return list.scrollHeight - list.scrollTop - list.clientHeight < BOTTOM_THRESHOLD;
   };
+
+  // Reveal one more batch of older history. Shared by the scroll-triggered
+  // auto-load and the explicit「加载更早的消息」button. When `restoreAnchor` is
+  // true the viewport is pinned to its current content (no jump) by recording
+  // the pre-prepend scrollHeight; the button uses false so it behaves like a
+  // normal "load more" (stays where it is, revealing content above).
+  const revealEarlier = useCallback(
+    (restoreAnchor: boolean) => {
+      const list = listRef.current;
+      if (!list) return;
+      if (renderItems.length <= visibleCount) return;
+      loadingMoreRef.current = true;
+      pendingRestoreRef.current = restoreAnchor
+        ? { height: list.scrollHeight, top: list.scrollTop }
+        : 0;
+      setVisibleCount((c) => Math.min(renderItems.length, c + BATCH_SIZE));
+    },
+    [renderItems.length, visibleCount],
+  );
 
   const handleScroll = () => {
     const list = listRef.current;
@@ -131,12 +169,10 @@ export default function MessageList() {
     // scrollHeight and restoring the delta after the batch is prepended.
     if (
       list.scrollTop < TOP_THRESHOLD &&
-      visibleCount < messages.length &&
+      visibleCount < renderItems.length &&
       !loadingMoreRef.current
     ) {
-      loadingMoreRef.current = true;
-      pendingRestoreRef.current = list.scrollHeight;
-      setVisibleCount((c) => Math.min(messages.length, c + BATCH_SIZE));
+      revealEarlier(true);
     }
   };
 
@@ -149,11 +185,17 @@ export default function MessageList() {
   };
 
   // After prepending earlier messages, restore the scroll position so the
-  // viewport stays anchored on the same content.
+  // viewport stays anchored on the same content. `loadingMoreRef` is ALWAYS
+  // released here, even when there was nothing to restore, otherwise the next
+  // scroll event would see it still latched and skip loading.
   useEffect(() => {
     const list = listRef.current;
-    if (!list || !pendingRestoreRef.current) return;
-    list.scrollTop = list.scrollHeight - pendingRestoreRef.current;
+    const restore = pendingRestoreRef.current;
+    if (list && restore) {
+      // The content above grew by (restore.height - restore.top); offset
+      // scrollTop by exactly that delta so the same messages stay in view.
+      list.scrollTop = list.scrollHeight - (restore.height - restore.top);
+    }
     pendingRestoreRef.current = 0;
     loadingMoreRef.current = false;
   }, [visibleCount]);
@@ -301,10 +343,13 @@ export default function MessageList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchOpen, searchTrigger, searchIndex, searchMatchIds, visibleCount]);
 
-  // Group the full message list into turns; turns are NOT chunked by
-  // virtual-scrolling so an assistant's turn (avatar + collapsible bubble)
-  // never gets split across page boundaries.
-  const renderItems = useMemo(() => buildRenderItems(messages), [messages]);
+  // 当 agent 正在运行（请求已发出，agentStore.isStreaming 在 SDK 的
+  // agent_start 时即置 true，早于首字节）但模型尚未产出任何可见内容时，
+  // 在列表末尾补一个「请求中…」气泡。这覆盖了在线模型 TTFT（首字节延迟）
+  // 期间 SDK 尚未发 message_start、AssistantTurn 尚未渲染的真空期——
+  // 本地模型因 message_start 即时触发，此时 lastItem 已是 turn，不会重复显示。
+  const lastItem = renderItems[renderItems.length - 1];
+  const showRequesting = isStreaming && !(lastItem && lastItem.type === "turn");
 
   // Only render the most recent `visibleCount` turns; older ones are revealed
   // on demand as the user scrolls up.
@@ -317,9 +362,13 @@ export default function MessageList() {
       <div className={styles.messageList} ref={listRef} onScroll={handleScroll}>
         <div className={styles.listInner}>
           {visibleCount < renderItems.length && (
-            <div className={styles.historyHint}>
-              {t("chat.historyOlder")}
-            </div>
+            <button
+              type="button"
+              className={styles.historyHint}
+              onClick={() => revealEarlier(false)}
+            >
+              {t("chat.loadEarlier")}
+            </button>
           )}
           {visibleItems.map((item) => {
             if (item.type === "user") {
@@ -336,6 +385,23 @@ export default function MessageList() {
               />
             );
           })}
+          {showRequesting && (
+            <div className={assistantStyles.avatarRow}>
+              <div className={assistantStyles.avatar}>Pi</div>
+              <span
+                className={assistantStyles.typing}
+                role="status"
+                aria-label={t("chat.requesting")}
+              >
+                <span className={assistantStyles.typingText}>{t("chat.requesting")}</span>
+                <span className={assistantStyles.typingDots}>
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </span>
+              </span>
+            </div>
+          )}
           <div className={styles.scrollAnchor} ref={anchorRef} />
         </div>
       </div>

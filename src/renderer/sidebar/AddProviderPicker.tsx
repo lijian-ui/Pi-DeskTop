@@ -2,16 +2,23 @@
  * Add-provider picker modal.
  *
  * Mirrors the @agegr/pi-web ModelsConfig screen: a searchable grid of every
- * provider the Pi SDK ships, split into two sections —
+ * provider the Pi SDK ships, split into sections —
  *   CUSTOM   → user-defined OpenAI-compatible endpoints
  *   API KEY  → providers configured with an API key
+ *   LOCAL    → LM Studio / Ollama (pre-filled Base URL)
+ *   CLOUD    → Agnes etc. (remote, still needs an API key)
  *
- * Picking a card drops into an inline config step where the user pastes a key
- * (API KEY) or fills the custom form (CUSTOM) and saves.
+ * Picking a card drops into an inline config step. For OpenAI-compatible
+ * (CUSTOM / LOCAL / CLOUD) providers the config step is:
+ *   渠道名称 * / Base URL * / API Key *  →  divider  →  模型目录
+ * The model catalog holds every model the provider exposes. Models are added
+ * either by hand ("添加模型") or pulled from the endpoint ("获取可用模型",
+ * which opens a checklist popup). Each row is editable (name / context window
+ * / supports images) and deletable.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { X, Search, ArrowLeft, Plus, Check } from "lucide-react";
+import { X, Search, ArrowLeft, Plus, Check, Download, Trash } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUIStore } from "../store/ui-store";
 import ProviderIcon from "./ProviderIcon";
@@ -33,6 +40,37 @@ interface Selection {
   presetBaseUrl?: string;
 }
 
+interface ModelEntry {
+  /** Stable React key. For fetched models this is a uuid; names can collide. */
+  key: string;
+  name: string;
+  contextWindow: number;
+  supportsImages: boolean;
+  /** Whether this model supports reasoning / thinking (drives supportsThinking()). */
+  reasoning: boolean;
+  /** compat.thinkingFormat: how the endpoint emits the reasoning stream. "" = auto. */
+  thinkingFormat: string;
+  /** Manual rows let the user edit the name; fetched rows keep the server id. */
+  editableName: boolean;
+}
+
+/** thinkingFormat options for compat.thinkingFormat. Provider names are locale-agnostic. */
+const THINKING_FORMAT_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "Auto" },
+  { value: "qwen", label: "Qwen (reasoning_content)" },
+  { value: "deepseek", label: "DeepSeek (reasoning_content)" },
+  { value: "openai", label: "OpenAI / generic" },
+  { value: "openrouter", label: "OpenRouter" },
+  { value: "together", label: "Together" },
+  { value: "zai", label: "Z.AI" },
+  { value: "ant-ling", label: "Tongyi Lingma" },
+];
+
+const genKey = (): string =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `m_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+
 export default function AddProviderPicker({
   onClose,
   onSaved,
@@ -50,16 +88,28 @@ export default function AddProviderPicker({
   const [selection, setSelection] = useState<Selection | null>(null);
 
   // ── config-step form state ──
-  const [formName, setFormName] = useState("");
+  const [formChannel, setFormChannel] = useState("");
   const [formBaseUrl, setFormBaseUrl] = useState("");
-  const [formContextWindow, setFormContextWindow] = useState<number>(NaN);
-  const [formSupportsImages, setFormSupportsImages] = useState(false);
   const [formApiKey, setFormApiKey] = useState("");
+  // Focus the API Key field when a fetch fails due to missing/invalid auth,
+  // so the user lands exactly where they need to fix it.
+  const apiKeyRef = useRef<HTMLInputElement>(null);
+  // The model catalog — every model this provider exposes. Both the manual
+  // "添加模型" and the "获取可用模型" popup feed into this single list.
+  const [modelList, setModelList] = useState<ModelEntry[]>([]);
+
+  // "Fetch available models" popup state.
+  const [fetchPopupOpen, setFetchPopupOpen] = useState(false);
+  const [popupModels, setPopupModels] = useState<string[]>([]);
+  const [popupChecked, setPopupChecked] = useState<Record<string, boolean>>({});
+
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   // When editing an existing custom provider, holds its raw config so we can
-  // preserve model fields the form doesn't expose (reasoning / input / cost …).
-  const [editConfig, setEditConfig] = useState<any>(null);
+  // preserve provider-level fields the form doesn't expose (name …).
+  const [, setEditConfig] = useState<any>(null);
 
   const loadCatalog = () => {
     window.piDesk
@@ -73,8 +123,7 @@ export default function AddProviderPicker({
   }, []);
 
   // When opened to edit an existing custom provider, load its full raw config
-  // (which includes contextWindow + apiKey, not surfaced by the catalog) and
-  // prefill the form. The form edits the FIRST model; siblings are preserved.
+  // and prefill the form + the model catalog (one editable row per model).
   useEffect(() => {
     if (!editProviderId) return;
     window.piDesk
@@ -85,26 +134,23 @@ export default function AddProviderPicker({
           setError(t("models.notFound"));
           return;
         }
-        const model0 = Array.isArray(cfg.models) ? cfg.models[0] : undefined;
         setEditConfig(cfg);
         setSelection({ id: editProviderId, name: cfg.name ?? editProviderId, kind: "custom" });
-        // Prefill with the model's own name (the real server-side identifier),
-        // falling back to the provider name for legacy single-model configs.
-        setFormName(
-          typeof model0?.name === "string" && model0.name
-            ? model0.name
-            : typeof cfg.name === "string"
-              ? cfg.name
-              : editProviderId
-        );
         setFormBaseUrl(typeof cfg.baseUrl === "string" ? cfg.baseUrl : "");
-        setFormContextWindow(
-          model0 && Number.isFinite(model0.contextWindow) ? model0.contextWindow : 128000
-        );
-        setFormSupportsImages(
-          Array.isArray(model0?.input) ? model0.input.includes("image") : false
-        );
         setFormApiKey(typeof cfg.apiKey === "string" ? cfg.apiKey : "");
+        setFormChannel(typeof cfg.channel === "string" ? cfg.channel : "");
+        const prefill: ModelEntry[] = (
+          Array.isArray(cfg.models) ? cfg.models : []
+        ).map((m: any) => ({
+          key: genKey(),
+          name: String(m?.id ?? m?.name ?? ""),
+          contextWindow: Number.isFinite(m?.contextWindow) ? m.contextWindow : 128000,
+          supportsImages: Array.isArray(m?.input) ? m.input.includes("image") : false,
+          reasoning: m?.reasoning === true,
+          thinkingFormat: typeof m?.compat?.thinkingFormat === "string" ? m.compat.thinkingFormat : "",
+          editableName: true,
+        }));
+        setModelList(prefill);
         setError("");
         setStep("config");
       })
@@ -157,11 +203,15 @@ export default function AddProviderPicker({
 
   const openConfig = (sel: Selection) => {
     setSelection(sel);
-    setFormName("");
+    setFormChannel("");
     setFormBaseUrl(sel.presetBaseUrl ?? "");
-    setFormContextWindow(NaN);
-    setFormSupportsImages(false);
     setFormApiKey("");
+    setModelList([]);
+    setFetchPopupOpen(false);
+    setPopupModels([]);
+    setPopupChecked({});
+    setFetching(false);
+    setFetchError("");
     setError("");
     setStep("config");
   };
@@ -172,31 +222,149 @@ export default function AddProviderPicker({
     setError("");
   };
 
+  // ── Model catalog editing ──
+  const addManualModel = () => {
+    setModelList((prev) => [
+      ...prev,
+      { key: genKey(), name: "", contextWindow: 128000, supportsImages: false, reasoning: false, thinkingFormat: "", editableName: true },
+    ]);
+  };
+  const updateModelName = (key: string, name: string) =>
+    setModelList((prev) => prev.map((m) => (m.key === key ? { ...m, name } : m)));
+  const updateModelCtx = (key: string, raw: string) =>
+    setModelList((prev) =>
+      prev.map((m) =>
+        m.key === key
+          ? { ...m, contextWindow: raw === "" ? NaN : Number(raw) }
+          : m,
+      ),
+    );
+  const updateModelImg = (key: string, val: boolean) =>
+    setModelList((prev) => prev.map((m) => (m.key === key ? { ...m, supportsImages: val } : m)));
+  const updateModelReasoning = (key: string, val: boolean) =>
+    setModelList((prev) => prev.map((m) => (m.key === key ? { ...m, reasoning: val } : m)));
+  const updateModelThinkingFormat = (key: string, val: string) =>
+    setModelList((prev) => prev.map((m) => (m.key === key ? { ...m, thinkingFormat: val } : m)));
+  const removeModel = (key: string) =>
+    setModelList((prev) => prev.filter((m) => m.key !== key));
+
+  // ── Fetch available models popup ──
+  const doFetch = async (existingNames?: Set<string>) => {
+    if (!formBaseUrl.trim()) {
+      setFetchError(t("models.urlRequired"));
+      return;
+    }
+    setFetching(true);
+    setFetchError("");
+    try {
+      const ids = await window.piDesk.fetchRemoteModels(
+        formBaseUrl.trim(),
+        formApiKey.trim(),
+      );
+      if (!ids.length) {
+        setFetchError(t("models.noRemoteModels"));
+        setPopupModels([]);
+        return;
+      }
+      setPopupModels(ids);
+      // Pre-check models already present in the catalog so the user sees state.
+      const ens =
+        existingNames ??
+        new Set(modelList.map((m) => m.name.trim().toLowerCase()).filter(Boolean));
+      const pre: Record<string, boolean> = {};
+      for (const id of ids) {
+        if (ens.has(id.toLowerCase())) pre[id] = true;
+      }
+      setPopupChecked(pre);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : t("models.fetchFailed");
+      setFetchError(msg);
+      // A 401/403 means the endpoint rejected the request for auth reasons —
+      // point the user at the API Key field they likely left empty/invalid.
+      if (/40[13]/.test(msg)) apiKeyRef.current?.focus();
+      setPopupModels([]);
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const openFetchPopup = () => {
+    setFetchPopupOpen(true);
+    setPopupModels([]);
+    setPopupChecked({});
+    setFetchError("");
+    doFetch();
+  };
+
+  const togglePopupModel = (id: string, checked: boolean) => {
+    setPopupChecked((prev) => {
+      const next = { ...prev };
+      if (checked) next[id] = true;
+      else delete next[id];
+      return next;
+    });
+  };
+
+  // Select / clear every fetched model in one click.
+  const allPopupSelected =
+    popupModels.length > 0 && popupModels.every((id) => popupChecked[id]);
+  const toggleSelectAll = (checked: boolean) => {
+    setPopupChecked((prev) => {
+      const next = { ...prev };
+      for (const id of popupModels) {
+        if (checked) next[id] = true;
+        else delete next[id];
+      }
+      return next;
+    });
+  };
+
+  // Merge the checked popup models into the catalog (skip duplicates by name).
+  // Each row keeps its own defaults — per-model config happens in the catalog.
+  const confirmPopup = () => {
+    setModelList((prev) => {
+      const byName = new Map(prev.map((m) => [m.name.trim().toLowerCase(), m]));
+      for (const id of Object.keys(popupChecked)) {
+        if (!popupChecked[id]) continue;
+        const lc = id.toLowerCase();
+        if (byName.has(lc)) continue;
+        byName.set(lc, {
+          key: genKey(),
+          name: id,
+          contextWindow: 128000,
+          supportsImages: false,
+          reasoning: false,
+          thinkingFormat: "",
+          editableName: false,
+        });
+      }
+      return Array.from(byName.values());
+    });
+    setFetchPopupOpen(false);
+    setPopupModels([]);
+    setPopupChecked({});
+  };
+
   const requiredFilled =
     selection?.kind === "custom"
-      ? formName.trim() !== "" &&
+      ? (editProviderId ? true : formChannel.trim() !== "") &&
         formBaseUrl.trim() !== "" &&
-        Number.isFinite(formContextWindow) &&
-        formApiKey.trim() !== ""
+        formApiKey.trim() !== "" &&
+        modelList.some((m) => m.name.trim() !== "")
       : formApiKey.trim() !== "";
 
   const handleSave = async () => {
     if (!selection) return;
-    if (!formApiKey.trim()) {
-      setError(t("models.apiKeyRequired"));
-      return;
-    }
     setSaving(true);
     setError("");
     try {
       if (selection.kind === "custom") {
-        if (!formName.trim()) {
-          setError(t("models.nameRequired"));
-          setSaving(false);
-          return;
-        }
-        if (!Number.isFinite(formContextWindow)) {
-          setError(t("models.contextWindowRequired"));
+        // When editing an existing provider the id comes from editProviderId,
+        // so the channel field is no longer required (local/cloud presets are
+        // saved without one). Same for the API key — local endpoints often
+        // need none, and if present it's already prefilled.
+        if (!editProviderId && !formChannel.trim()) {
+          setError(t("models.channelRequired"));
           setSaving(false);
           return;
         }
@@ -207,83 +375,60 @@ export default function AddProviderPicker({
           return;
         }
         if (!/\/v1$/i.test(baseUrl)) baseUrl += "/v1";
+        if (!editProviderId && !formApiKey.trim()) {
+          setError(t("models.apiKeyRequired"));
+          setSaving(false);
+          return;
+        }
+
+        const validModels = modelList.filter((m) => m.name.trim() !== "");
+        if (validModels.length === 0) {
+          setError(t("models.needModel"));
+          setSaving(false);
+          return;
+        }
+
+        // Read the existing on-disk config (provider name + edit merge).
+        const allCfg = await window.piDesk.getCustomModelsJson().catch(() => ({}));
         const providerId = editProviderId
           ? editProviderId
           : selection.presetBaseUrl
             ? selection.id
-            : formName.trim().toLowerCase().replace(/\s+/g, "-");
-        const name = formName.trim();
-        // The model id is what gets sent as the `model` field in API requests,
-        // so it MUST be the server-side identifier verbatim (case + slashes
-        // preserved). LM Studio's JIT auto-load matches strictly on this.
-        const modelId = name;
-        const ctx = Number.isFinite(formContextWindow) ? formContextWindow : 128000;
-
-        // Read the current on-disk config so saving MERGES models into the
-        // provider instead of wiping previously added ones.
-        const allCfg = await window.piDesk.getCustomModelsJson().catch(() => ({}));
+            : formChannel.trim().toLowerCase().replace(/\s+/g, "-");
         const existingCfg = (allCfg as Record<string, any>)[providerId];
-        const existingModels: any[] = Array.isArray(existingCfg?.models)
-          ? existingCfg.models
-          : [];
 
-        let models: any[];
-        if (editProviderId && editConfig) {
-          // Edit: rewrite the model being edited (the FIRST model — that's what
-          // the form shows), keep fields the form doesn't expose (reasoning,
-          // input, cost, maxTokens, compat, headers) and preserve all sibling
-          // models untouched. The old id + edited model are read from the
-          // FRESH disk config (existingModels), NOT from the `editConfig`
-          // snapshot taken when the dialog opened — a snapshot would drift if
-          // the file changed in between, and `find` would miss → edited={}
-          // and silently drop the model's extra fields.
-          const oldId = existingModels[0] ? String(existingModels[0].id) : "";
-          const edited = existingModels[0] ?? {};
-          const rest = existingModels.filter(
-            (m) => String(m?.id) !== oldId && String(m?.id) !== modelId
-          );
-          models = [
-            {
-              ...edited,
-              id: modelId,
-              name,
-              contextWindow: ctx,
-              input: formSupportsImages ? ["text", "image"] : ["text"],
-            },
-            ...rest,
-          ];
-        } else {
-          // Add: upsert by model id — same id updates in place, a new id is
-          // APPENDED so provider can hold multiple models (LM Studio, Ollama…).
-          const newModel = {
-            id: modelId,
-            name,
-            reasoning: false,
-            input: formSupportsImages ? ["text", "image"] : ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: ctx,
-            maxTokens: 16384,
-          };
-          models = [
-            ...existingModels.filter((m) => String(m?.id) !== modelId),
-            newModel,
-          ];
-        }
+        // The catalog IS the full model list — full replace on save.
+        const models = validModels.map((m) => ({
+          id: m.name.trim(),
+          name: m.name.trim(),
+          reasoning: m.reasoning ?? false,
+          ...(m.thinkingFormat ? { compat: { thinkingFormat: m.thinkingFormat } } : {}),
+          input: m.supportsImages ? ["text", "image"] : ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: Number.isFinite(m.contextWindow) ? m.contextWindow : 128000,
+          maxTokens: 16384,
+        }));
 
         // Provider display name: keep the existing one; new presets use the
-        // product name (LM Studio / Ollama), new customs use the model name.
+        // product name (LM Studio / Ollama / Agnes); new customs use channel.
         const providerName =
           (typeof existingCfg?.name === "string" && existingCfg.name) ||
-          (selection.presetBaseUrl ? selection.name : name);
+          (selection.presetBaseUrl ? selection.name : formChannel.trim());
 
         await window.piDesk.saveCustomProvider(providerId, {
           api: "openai-completions",
           name: providerName,
+          channel: formChannel.trim() || existingCfg?.channel || "",
           baseUrl,
           apiKey: formApiKey.trim(),
           models,
         });
       } else {
+        if (!formApiKey.trim()) {
+          setError(t("models.apiKeyRequired"));
+          setSaving(false);
+          return;
+        }
         await window.piDesk.saveApiKey(selection.id, formApiKey.trim());
       }
       onSaved();
@@ -474,18 +619,19 @@ export default function AddProviderPicker({
               <>
                 <label className={styles.field}>
                   <span className={styles.fieldLabel}>
-                    {t("models.modelName")}
+                    {t("models.channel")}
                     <span className={styles.required}>*</span>
                   </span>
                   <input
                     className={styles.fieldInput}
                     type="text"
-                    placeholder={t("models.modelName")}
-                    value={formName}
-                    onChange={(e) => setFormName(e.target.value)}
+                    placeholder={t("models.channelPlaceholder")}
+                    value={formChannel}
+                    onChange={(e) => setFormChannel(e.target.value)}
                     autoFocus
                   />
                 </label>
+
                 <label className={styles.field}>
                   <span className={styles.fieldLabel}>
                     {t("models.baseUrl")}
@@ -499,38 +645,6 @@ export default function AddProviderPicker({
                     onChange={(e) => setFormBaseUrl(e.target.value)}
                   />
                 </label>
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>
-                    {t("models.contextWindow")}
-                    <span className={styles.required}>*</span>
-                  </span>
-                  <input
-                    className={styles.fieldInput}
-                    type="number"
-                    min={1}
-                    step={1000}
-                    placeholder="128000"
-                    value={Number.isFinite(formContextWindow) ? formContextWindow : ""}
-                    onChange={(e) =>
-                      setFormContextWindow(
-                        e.target.value === "" ? NaN : Number(e.target.value)
-                      )
-                    }
-                  />
-                  <span className={styles.fieldHint}>{t("models.contextWindowHint")}</span>
-                </label>
-                <label className={styles.checkRow}>
-                  <input
-                    type="checkbox"
-                    className={styles.checkbox}
-                    checked={formSupportsImages}
-                    onChange={(e) => setFormSupportsImages(e.target.checked)}
-                  />
-                  <span className={styles.checkText}>
-                    <span className={styles.checkLabel}>{t("models.supportsImages")}</span>
-                    <span className={styles.fieldHint}>{t("models.supportsImagesHint")}</span>
-                  </span>
-                </label>
               </>
             )}
 
@@ -540,6 +654,7 @@ export default function AddProviderPicker({
                 <span className={styles.required}>*</span>
               </span>
               <input
+                ref={apiKeyRef}
                 className={styles.fieldInput}
                 type="password"
                 placeholder={selection?.kind === "custom" ? "sk-..." : t("models.apiKey")}
@@ -551,6 +666,131 @@ export default function AddProviderPicker({
                 }}
               />
             </label>
+
+            {selection?.kind === "custom" && (
+              <>
+                {!formApiKey.trim() && (
+                  <p className={styles.fetchHint}>
+                    {t("models.fetchNeedsKey")}
+                  </p>
+                )}
+
+                <div className={styles.divider} />
+
+                {/* ── Model catalog ── */}
+                <div className={styles.catalogHead}>
+                  <span className={styles.catalogTitle}>{t("models.catalog")}</span>
+                  <div className={styles.catalogActions}>
+                    <button
+                      type="button"
+                      className={styles.addModelBtn}
+                      onClick={addManualModel}
+                    >
+                      <Plus size={14} />
+                      {t("models.addModel")}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.fetchBtn}
+                      onClick={openFetchPopup}
+                      disabled={!formBaseUrl.trim()}
+                    >
+                      <Download size={14} />
+                      {t("models.fetchModels")}
+                    </button>
+                  </div>
+                </div>
+
+                {modelList.length === 0 ? (
+                  <div className={styles.catalogEmpty}>{t("models.catalogEmpty")}</div>
+                ) : (
+                  <div className={styles.modelList}>
+                    {modelList.map((m) => (
+                      <div key={m.key} className={styles.modelRow}>
+                        <div className={styles.modelRowTop}>
+                          <input
+                            className={styles.fieldInput}
+                            type="text"
+                            placeholder={t("models.modelName")}
+                            value={m.name}
+                            disabled={!m.editableName}
+                            onChange={(e) => updateModelName(m.key, e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            className={styles.modelRowDel}
+                            onClick={() => removeModel(m.key)}
+                            title={t("models.deleteModel")}
+                          >
+                            <Trash size={14} />
+                          </button>
+                        </div>
+                        <div className={styles.modelRowOpts}>
+                          <label className={styles.fieldRow}>
+                            <span className={styles.fieldLabel}>
+                              {t("models.contextWindow")}
+                            </span>
+                            <input
+                              className={styles.fieldInput}
+                              type="number"
+                              min={1}
+                              step={1000}
+                              placeholder="128000"
+                              value={
+                                Number.isFinite(m.contextWindow) ? m.contextWindow : ""
+                              }
+                              onChange={(e) => updateModelCtx(m.key, e.target.value)}
+                            />
+                          </label>
+                          <label className={styles.checkRow}>
+                            <input
+                              type="checkbox"
+                              className={styles.checkbox}
+                              checked={m.supportsImages}
+                              onChange={(e) => updateModelImg(m.key, e.target.checked)}
+                            />
+                            <span className={styles.checkText}>
+                              <span className={styles.checkLabel}>
+                                {t("models.supportsImages")}
+                              </span>
+                            </span>
+                          </label>
+                          <label className={styles.checkRow} title={t("models.supportsReasoningHint")}>
+                            <input
+                              type="checkbox"
+                              className={styles.checkbox}
+                              checked={m.reasoning}
+                              onChange={(e) => updateModelReasoning(m.key, e.target.checked)}
+                            />
+                            <span className={styles.checkText}>
+                              <span className={styles.checkLabel}>
+                                {t("models.supportsReasoning")}
+                              </span>
+                            </span>
+                          </label>
+                          {m.reasoning && (
+                            <label className={styles.fieldRow} title={t("models.thinkingFormatHint")}>
+                              <span className={styles.fieldLabel}>{t("models.thinkingFormat")}</span>
+                              <select
+                                className={styles.fieldInput}
+                                value={m.thinkingFormat}
+                                onChange={(e) => updateModelThinkingFormat(m.key, e.target.value)}
+                              >
+                                {THINKING_FORMAT_OPTIONS.map((f) => (
+                                  <option key={f.value} value={f.value}>
+                                    {f.value === "" ? t("models.thinkingFormatAuto") : f.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
 
             {error && <div className={styles.error}>{error}</div>}
           </div>
@@ -585,6 +825,82 @@ export default function AddProviderPicker({
           )}
         </div>
       </div>
+
+      {/* ── Fetch available models popup ── */}
+      {fetchPopupOpen && (
+        <div
+          className={styles.popupOverlay}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setFetchPopupOpen(false);
+          }}
+        >
+          <div className={styles.popupModal} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.popupHeader}>
+              <h4 className={styles.popupTitle}>{t("models.fetchModels")}</h4>
+              <button
+                className={styles.closeBtn}
+                onClick={() => setFetchPopupOpen(false)}
+                title={t("close")}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className={styles.popupBody}>
+              {popupModels.length === 0 ? (
+                <div className={styles.popupEmpty}>
+                  {fetchError ? (
+                    <span className={styles.fetchError}>{fetchError}</span>
+                  ) : fetching ? (
+                    t("loading")
+                  ) : (
+                    t("models.noRemoteModels")
+                  )}
+                </div>
+              ) : (
+                <>
+                  <label className={styles.popupSelectAll}>
+                    <input
+                      type="checkbox"
+                      className={styles.checkbox}
+                      checked={allPopupSelected}
+                      onChange={(e) => toggleSelectAll(e.target.checked)}
+                    />
+                    <span className={styles.modelPickName}>{t("models.selectAll")}</span>
+                  </label>
+                  <div className={styles.popupList}>
+                  {popupModels.map((id) => {
+                    const checked = !!popupChecked[id];
+                    return (
+                      <label key={id} className={styles.modelPickHead}>
+                        <input
+                          type="checkbox"
+                          className={styles.checkbox}
+                          checked={checked}
+                          onChange={(e) => togglePopupModel(id, e.target.checked)}
+                        />
+                        <span className={styles.modelPickName}>{id}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                </>
+              )}
+            </div>
+            <div className={styles.popupFooter}>
+              <button className={styles.btnGhost} onClick={() => setFetchPopupOpen(false)}>
+                {t("cancel")}
+              </button>
+              <button
+                className={styles.btnPrimary}
+                onClick={confirmPopup}
+                disabled={Object.keys(popupChecked).length === 0}
+              >
+                {t("models.addSelected")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,0 +1,462 @@
+/* AskUserPanel — model-driven questionnaire rendered as a ONE-STEP wizard
+   card inside ChatComposer, directly above the input area (same slot as the
+   bash approval popup). Steps are Q1..Qn then a final overall-note card
+   (独立最后一步) before 提交回答; only the current step is shown so the popup
+   stays short. Header carries progress dots (n + 1, the last dot being the
+   note step) + `第 n/N 题` / `整体备注`; footer carries 取消 (left) /
+   上一步 / 下一步(提交回答 on the note step) (right). Token-driven (dark
+   default / [data-theme="light"] overrides come from tokens.css). No entry
+   animation, no hover lift — feedback is border/background/box-shadow only. */
+
+.panel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-10);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.1),
+    0 1px 2px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+  color: var(--text-default);
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  padding: var(--spacer-8) var(--spacer-12);
+  flex-shrink: 0;
+}
+
+.headerIcon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-brand);
+}
+
+.headerTitle {
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-default);
+  white-space: nowrap;
+}
+
+/* Wizard progress dots (only when the model asked >1 question). */
+.stepDots {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  flex-shrink: 0;
+}
+
+.stepDot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-overlay-l2);
+  flex-shrink: 0;
+}
+
+.stepDotDone {
+  background: var(--bg-brand);
+  opacity: 0.45;
+}
+
+.stepDotCurrent {
+  width: 8px;
+  height: 8px;
+  background: var(--bg-brand);
+}
+
+.headerBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--spacer-6);
+  border-radius: var(--radius-full);
+  background: var(--bg-overlay-l1);
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  white-space: nowrap;
+}
+
+.closeBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--icon-secondary);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.closeBtn:hover:not(:disabled) {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+}
+
+.closeBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Current question ── */
+.body {
+  padding: 2px var(--spacer-12) var(--spacer-8);
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-6);
+}
+
+.qHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacer-6);
+  min-width: 0;
+}
+
+.qChip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+  max-width: 30%;
+  padding: 0 var(--spacer-6);
+  border-radius: var(--radius-4);
+  background: var(--bg-overlay-l2);
+  color: var(--text-brand);
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qText {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-default);
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.noteIconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--icon-secondary);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.noteIconBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--icon-default);
+}
+
+.noteIconBtnOn {
+  color: var(--text-brand);
+}
+
+/* ── Options ── */
+.optionList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-4);
+}
+
+.optionRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacer-6);
+  padding: var(--spacer-4) var(--spacer-6);
+  border: 1px solid transparent;
+  border-radius: var(--radius-6);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.optionRow:hover {
+  background: var(--bg-overlay-l2);
+}
+
+.optionRow[data-checked="true"] {
+  background: var(--bg-overlay-l2);
+  border-color: var(--border-brand);
+}
+
+.optionRow input[type="radio"],
+.optionRow input[type="checkbox"] {
+  margin: 2px 0 0;
+  flex-shrink: 0;
+  accent-color: var(--bg-brand);
+  cursor: pointer;
+}
+
+.optionRow input:disabled {
+  cursor: default;
+}
+
+.optionText {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.optionLabel {
+  color: var(--text-default);
+  font-size: var(--body-md-font-size);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.optionDesc {
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* ── Option preview (markdown, single-select with preview) ── */
+.previewBox {
+  margin-top: var(--spacer-4);
+  padding: var(--spacer-6) var(--spacer-8);
+  background: var(--bg-base-tertiary);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+}
+
+.previewLabel {
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: var(--spacer-4);
+}
+
+.previewBody {
+  font-size: var(--body-sm-font-size);
+  line-height: 1.6;
+  color: var(--text-default);
+  overflow-wrap: anywhere;
+}
+
+.previewBody p {
+  margin: 0 0 var(--spacer-4);
+}
+
+.previewBody p:last-child {
+  margin-bottom: 0;
+}
+
+.previewBody code {
+  font-family: var(--font-family-mono);
+  font-size: 0.92em;
+  background: var(--bg-overlay-l2);
+  border-radius: var(--radius-4);
+  padding: 0 var(--spacer-4);
+}
+
+/* ── Custom answer / note textareas ── */
+.customToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.customToggle:hover {
+  color: var(--text-brand);
+}
+
+.customArea,
+.noteArea {
+  width: 100%;
+  resize: vertical;
+  background: var(--bg-base-tertiary);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+  color: var(--text-default);
+  font-family: var(--font-family-default);
+  font-size: var(--body-md-font-size);
+  line-height: 1.5;
+  padding: var(--spacer-4) var(--spacer-6);
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+
+.customArea:focus,
+.noteArea:focus {
+  border-color: var(--border-brand);
+}
+
+.customArea::placeholder,
+.noteArea::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* ── Footer / actions ── */
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-6);
+  padding: var(--spacer-6) var(--spacer-12) var(--spacer-8);
+  border-top: 1px solid var(--border-neutral-l1);
+  flex-shrink: 0;
+}
+
+.footerActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacer-6);
+}
+
+.footerRight {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-4);
+}
+
+/* ── Overall-note step (independent final card) ── */
+.noteStep {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-6);
+}
+
+.noteStepHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+}
+
+.noteStepIcon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-brand);
+}
+
+.noteStepTitle {
+  color: var(--text-default);
+  font-size: var(--body-base-font-size);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+
+.optionalBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--spacer-4);
+  border-radius: var(--radius-full);
+  background: var(--bg-overlay-l1);
+  color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+  white-space: nowrap;
+}
+
+.noteStepHint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.globalNoteArea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.btnCancel,
+.btnBack,
+.btnPrimary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacer-4);
+  border-radius: var(--radius-6);
+  font-size: var(--body-md-font-size);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  padding: var(--spacer-4) var(--spacer-10);
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+/* Secondary (取消): ghost with border — a normal abandon, not destructive. */
+.btnCancel {
+  background: transparent;
+  border: 1px solid var(--border-neutral-l2);
+  color: var(--text-secondary);
+}
+
+.btnCancel:hover:not(:disabled) {
+  background: var(--bg-overlay-l2);
+  border-color: var(--border-neutral-l3);
+  color: var(--text-default);
+}
+
+/* Tertiary (上一步): plain text button, least prominent of the three. */
+.btnBack {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-tertiary);
+}
+
+.btnBack:hover:not(:disabled) {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+/* Primary (下一步 / 提交回答). */
+.btnPrimary {
+  border: none;
+  background: var(--bg-brand);
+  color: var(--icon-onbrand);
+  min-width: 92px;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--bg-brand-hover);
+}
+
+.btnCancel:disabled,
+.btnBack:disabled,
+.btnPrimary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

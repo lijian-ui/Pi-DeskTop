@@ -1,0 +1,318 @@
+/* Subagent progress — embedded right-rail block (chat area), same family as
+   the Todo panel. No floating overlay, no entry animation; hover feedback is
+   shadow-only (no transform). Status colors: running = brand green (pulse dot
+   kept as functional state), done = success, error = danger. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  /* No max-height here — the panel must shrink-wrap its content so the
+     right-rail (height:fit-content) collapses to exactly the panel size,
+     leaving zero dead space below. Scrolling lives inside .list only. */
+  min-height: 0;
+  overflow: hidden;
+  font-size: var(--body-sm-font-size);
+  color: var(--text-default);
+  user-select: none;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  padding: var(--spacer-8) var(--spacer-12);
+  border-bottom: 1px solid var(--border-neutral-l1);
+  flex-shrink: 0;
+}
+
+.headerIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-brand);
+  flex-shrink: 0;
+}
+
+.headerTitle {
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--icon-secondary, var(--text-tertiary));
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.iconBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+/* Scrollable stream of run cards. Fixed max-height so the expanded panel has
+   a bounded, stable height; older runs (beyond the recent 6) are reachable by
+   scrolling up. The panel itself stays shrink-wrapped so the right-rail never
+   shows dead space below it. */
+.list {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: var(--spacer-8) var(--spacer-10) var(--spacer-10);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-6);
+}
+
+/* Shown at the top of the list when there are more than 6 runs, hinting the
+   user can scroll up to reveal the older ones. */
+.moreHint {
+  flex-shrink: 0;
+  padding: 2px var(--spacer-8);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  text-align: center;
+  border-bottom: 1px dashed var(--border-neutral-l1);
+  margin-bottom: var(--spacer-2);
+}
+
+/* Collapse chevron inside a run card's title row. */
+.chevron {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--icon-secondary, var(--text-tertiary));
+}
+
+/* One child agent = one card. */
+.run {
+  background: var(--bg-base-secondary);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+  padding: var(--spacer-6) var(--spacer-8);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.run:hover {
+  border-color: var(--border-neutral-l2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  min-width: 0;
+  cursor: default;
+}
+
+.row[role="button"] {
+  cursor: pointer;
+}
+
+.agent {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-default);
+  font-weight: var(--font-weight-medium);
+}
+
+/* Shared subtle status pill. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  flex-shrink: 0;
+  min-width: 0;
+  max-width: 150px;
+  padding: 1px var(--spacer-6);
+  border-radius: var(--radius-full);
+  background: var(--bg-overlay-l1);
+  font-size: var(--body-xs-font-size);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pill svg {
+  flex-shrink: 0;
+}
+
+.pillRunning {
+  color: var(--text-brand);
+}
+
+.pillDone {
+  color: var(--status-success-default);
+}
+
+.pillError {
+  color: var(--status-error-default);
+}
+
+.pillPending {
+  color: var(--text-tertiary);
+}
+
+.pillSkipped {
+  color: var(--text-tertiary);
+}
+
+/* Tiny chip showing the model a run resolves to (role override or default). */
+.modelChip {
+  flex: none;
+  max-width: 38%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 var(--spacer-4);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  background: transparent;
+}
+
+/* Dependency edge annotation: "依赖 A · B" under the card title. */
+.depLine {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacer-4);
+  margin-top: var(--spacer-4);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.depGlyph {
+  flex: none;
+  color: var(--icon-secondary, var(--text-tertiary));
+}
+
+.depLabel {
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.depName {
+  flex: none;
+  padding: 0 var(--spacer-4);
+  border-radius: var(--radius-4);
+  background: var(--bg-overlay-l1);
+  color: var(--text-secondary);
+  font-weight: var(--font-weight-medium);
+}
+
+/* Functional status dots only (pulse kept for running). */
+.liveDot,
+.errDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.liveDot {
+  background: var(--bg-brand);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.errDot {
+  background: var(--status-error-default);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Step stream inside a card. */
+.steps {
+  list-style: none;
+  margin: var(--spacer-6) 0 0;
+  padding: var(--spacer-6) 0 0;
+  border-top: 1px solid var(--border-neutral-l1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.step {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacer-4);
+  padding: 2px 0;
+  font-size: var(--body-xs-font-size);
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  min-width: 0;
+}
+
+.stepError {
+  color: var(--status-error-default);
+}
+
+.iconWrap {
+  flex: none;
+  width: 14px;
+  display: inline-flex;
+  justify-content: center;
+  transform: translateY(1px);
+}
+
+.iconTool {
+  color: var(--icon-secondary, var(--text-tertiary));
+}
+
+.iconOk {
+  color: var(--status-success-default);
+}
+
+.iconError {
+  color: var(--status-error-default);
+}
+
+.stepTool {
+  flex: none;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-weight: var(--font-weight-medium);
+}
+
+.stepLabel {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stepDetail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

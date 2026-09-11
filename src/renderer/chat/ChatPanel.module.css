@@ -5,6 +5,57 @@
   overflow: hidden;
 }
 
+/* Two-column body: main chat column + optional right-side rail. */
+.chatBody {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Right rail shared by the subagent-progress block (top) and the Todo panel
+   (bottom). Rendered only while at least one child is non-empty.
+
+   Critical: the rail must be ONLY as tall as its content. It lives inside a
+   flex ROW (.chatBody) whose default align-items:stretch would otherwise
+   stretch it to the full column height, leaving a tall empty strip below the
+   subagent block whenever the Todo panel is idle (returns null). We force
+   content-height with `height: fit-content` (bulletproof across Chromium
+   versions — align-self alone proved unreliable) and cap it at 100% so a long
+   Todo list still scrolls instead of overflowing the window. */
+.rightRail {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  align-self: flex-start;
+  height: fit-content;
+  max-height: 100%;
+  width: 280px;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border-neutral-l1);
+  background: var(--bg-base-default);
+  overflow: hidden;
+}
+
+/* Both children return null when idle → empty rail takes no space. */
+.rightRail:empty {
+  display: none;
+}
+
+/* A hairline separates stacked blocks sharing the rail. */
+.rightRail > * + * {
+  border-top: 1px solid var(--border-neutral-l1);
+}
+
+.chatMain {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .messageList {
   flex: 1;
   overflow-y: auto;

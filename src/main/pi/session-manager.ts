@@ -10,10 +10,27 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type AgentSessionRuntime,
+  type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
+
+/**
+ * Mirrors the SDK's `ThinkingLevel` union (defined in pi-agent-core). The
+ * pi-coding-agent entrypoint does not re-export it, so we declare the identical
+ * literal union — structurally the same type, so it is assignable wherever the
+ * SDK expects a ThinkingLevel.
+ */
+export type ThinkingLevelValue =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
 import { readFile, writeFile, mkdir, unlink, readdir, rm } from "node:fs/promises";
 import { existsSync, statSync, watch, mkdirSync, readdirSync, readFileSync, type FSWatcher } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import extract from "extract-zip";
@@ -25,8 +42,25 @@ import { soulExtension } from "./soul-extension";
 import { computeCacheWaste, CACHE_TTL_MS } from "./cache-stats";
 import { readRules, writeRules, deleteRulesFile } from "./rules";
 import { rulesExtension } from "./rules-extension";
+import { loadConfig } from "./memory/config";
+import { scanMemoryContent } from "./memory/guard";
+import { webSearchExtension } from "./web-search-extension";
+import { todoExtension } from "./todo/todo-extension";
+import { createAskUserExtension } from "./ask-user/ask-user-extension";
+import {
+  BUILTIN_TOOL_NAMES,
+  disabledExtensionToolNames,
+  modeAllowsTool,
+} from "./tool-catalog";
+import type { ToolMode } from "../../shared/tool-catalog-types";
+// Pure helper (mirrors the SDK's cwd → sessions-dir encoding). im-session-map
+// only imports this module as a *type*, so there is no runtime import cycle.
+import { sessionDirFor } from "../im/im-session-map";
+import { createSubagentExtension } from "./subagent";
+import { abortSubagents } from "./subagent/runner";
 import { TaskScheduler } from "./scheduler";
 import { createScheduledTaskExtension } from "./scheduled-task-extension";
+import hermesMemoryExtension from "./memory/index";
 import {
   readScheduledTasks,
   saveScheduledTask as writeScheduledTask,
@@ -102,6 +136,7 @@ export interface CustomProviderItem {
   name: string;
   baseUrl?: string;
   api?: string;
+  channel?: string;
   models: { id: string; name?: string; reasoning?: boolean }[];
 }
 
@@ -124,6 +159,60 @@ function authJsonPath(): string {
  */
 function chatOnlyCwd(): string {
   return join(getAgentDir(), "chat");
+}
+
+/**
+ * True when `cwd` is a per-task timestamped subdir of the chat-only dir
+ * (e.g. `~/.pi/agent/chat/2026-09-02-14-59-28`). Each such task gets its OWN
+ * runtime/unit — so it can run in parallel with other tasks instead of all
+ * trampling one shared chat unit — but they SHARE the chat dir's expensive
+ * services build (skill-dir scan + jiti extension compile).
+ *
+ * Deliberately does NOT match `chat/im/<channel>`: IM sessions keep their own
+ * cwd (not a timestamp task) and must not be folded into the chat services.
+ */
+const TASK_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}(-\d{1,3})?$/;
+function isTaskTimestampCwd(cwd: string): boolean {
+  const rel = relative(chatOnlyCwd(), cwd);
+  return rel !== "" && !rel.startsWith("..") && !rel.includes(sep) && TASK_TIMESTAMP_RE.test(rel);
+}
+
+/** Canonical map key for a directory path (case-insensitive on Windows). */
+function dirKey(p: string): string {
+  const norm = resolve(p).replace(/[\\/]+$/, "");
+  return process.platform === "win32" ? norm.toLowerCase() : norm;
+}
+
+/**
+ * `<session storage dir> → <task cwd>` for every per-task timestamped chat dir
+ * that currently exists on disk.
+ *
+ * WHY THIS EXISTS: the SDK stamps a session's header `cwd` from `services.cwd`,
+ * and every task deliberately SHARES the chat root's services (that build costs
+ * seconds — see `isTaskTimestampCwd`). So a task's header reports the BARE chat
+ * dir even though its file physically lives in
+ * `sessions/<encoded chat/<timestamp>>/`. `listAll()` reports that header value,
+ * and the renderer routes prompt / abort / switchSession by it — which collapsed
+ * EVERY task onto the single bare-chat runtime unit. Opening task B then ran the
+ * SDK's `switchSession` → `teardownCurrent` → `session.abort()` on that shared
+ * unit and killed task A mid-generation ("This operation was aborted").
+ *
+ * Recovering the real per-task cwd from the file's OWN directory keeps one unit
+ * per task, so tasks are switch-safe and can run in parallel.
+ */
+function taskCwdBySessionDir(): Map<string, string> {
+  const map = new Map<string, string>();
+  const chatRoot = chatOnlyCwd();
+  try {
+    for (const entry of readdirSync(chatRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !TASK_TIMESTAMP_RE.test(entry.name)) continue;
+      const cwd = join(chatRoot, entry.name);
+      map.set(dirKey(sessionDirFor(cwd)), cwd);
+    }
+  } catch {
+    // Chat dir not created yet (very first run) — nothing to remap.
+  }
+  return map;
 }
 
 /**
@@ -497,11 +586,6 @@ function settingsJsonPath(): string {
   return join(getAgentDir(), "settings.json");
 }
 
-/** All built-in tools the Pi SDK registers (docs/sdk.md:492). The SDK by
- * default activates only read/bash/edit/write; we allow opting into the rest
- * via settings.json `activeTools`. */
-const ALL_BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-
 /** Active tool names from settings.json. Defaults to the full built-in set
  * (grep/find/ls included) — users can narrow it down in the settings UI. */
 async function readActiveTools(): Promise<string[]> {
@@ -509,12 +593,12 @@ async function readActiveTools(): Promise<string[]> {
     const settings = await readSettingsJson();
     const t = settings.activeTools;
     if (Array.isArray(t) && t.length > 0) {
-      return t.filter((n): n is string => typeof n === "string" && ALL_BUILTIN_TOOLS.includes(n));
+      return t.filter((n): n is string => typeof n === "string" && BUILTIN_TOOL_NAMES.includes(n));
     }
   } catch {
     // fall through to default
   }
-  return [...ALL_BUILTIN_TOOLS];
+  return [...BUILTIN_TOOL_NAMES];
 }
 
 async function readSettingsJson(): Promise<Record<string, any>> {
@@ -523,6 +607,30 @@ async function readSettingsJson(): Promise<Record<string, any>> {
     return JSON.parse(content);
   } catch {
     return {};
+  }
+}
+
+/** Per-workspace tool mode persisted in settings.json `sessionToolModes`
+ * (cwd → mode). Defaults to "standard" (full global tool set). */
+async function readPersistedToolMode(cwd: string): Promise<ToolMode> {
+  try {
+    const settings = await readSettingsJson();
+    const m = settings.sessionToolModes?.[cwd];
+    return m === "minimal" || m === "office" ? m : "standard";
+  } catch {
+    return "standard";
+  }
+}
+
+async function writePersistedToolMode(cwd: string, mode: ToolMode): Promise<void> {
+  try {
+    const settings = await readSettingsJson();
+    const map = settings.sessionToolModes ?? {};
+    map[cwd] = mode;
+    settings.sessionToolModes = map;
+    await writeJsonFile(settingsJsonPath(), settings);
+  } catch {
+    // Non-fatal: the in-memory unit mode below still applies this run.
   }
 }
 
@@ -701,6 +809,14 @@ interface RuntimeUnit {
    * back to its own defaultModel from settings.json).
    */
   defaultModel: { provider: string; modelId: string } | null;
+  /**
+   * Tool mode of THIS workspace's session (极简 / 标准 / 办公). Per-unit like
+   * defaultModel: switching mode only narrows this unit's active tool set and
+   * never rewrites the global settings.activeTools / *-config files, so other
+   * workspaces and scheduled sessions keep their own selection. Persisted in
+   * settings.json `sessionToolModes` keyed by cwd; defaults to "standard".
+   */
+  toolMode: ToolMode;
   denialCounts: Map<string, number>;
   /** Pending retry timer for installToolGuardOn (cleared on dispose so a
    *  destroyed unit is never re-touched by a stale callback). */
@@ -740,6 +856,88 @@ export class PiDeskSessionManager {
    * background and stay resumable.
    */
    private units: Map<string, RuntimeUnit> = new Map();
+  /**
+   * Reserved session-file paths for task-mode sessions that have been created
+   * in the UI but whose SDK unit has NOT been built yet. A brand-new task the
+   * user opens but never messages must not leave empty `chat/<ts>` +
+   * `sessions/<encoded>` folders on disk, so `newSession()` returns a
+   * placeholder path here WITHOUT building the unit (no mkdir, no real
+   * SessionManager). The real unit + dirs are created on the first `prompt()`,
+   * at which point the placeholder becomes the actual session file. This map
+   * is consulted by `getCurrentSessionPath` / `listSessions` so the sidebar can
+   * still show + route the not-yet-persisted task. Keyed by the task's real
+   * timestamped cwd.
+   */
+  private pendingTaskPaths: Map<string, string> = new Map();
+  /**
+   * Model / thinking-level choices the user made on a task that has NOT sent
+   * its first message yet (so no SDK unit exists). We can't apply them to a
+   * session that doesn't exist, but we must remember them so they take effect
+   * the moment the unit is built on the first prompt() — instead of being lost
+   * or forcing an early ensureUnit() (which would create the chat/<ts> +
+   * sessions/<encoded> folders against the "only create on first message" rule).
+   */
+  private pendingTaskDefaults: Map<
+    string,
+    { provider?: string; modelId?: string; thinkingLevel?: string }
+  > = new Map();
+
+  /**
+   * True when `cwd` is a not-yet-persisted task-mode session: a timestamped
+   * chat subdir that exists in `pendingTaskPaths` but has no live SDK unit.
+   * For these we must NOT call ensureUnit() — doing so would spin up the
+   * runtime and create the on-disk folders before the user has actually sent
+   * a message. Getters return safe defaults; setters stash the choice in
+   * `pendingTaskDefaults` for when the unit is finally built.
+   */
+  private isDeferredTask(cwd: string | undefined): boolean {
+    const key = this.resolveCwd(cwd);
+    return (
+      isTaskTimestampCwd(key) &&
+      !this.units.has(key) &&
+      this.pendingTaskPaths.has(key)
+    );
+  }
+
+  /** Apply any model/thinking choice the user made on a deferred task. */
+  private async applyPendingTaskDefaults(unit: RuntimeUnit): Promise<void> {
+    const cwd = unit.cwd;
+    const d = this.pendingTaskDefaults.get(cwd);
+    if (!d) return;
+    if (d.provider && d.modelId && this.modelRuntime) {
+      // Since ensureUnit() now passes the stashed model INTO session creation,
+      // a fresh session normally already reports it — skip the redundant,
+      // auth-gated setModel() in that case (it would only re-log the change).
+      const s = unit.runtime?.session as any;
+      const alreadyApplied =
+        s?.model?.id === d.modelId && s?.model?.provider === d.provider;
+      if (!alreadyApplied) {
+        // SDK session.setModel is async AND auth-gated: for runtime-registered
+        // custom providers (lm-studio/new) the gate can throw, which used to be
+        // swallowed here — the brand-new task then chatted with the WRONG model
+        // (the SDK default) while the UI/pill showed the user's pick.
+        // applyModelToUnit falls back to writing agent.state.model directly so
+        // the first prompt() always uses the model the user selected.
+        const ok = await this.applyModelToUnit(unit, {
+          provider: d.provider,
+          modelId: d.modelId,
+        });
+        if (!ok) {
+          console.warn(
+            `[session-manager] failed to apply stashed model ${d.provider}/${d.modelId}; keeping session default`,
+          );
+        }
+      }
+      unit.defaultModel = { provider: d.provider, modelId: d.modelId };
+    }
+    if (d.thinkingLevel && unit.runtime?.session?.setThinkingLevel) {
+      unit.runtime.session.setThinkingLevel(d.thinkingLevel as any, {
+        persist: false,
+      });
+    }
+    this.pendingTaskDefaults.delete(cwd);
+  }
+
    /**
     * Cwd-bound SDK services cache. createAgentSessionServices() is EXPENSIVE:
     * it synchronously scans skill/extension dirs, compiles TS extensions via
@@ -931,14 +1129,19 @@ export class PiDeskSessionManager {
     // (skill dir scans + jiti extension compilation are all synchronous).
     // Single-flight: store the Promise so concurrent ensureUnit() calls for
     // the same new cwd share one build instead of racing.
-    let servicesPromise = this.servicesByCwd.get(cwd);
+    //
+    // Per-task timestamped chats (chat/<timestamp>) key their services on the
+    // chat root so every new task reuses the SAME build instead of paying the
+    // multi-second cost per task. Every other cwd keeps its own services cache.
+    const servicesKey = isTaskTimestampCwd(cwd) ? chatOnlyCwd() : cwd;
+    let servicesPromise = this.servicesByCwd.get(servicesKey);
     if (!servicesPromise) {
       // Notify the renderer that an expensive service build is starting,
       // so it can show a loading indicator instead of appearing frozen.
       const wc = this.webContents && !this.webContents.isDestroyed()
         ? this.webContents
         : this.findLiveWebContents();
-      wc?.send("pi:servicesBuilding", { cwd });
+      wc?.send("pi:servicesBuilding", { cwd: servicesKey });
       // Soul / persona: injected via the `soulExtension` inline extension
       // (before_agent_start event) so the soul text lands at the ABSOLUTE
       // BOTTOM of the fully assembled system prompt — after Pi's base
@@ -950,35 +1153,100 @@ export class PiDeskSessionManager {
       // apply on the next message even without session.reload(). The
       // soul.md watcher/invalidation remains as harmless belt-and-braces.
       servicesPromise = createAgentSessionServices({
-        cwd,
+        cwd: servicesKey,
         modelRuntime: this.modelRuntime!,
         resourceLoaderOptions: {
-          extensionFactories: [soulExtension, rulesExtension],
+          extensionFactories: [soulExtension, rulesExtension, webSearchExtension, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), hermesMemoryExtension],
           agentsFilesOverride: createContextFilesOverride(),
         },
       });
-      this.servicesByCwd.set(cwd, servicesPromise);
+      this.servicesByCwd.set(servicesKey, servicesPromise);
     }
     const services = await servicesPromise;
 
+    // For per-task timestamped chats, the expensive services build is SHARED on
+    // the chat root (persona / skills / project context live there, and rebuilding
+    // per task costs seconds of synchronous skill-scan + jiti compile). But the
+    // SDK derives the agent's ACTUAL working directory AND the
+    // `Current working directory:` line in the system prompt from `services.cwd`.
+    // Leaving it at the chat root made every task read/write in `chat/` and told
+    // the model its cwd was `chat/` — so generated files all landed in the chat
+    // root (bug). Override ONLY the top-level `cwd` on a per-task CLONE: tools +
+    // the prompt line then point at the task's own `chat/<timestamp>` dir, while
+    // the shared resourceLoader (context) stays on the chat root. The clone is
+    // per-task (one per unit), so concurrent tasks never mutate the same services
+    // object. The bare-chat unit and real workspaces keep the un-cloned services.
+    const effectiveServices =
+      isTaskTimestampCwd(cwd) ? { ...services, cwd } : services;
+
+    // A model picked on this (deferred) task before its first message must be
+    // baked into the SDK session AT CREATION, not patched in afterwards:
+    //   • post-hoc session.setModel() (applyPendingTaskDefaults) races the
+    //     first prompt() and is gated by the SDK auth snapshot;
+    //   • without this, the SDK picks the initial model from the cached
+    //     services' settingsManager, which is built once per chat root and
+    //     goes STALE as soon as the user changes the global default
+    //     (persistDefaultModel only rewrites settings.json). Sessions created
+    //     after such a change would keep starting on the OLD default.
+    // Passing `model` here makes createAgentSession skip both the stale
+    // default and the session-restore path for this brand-new session.
+    const stash = this.pendingTaskDefaults.get(cwd);
+    // One-shot: only the FIRST session created for this unit (the task's
+    // birth) may consume the stashed model. The runtime re-invokes this
+    // factory for later /new, /resume and fork flows, which must fall back to
+    // the (now synced) settings default instead of the original stash.
+    let firstModel =
+      stash?.provider && stash.modelId
+        ? (this.modelRuntime?.getModel(stash.provider, stash.modelId) ??
+          undefined)
+        : undefined;
+
     const runtime = await createAgentSessionRuntime(
-      async ({ sessionManager: sm, sessionStartEvent }) => ({
-        ...(await createAgentSessionFromServices({
-          services,
-          sessionManager: sm,
-          sessionStartEvent,
-        })),
-        services,
-        diagnostics: services.diagnostics,
-      }),
+      async ({ sessionManager: sm, sessionStartEvent }) => {
+        const model = firstModel;
+        firstModel = undefined;
+        return {
+          ...(await createAgentSessionFromServices({
+            services: effectiveServices,
+            sessionManager: sm,
+            sessionStartEvent,
+            model,
+          })),
+          services: effectiveServices,
+          diagnostics: effectiveServices.diagnostics,
+        };
+      },
       { cwd, agentDir: getAgentDir(), sessionManager }
     );
+
+    // The SDK emits the `session_start` extension event from INSIDE
+    // `session.bindExtensions()` — nowhere else. pi-desktop never called it, so
+    // every extension hook registered on `session_start` was dead code. For
+    // pi-hermes-memory that means its persistence bootstrap (memory dir
+    // creation, Markdown→SQLite sync, project memory bind, session index
+    // backfill) never ran, which is why ~/.pi/agent/pi-hermes-memory/ was never
+    // created. Bind once here, and re-bind via setRebindSession so /new,
+    // /resume, /fork and import (which rebuild the session from the same
+    // factory) keep firing it too. All bindings are optional, and no
+    // first-party extension registers `session_start` today.
+    runtime.setRebindSession(async (session) => {
+      try {
+        await session.bindExtensions({ uiContext: this.buildExtensionUIContext() });
+      } catch (err) {
+        console.warn("Failed to bind extensions to rebuilt session:", err);
+      }
+    });
+    try {
+      await runtime.session?.bindExtensions({ uiContext: this.buildExtensionUIContext() });
+    } catch (err) {
+      console.warn("Failed to bind extensions to session:", err);
+    }
 
     const unit: RuntimeUnit = {
       cwd,
       sessionManager,
       runtime,
-      services,
+      services: effectiveServices,
       activePath: runtime.session?.sessionManager?.getSessionFile() ?? null,
       runningPath: null,
       // MUST be initialized — prompt() does `++unit.runSeq`, and
@@ -991,15 +1259,26 @@ export class PiDeskSessionManager {
       pendingBashRequests: new Map(),
       denialCounts: new Map(),
       defaultModel: null,
+      // Restore this workspace's mode across restarts (standard = full set).
+      toolMode: await readPersistedToolMode(cwd),
       toolGuardTimer: null,
       lastPersistedTokens: undefined,
     };
     this.units.set(cwd, unit);
+    // A unit now exists for this cwd, so any reserved placeholder path is
+    // obsolete (the real session file is created on first prompt). Drop it so
+    // getCurrentSessionPath / listSessions stop reporting the placeholder.
+    this.pendingTaskPaths.delete(cwd);
     // Fresh SDK sessions activate only read/bash/edit/write by default; apply
     // the user's configured tool set (default: all built-ins) right away.
     this.applyUnitActiveTools(unit);
     this.subscribeToUnit(unit);
     this.installContextWatchersFor(cwd);
+    // Honour any model/thinking the user picked on this task before its first
+    // message (stashed while deferred — see pendingTaskDefaults). Must be
+    // awaited: the stashed model only reaches the session after the SDK's
+    // async setModel resolves, and the caller usually prompts immediately.
+    await this.applyPendingTaskDefaults(unit);
 
     return unit;
   }
@@ -1165,6 +1444,64 @@ export class PiDeskSessionManager {
     return running;
   }
 
+  /**
+   * UI bridge handed to `session.bindExtensions()`.
+   *
+   * Extensions report slash-command results through `ctx.ui.notify()` — every
+   * pi-hermes-memory command (`/memory-insights`, `/memory-index-sessions`, …)
+   * does exactly that and nothing else. When no UI context is bound the SDK
+   * falls back to `noOpUIContext`, whose `notify` is an empty function: the
+   * command runs to completion but its output is silently dropped, which reads
+   * as "the command did nothing at all".
+   *
+   * So we forward notify to the renderer and leave everything interactive
+   * (select / confirm / input) as a no-op — the desktop shell has no dialogs
+   * wired for those yet, and no bundled extension depends on them today.
+   */
+  private buildExtensionUIContext(): ExtensionUIContext {
+    const noop = () => {};
+    const ctx = {
+      // Interactive pickers have no desktop equivalent yet; no bundled
+      // extension calls them (the only user was pi-hermes-memory's
+      // /learn-memory-tool command, which is not registered here).
+      select: async () => undefined,
+      confirm: async () => false,
+      input: async () => undefined,
+      notify: (message: string, type?: "info" | "warning" | "error") => {
+        if (!message) return;
+        const wc = this.webContents && !this.webContents.isDestroyed()
+          ? this.webContents
+          : this.findLiveWebContents();
+        wc?.send("pi:extensionNotice", { message, type: type ?? "info" });
+      },
+      onTerminalInput: () => () => {},
+      setStatus: noop,
+      setWorkingMessage: noop,
+      setWorkingVisible: noop,
+      setWorkingIndicator: noop,
+      setHiddenThinkingLabel: noop,
+      setWidget: noop,
+      setFooter: noop,
+      setHeader: noop,
+      setTitle: noop,
+      pasteToEditor: noop,
+      setEditorText: noop,
+      getEditorText: () => "",
+      editor: async () => undefined,
+      // Throwing is deliberate: callers that own a fallback path (hermes'
+      // skills manager) catch this and degrade gracefully. Silently returning
+      // undefined would instead look like the feature did nothing at all.
+      custom: async () => {
+        throw new Error("Interactive custom UI is unavailable in the desktop shell");
+      },
+      addAutocompleteProvider: noop,
+    };
+    // ExtensionUIContext carries a long tail of TUI-only members this shell
+    // will never call; the cast keeps the bridge readable instead of forcing a
+    // dozen more stubs that would rot against SDK releases.
+    return ctx as unknown as ExtensionUIContext;
+  }
+
   /** Broadcast which sessions are currently running (per cwd) to the renderer. */
   private broadcastRunningState(): void {
     const running: string[] = [];
@@ -1229,6 +1566,7 @@ export class PiDeskSessionManager {
         baseUrl: p.baseUrl,
         configured: status?.configured ?? false,
         authSource: status?.source ?? null,
+        channel: (p as any)?.channel ?? null,
       };
     });
   }
@@ -1281,6 +1619,7 @@ export class PiDeskSessionManager {
         name: cfg?.name ?? id,
         baseUrl: cfg?.baseUrl,
         api: cfg?.api,
+        channel: cfg?.channel,
         models: Array.isArray(cfg?.models)
           ? cfg.models.map((m: any) => ({
               id: String(m?.id ?? ""),
@@ -1369,6 +1708,18 @@ export class PiDeskSessionManager {
   async abort(cwd?: string): Promise<void> {
     const unit = this.units.get(this.resolveCwd(cwd));
     if (!unit) return;
+    // Interrupt this parent's subagents FIRST — they run in their own
+    // AgentSession and keep running after the parent stops. Scope the
+    // cancellation to the parent session's sessionPath so stopping one session
+    // never kills subagents of other concurrent sessions or scheduled tasks.
+    // Do this before the parent abort (which is awaited and may throw) so the
+    // stop button always cuts child generations immediately.
+    const parentSession = unit.runtime.session as any;
+    if (parentSession) {
+      const parentPath =
+        parentSession.sessionFile ?? parentSession.sessionManager?.getSessionFile?.();
+      abortSubagents(parentPath);
+    }
     try {
       const session = unit.runtime.session as any;
       if (session?.abortBash) session.abortBash();
@@ -1906,13 +2257,30 @@ export class PiDeskSessionManager {
     // (cwd = chat/im/<channel>): their model would never change. The renderer
     // passes the focused session's cwd so the right unit is picked.
     const targetCwd = this.resolveCwd(cwd);
+    // Deferred task: the unit doesn't exist yet. Stash the choice (applied on
+    // first prompt) and persist globally — but DON'T build the unit, which
+    // would create the chat/<ts> folders before the first message is sent.
+    if (this.isDeferredTask(targetCwd)) {
+      const d = this.pendingTaskDefaults.get(targetCwd) ?? {};
+      d.provider = provider;
+      d.modelId = modelId;
+      this.pendingTaskDefaults.set(targetCwd, d);
+      await this.persistDefaultModel(provider, modelId).catch(() => {});
+      this.webContents?.send("pi:modelChanged", { cwd: targetCwd, model });
+      return;
+    }
     const unit = await this.ensureUnit(targetCwd);
     // Remember the choice for this unit so it survives session switches and
     // "new task" clicks (those create fresh sessions that would otherwise
     // revert to the SDK default).
     unit.defaultModel = { provider, modelId };
-    if (unit.runtime?.session) {
-      await unit.runtime.session.setModel(model);
+    // Public session.setModel is gated by the SDK's auth snapshot; for custom
+    // providers it can silently no-op or throw. applyModelToUnit verifies and
+    // falls back to writing agent.state.model directly — otherwise the pill
+    // would show the new model while the session kept chatting with the old one.
+    const applied = await this.applyModelToUnit(unit, { provider, modelId });
+    if (!applied) {
+      throw new Error(`Failed to apply model ${provider}/${modelId} to the session`);
     }
     // Persist as the global default model in settings.json — the SDK reads
     // defaultModel when it spins up a new session, so future sessions (any
@@ -1928,6 +2296,76 @@ export class PiDeskSessionManager {
     await unit?.runtime?.session?.cycleModel();
   }
 
+  /**
+   * Thinking levels supported by the CURRENT model, plus the level in effect.
+   *
+   * The SDK clamps the list to what the provider/model actually supports, so
+   * this is authoritative — the UI must render whatever comes back instead of
+   * hardcoding the full set (Kimi K3 only exposes "max", Grok 4.5 exposes
+   * low/medium/high, some local models expose nothing at all).
+   */
+  async getThinkingLevels(cwd?: string): Promise<{
+    current: string;
+    available: string[];
+    supports: boolean;
+  }> {
+    const targetCwd = this.resolveCwd(cwd);
+    // A not-yet-sent task has no session whose model we could query. Return a
+    // safe "no levels" default instead of building the unit (which would
+    // create the chat/<ts> folders prematurely). The renderer already falls
+    // back to this on error, so behaviour is unchanged for the user.
+    if (this.isDeferredTask(targetCwd)) {
+      return { current: "off", available: [], supports: false };
+    }
+    const unit = await this.ensureUnit(targetCwd);
+    const session = unit.runtime?.session;
+    if (!session?.getAvailableThinkingLevels) {
+      return { current: "off", available: [], supports: false };
+    }
+    try {
+      const available = session.getAvailableThinkingLevels() ?? [];
+      return {
+        current: session.thinkingLevel ?? "off",
+        available: available as string[],
+        supports: session.supportsThinking?.() ?? available.length > 0,
+      };
+    } catch {
+      // A provider adapter may throw for exotic models; degrade to "unsupported"
+      // rather than breaking the composer toolbar.
+      return { current: "off", available: [], supports: false };
+    }
+  }
+
+  /**
+   * Set the thinking level for the focused session's unit.
+   *
+   * Session-scoped on purpose: `persist` stays at the SDK default (false) so the
+   * choice never leaks into global settings.json — switching workspaces or
+   * restarting falls back to the model's own default.
+   */
+  async setThinkingLevel(level: string, cwd?: string): Promise<string> {
+    const targetCwd = this.resolveCwd(cwd);
+    // Deferred task: stash the choice (applied on first prompt) instead of
+    // building the unit, which would create the chat/<ts> folders early.
+    if (this.isDeferredTask(targetCwd)) {
+      const d = this.pendingTaskDefaults.get(targetCwd) ?? {};
+      d.thinkingLevel = level;
+      this.pendingTaskDefaults.set(targetCwd, d);
+      this.webContents?.send("pi:thinkingLevelChanged", { cwd: targetCwd, level });
+      return level;
+    }
+    const unit = await this.ensureUnit(targetCwd);
+    const session = unit.runtime?.session;
+    session?.setThinkingLevel(level as ThinkingLevelValue, { persist: false });
+    // Read back instead of trusting the request: the SDK clamps the level to what
+    // the model supports, so asking for "high" on a model that tops out at
+    // "medium" really applies "medium". Returning the effective value keeps the
+    // toolbar pill from lying about the level in use.
+    const effective = session?.thinkingLevel ?? level;
+    this.webContents?.send("pi:thinkingLevelChanged", { cwd: targetCwd, level: effective });
+    return effective;
+  }
+
   /** Write defaultModel/defaultProvider to ~/.pi/agent/settings.json. */
   private async persistDefaultModel(provider: string, modelId: string): Promise<void> {
     try {
@@ -1938,14 +2376,140 @@ export class PiDeskSessionManager {
     } catch {
       // Non-fatal: in-memory unit.defaultModel still drives the current session.
     }
+    // The SDK resolves a NEW session's initial model from the cached services'
+    // SettingsManager (built once per chat-root/cwd), NOT by re-reading
+    // settings.json — so rewriting the file above alone would leave every
+    // subsequent session starting on the PREVIOUS default until the services
+    // cache is dropped (e.g. "pick deepseek, then start a new task, but it
+    // still chats with the old lm-studio default"). Hot-sync the in-memory
+    // managers of all cached services so fresh sessions honour the pick.
+    this.syncCachedDefaultModel(provider, modelId);
+  }
+
+  /**
+   * Push the persisted default model into every live cached services'
+   * SettingsManager. Fire-and-forget: cached entries are Promises that may
+   * still be mid-build — apply once each resolves.
+   */
+  private syncCachedDefaultModel(provider: string, modelId: string): void {
+    for (const p of this.servicesByCwd.values()) {
+      void p
+        .then((svc: any) => {
+          svc?.settingsManager?.setDefaultModelAndProvider?.(provider, modelId);
+        })
+        .catch(() => {
+          /* a failed/cancelled services build has no manager to sync */
+        });
+    }
+  }
+
+  /**
+   * Apply a model to a LIVE SDK session — bypassing the SDK's auth gate when
+   * it wrongly refuses runtime-registered custom providers (lm-studio / new).
+   *
+   * The SDK's public `session.setModel` (agent-session.js) calls
+   * `checkAuth(provider)` first and THROWS "No API key for <provider>/<id>" —
+   * or returns false via the extension wrapper — whenever the provider is
+   * missing from `configuredProviders`. That snapshot only fills in during an
+   * availability refresh, which is unreliable for providers registered at
+   * runtime from custom-models.json. The practical symptom: on a brand-new
+   * task the user's pick (e.g. lm-studio/google-gemma) was silently dropped
+   * and the first message went out on the previous/fallback model.
+   *
+   * Strategy: try the public API first (it persists a model_change entry and
+   * adapts the thinking level). If it throws or the model did not stick, write
+   * `session.agent.state.model` directly — the exact internal state the SDK's
+   * own setModel assigns after its auth check — and append a model_change
+   * transcript entry so a restart / re-open restores the same model.
+   *
+   * @returns true when the session now reports the requested model.
+   */
+  private async applyModelToUnit(
+    unit: RuntimeUnit,
+    ref: { provider: string; modelId: string },
+  ): Promise<boolean> {
+    const session = unit.runtime?.session as any;
+    if (!session) return false;
+    const m = this.modelRuntime?.getModel(ref.provider, ref.modelId) as any;
+    if (!m) return false;
+    // Preferred path: public setModel (auth-gated; may throw or no-op for
+    // custom providers). Read back to detect the silent-failure case.
+    try {
+      await session.setModel?.(m);
+      if (
+        session.model?.id === m.id &&
+        session.model?.provider === m.provider
+      ) {
+        return true;
+      }
+    } catch {
+      /* fall through to the forced path */
+    }
+    // Forced path — mirrors agent-session.js's own assignment.
+    try {
+      session.agent.state.model = m;
+      session.sessionManager?.appendModelChange?.(m.provider, m.id);
+      return (
+        session.model?.id === m.id &&
+        session.model?.provider === m.provider
+      );
+    } catch (err) {
+      console.warn(
+        `[session-manager] forced model apply failed for ${ref.provider}/${ref.modelId}:`,
+        err,
+      );
+      return false;
+    }
   }
 
   /** Apply this unit's remembered model to its (live) session, if any. */
   private applyUnitDefaultModel(unit: RuntimeUnit): void {
     if (!unit.defaultModel || !unit.runtime?.session) return;
-    const model = this.modelRuntime?.getModel(unit.defaultModel.provider, unit.defaultModel.modelId);
-    if (model) {
-      unit.runtime.session.setModel(model).catch(() => {});
+    void this.applyModelToUnit(unit, unit.defaultModel);
+  }
+
+  /**
+   * Apply the configured tool set to one unit's live session.
+   *
+   * The active set is always: user-selected built-in tools + extension tools
+   * that are still registered AND not switched off in their config.
+   * getAllTools() returns everything (built-in + extension), even tools that
+   * aren't currently active, so we filter: built-in names come from the
+   * user's settings, extension names are kept unless the feature's config
+   * gate is off (config gates future REGISTRATION only; already-running
+   * units keep the tools in their registry, so we must drop them here to
+   * make a disable take effect on live sessions).
+   */
+  private applyUnitToolSet(
+    unit: RuntimeUnit,
+    builtinTools: readonly string[],
+  ): void {
+    const session = unit.runtime?.session;
+    if (!session) return;
+    const allNames =
+      (session as any).getAllTools?.()?.map((t: any) => t.name) ?? [];
+    const disabled = disabledExtensionToolNames();
+    // A mode is a SESSION-LEVEL lens over the global config: built-ins must be
+    // both globally enabled AND admitted by the mode; extension tools must
+    // survive the global config gate AND belong to a feature the mode allows.
+    // (minimal 只留 read/bash/write + subagent；standard/office 全量。)
+    const mode: ToolMode = unit.toolMode ?? "standard";
+    const builtins = builtinTools.filter((n) => modeAllowsTool(mode, n));
+    const extNames = allNames.filter(
+      (n: string) =>
+        !BUILTIN_TOOL_NAMES.includes(n) &&
+        !disabled.has(n) &&
+        modeAllowsTool(mode, n),
+    );
+    session.setActiveToolsByName([...builtins, ...extNames]);
+  }
+
+  /** Re-apply the persisted tool set to every live unit (after a session
+   * switch / settings save / extension-feature toggle). */
+  private async applyToolSetToAllUnits(): Promise<void> {
+    const builtinTools = await readActiveTools();
+    for (const unit of this.units.values()) {
+      this.applyUnitToolSet(unit, builtinTools);
     }
   }
 
@@ -1954,20 +2518,8 @@ export class PiDeskSessionManager {
    * re-apply the user's selection after each — same pattern as
    * applyUnitDefaultModel. */
   private applyUnitActiveTools(unit: RuntimeUnit): void {
-    const session = unit.runtime?.session;
-    if (!session) return;
     readActiveTools()
-      .then((builtinTools) => {
-        // getAllTools() returns everything (built-in + extension), even
-        // tools that aren't currently active. Filter out built-in names
-        // (they come from the user's config) and keep the rest (extension).
-        const allNames = (session as any).getAllTools?.()
-          ?.map((t: any) => t.name) ?? [];
-        const extNames = allNames.filter(
-          (n: string) => !ALL_BUILTIN_TOOLS.includes(n),
-        );
-        session.setActiveToolsByName([...builtinTools, ...extNames]);
-      })
+      .then((builtinTools) => this.applyUnitToolSet(unit, builtinTools))
       .catch(() => {});
   }
 
@@ -1978,7 +2530,7 @@ export class PiDeskSessionManager {
 
   /** Persist the active tool selection and apply it to every live unit. */
   async saveActiveTools(tools: string[]): Promise<void> {
-    const valid = tools.filter((t) => ALL_BUILTIN_TOOLS.includes(t));
+    const valid = tools.filter((t) => BUILTIN_TOOL_NAMES.includes(t));
     try {
       const settings = await readSettingsJson();
       settings.activeTools = valid;
@@ -1986,9 +2538,49 @@ export class PiDeskSessionManager {
     } catch {
       // Non-fatal: in-memory application below still takes effect this run.
     }
-    for (const unit of this.units.values()) {
-      unit.runtime?.session?.setActiveToolsByName(valid);
+    await this.applyToolSetToAllUnits();
+  }
+
+  /**
+   * Refresh every live session's active-tool set after extension-feature
+   * toggles (设置 → 可用工具 → 扩展工具): enabled features stay, disabled
+   * ones leave the active set on the next turn.
+   */
+  async reapplyToolSetToAllUnits(): Promise<void> {
+    await this.applyToolSetToAllUnits();
+  }
+
+  /**
+   * Tool mode of the given workspace (chat-composer selector). Reads the live
+   * unit first, then the persisted value — so a workspace whose unit is not
+   * built yet (lazy task) still reports its saved mode. Defaults to standard.
+   */
+  async getSessionToolMode(cwd: string): Promise<ToolMode> {
+    const live = this.units.get(cwd)?.toolMode;
+    if (live) return live;
+    return readPersistedToolMode(cwd);
+  }
+
+  /**
+   * Switch the tool mode of ONE workspace. This is session-scoped: it only
+   * narrows/widens this unit's active tool set and records the mode in
+   * settings.json `sessionToolModes` — the global settings.activeTools and the
+   * *-config.json files are untouched, so other workspaces / scheduled
+   * sessions and the 可用工具 page keep their state. When the unit has not
+   * been built yet (lazy task), only the persisted value is written; the
+   * future ensureUnit() applies it on first prompt.
+   */
+  async setSessionToolMode(cwd: string, mode: ToolMode): Promise<void> {
+    const unit = this.units.get(cwd);
+    if (unit) {
+      unit.toolMode = mode;
+      // Re-derive this unit's active set with the new mode. Extension tools
+      // the mode drops stay registered (SDK registry) but leave the active
+      // set; tools the mode adds were registered at unit build and come back.
+      const builtinTools = await readActiveTools();
+      this.applyUnitToolSet(unit, builtinTools);
     }
+    await writePersistedToolMode(cwd, mode);
   }
 
   /** 规则与记忆 → 导入设置：AGENTS.md / CLAUDE.md 导入开关。 */
@@ -2025,9 +2617,29 @@ export class PiDeskSessionManager {
     return readRules();
   }
 
-  /** Persist the rules text. Hot-applies on the next message (per-turn read). */
+  /**
+   * Persist the rules text. Hot-applies on the next message (per-turn read).
+   *
+   * Scanned by the same guard every memory write goes through: this block is
+   * injected verbatim into the system prompt at the very bottom, which makes it
+   * the most attractive place to smuggle a credential or a prompt-injection
+   * payload. With severity "block" a violating write is rejected outright; with
+   * "warn" it is saved as-is (the user authored it deliberately).
+   */
   async saveRulesContent(content: string): Promise<void> {
-    await writeRules(String(content ?? ""));
+    const text = String(content ?? "");
+    const cfg = loadConfig();
+    const guard = cfg.guard;
+    if (guard?.enabled && text.trim()) {
+      const scan = scanMemoryContent(text, guard, guard.rulesPath);
+      if (!scan.allowed) {
+        const reasons = scan.violations
+          .map((v) => `${v.name} (${v.category}): "${v.snippet}"`)
+          .join("; ");
+        throw new Error(`Rules rejected by content guard: ${reasons}`);
+      }
+    }
+    await writeRules(text);
   }
 
   /** Delete the rules file. */
@@ -2049,7 +2661,38 @@ export class PiDeskSessionManager {
   async getAvailableModels(): Promise<any[]> {
     if (!this.modelRuntime) return [];
     // SDK 返回 readonly 数组，转成可变数组供渲染层使用
-    return (await this.modelRuntime.getAvailable()) as unknown as any[];
+    const models = (await this.modelRuntime.getAvailable()) as any[];
+    // Enrich each model with a friendly provider name (channel || name ||
+    // brand) so the desktop model dropdown groups by the user's channel label
+    // instead of the derived (lowercase-hyphenated) provider id.
+    const friendly = await this.friendlyProviderNames();
+    return models.map((m: any) => {
+      const id = typeof m?.provider === "string" ? m.provider : "";
+      const name = (friendly[id] || id) as string;
+      return { ...m, providerName: name };
+    });
+  }
+
+  /** Build a providerId → friendly display-name map (channel || name || brand). */
+  private async friendlyProviderNames(): Promise<Record<string, string>> {
+    const map: Record<string, string> = {
+      "lm-studio": "LM Studio",
+      ollama: "Ollama",
+    };
+    try {
+      const catalog = await this.getProvidersCatalog();
+      for (const p of catalog.apiKeyProviders) {
+        if (p?.name) map[p.id] = p.name;
+      }
+      for (const p of catalog.customProviders) {
+        const label =
+          (p?.channel && String(p.channel).trim()) || p?.name || p?.id;
+        if (label) map[p.id] = label;
+      }
+    } catch {
+      /* ignore — fall back to the raw provider id */
+    }
+    return map;
   }
 
   /**
@@ -2062,6 +2705,22 @@ export class PiDeskSessionManager {
    */
   async newSession(cwd?: string): Promise<string | null> {
     const targetCwd = this.resolveCwd(cwd);
+    // Task mode (a timestamped chat subdir): defer building the SDK unit. A
+    // brand-new task the user opens but never messages must NOT leave empty
+    // `chat/<ts>` + `sessions/<encoded>` folders behind. So instead of
+    // ensureUnit() (which mkdirs both dirs + spins up the runtime), we hand
+    // back a reserved placeholder path and build the REAL unit only on the
+    // first prompt() — at which point the dirs are created and the placeholder
+    // is adopted as the actual session file via switchSession. Workspaces skip
+    // this (their dir already exists, so ensureUnit is a harmless no-op there).
+    if (isTaskTimestampCwd(targetCwd) && !this.units.has(targetCwd)) {
+      const placeholder = join(
+        sessionDirFor(targetCwd),
+        `${Date.now()}-${randomUUID()}.jsonl`,
+      );
+      this.pendingTaskPaths.set(targetCwd, placeholder);
+      return placeholder;
+    }
     const unit = await this.ensureUnit(targetCwd);
     unit.unsubscribe?.();
     await unit.runtime.newSession();
@@ -2079,16 +2738,39 @@ export class PiDeskSessionManager {
     sessionPath: string,
     force = false,
   ): Promise<void> {
+    const switchKey = this.resolveCwd(cwd);
+    // Defer building the unit for a not-yet-persisted task-mode session: merely
+    // OPENING an empty task (renderer selectSession) must not create the
+    // `chat/<ts>` + `sessions/<encoded>` folders. They are created on the first
+    // prompt() — when a real conversation actually starts. The renderer already
+    // seeds an empty buffer locally, so there is nothing to load here.
+    if (
+      isTaskTimestampCwd(switchKey) &&
+      !this.units.has(switchKey) &&
+      this.pendingTaskPaths.has(switchKey)
+    ) {
+      return;
+    }
     // resolveCwd (not the raw arg): the renderer sends "" whenever the session
     // it wants to open has no known workspace (e.g. a scheduled-task log that
     // listSessions() never surfaces). ensureUnit("") throws, which used to
     // reject the IPC call and make the click look like a no-op.
-    const unit = await this.ensureUnit(this.resolveCwd(cwd));
+    const unit = await this.ensureUnit(switchKey);
     // Same-path guard: clicking the already-open session is a no-op. `force`
     // re-opens it anyway — used after a scheduled run appends to the file, so
     // the fresh content is re-read from disk (SDK switchSession re-opens the
     // file via SessionManager.open()).
     if (!force && unit.activePath === sessionPath) return;
+    // Diagnostic: the SDK's switchSession tears the unit's current session down
+    // (teardownCurrent → session.abort()), so opening a session that resolves to
+    // a unit which is mid-generation on ANOTHER session kills that generation.
+    // Per-task cwds (see taskCwdBySessionDir) keep tasks in separate units, so
+    // this should no longer happen; log it if it ever does.
+    if (unit.runningPath && unit.runningPath !== sessionPath) {
+      console.warn(
+        `[pi] switchSession is tearing down a RUNNING session (cwd=${unit.cwd}): running=${unit.runningPath} target=${sessionPath}`,
+      );
+    }
     unit.unsubscribe?.();
     await unit.runtime.switchSession(sessionPath);
     unit.activePath = sessionPath;
@@ -2097,6 +2779,10 @@ export class PiDeskSessionManager {
     this.applyUnitDefaultModel(unit);
     this.applyUnitActiveTools(unit);
     this.subscribeToUnit(unit);
+    // Keep the renderer's "which sessions are running" set fresh. It is only
+    // broadcast when a run starts/ends, so re-focusing a session that is still
+    // generating would otherwise leave the set stale and hide the stop button.
+    this.broadcastRunningState();
   }
 
   /**
@@ -2113,7 +2799,27 @@ export class PiDeskSessionManager {
     // The renderer groups them afterwards by cwd (chat dir → "任务", anything
     // else → "空间").
     try {
-      return await PiSessionManager.listAll();
+      const sessions = await PiSessionManager.listAll();
+      // Repair the reported cwd of task-mode sessions. listAll() returns the
+      // header cwd, which is the SHARED chat root for every task; the renderer
+      // routes prompt/abort/switchSession by it, so leaving it as-is collapses
+      // all tasks onto one runtime unit and switching sessions aborts whichever
+      // task is generating. `taskCwdBySessionDir` recovers each task's real
+      // timestamped cwd from the directory its file actually lives in.
+      const taskCwds = taskCwdBySessionDir();
+      if (taskCwds.size > 0) {
+        for (const s of sessions as any[]) {
+          const path = typeof s?.path === "string" ? s.path : "";
+          if (!path) continue;
+          const realCwd = taskCwds.get(dirKey(dirname(path)));
+          if (realCwd) s.cwd = realCwd;
+        }
+      }
+      // Deliberately NOT surfacing `pendingTaskPaths` here. A task that hasn't
+      // sent its first message has no unit and no file on disk — the sidebar
+      // stays clean until the user actually sends something (which builds the
+      // unit and adopts the reserved path as the real session file).
+      return sessions;
     } catch (err) {
       console.error("Failed to list sessions:", err);
       return [];
@@ -2132,8 +2838,14 @@ export class PiDeskSessionManager {
    * "new task" — the renderer bailed out on the empty result).
    */
   getCurrentSessionPath(cwd?: string): string | undefined {
-    const unit = this.units.get(this.resolveCwd(cwd));
-    return unit?.runtime.session?.sessionManager?.getSessionFile() ?? undefined;
+    const key = this.resolveCwd(cwd);
+    const unit = this.units.get(key);
+    if (unit?.runtime.session?.sessionManager?.getSessionFile()) {
+      return unit.runtime.session.sessionManager.getSessionFile();
+    }
+    // No built unit yet (task-mode task opened but not messaged): report the
+    // reserved placeholder path so the renderer can still show + route it.
+    return this.pendingTaskPaths.get(key);
   }
 
   /**
@@ -2243,7 +2955,7 @@ export class PiDeskSessionManager {
       cwd,
       modelRuntime: this.modelRuntime,
       resourceLoaderOptions: {
-        extensionFactories: [createScheduledTaskExtension(task), rulesExtension],
+        extensionFactories: [createScheduledTaskExtension(task), rulesExtension, webSearchExtension, createSubagentExtension(() => this.webContents, () => this.modelRuntime)],
         agentsFilesOverride: createContextFilesOverride(),
       },
     });
@@ -2817,6 +3529,23 @@ export class PiDeskSessionManager {
     }
   }
 
+  /**
+   * Resolve a {provider, modelId} reference to the display object the renderer
+   * expects — the same source `session.model` comes from (the runtime registry),
+   * so labels/ids stay consistent. Falls back to a minimal { provider, id }
+   * shape rather than null: a pill must never render "lm-studio/" from an
+   * internal stash object whose key is `modelId` (no `id` field).
+   */
+  private modelForDisplay(
+    provider: string,
+    modelId: string,
+  ): { provider: string; id: string; name?: string } {
+    const m = this.modelRuntime?.getModel(provider, modelId) as
+      | { provider: string; id: string; name?: string }
+      | undefined;
+    return m ?? { provider, id: modelId };
+  }
+
   getState(cwd?: string) {
     // Empty/undefined cwd → effective cwd (chat-only fallback). Without this,
     // a model chosen before any workspace is picked could never be reflected
@@ -2824,17 +3553,67 @@ export class PiDeskSessionManager {
     const key = cwd && cwd.trim().length > 0 ? cwd : this.cwd ?? chatOnlyCwd();
     const unit = this.units.get(key);
     const session = unit?.runtime.session;
+    // A deferred (not-yet-persisted) task has no unit, but the user may have
+    // already picked a model / thinking level on it — those choices live in
+    // pendingTaskDefaults until the first message builds the unit. Surface
+    // them here so the renderer's post-setModel getState round-trip can
+    // refresh the composer pill instead of reading null (which made "switch
+    // the model on a brand-new task" look like a no-op).
+    const deferred = unit ? undefined : this.pendingTaskDefaults.get(key);
+    // Resolve a stashed / remembered {provider, modelId} into the SAME object
+    // shape the SDK exposes on session.model ({ id, provider, … }). Returning
+    // the raw stash object previously handed the renderer { provider, modelId }
+    // — which has no `id` field — so the composer pill rendered "lm-studio/"
+    // (provider name with an empty id) after picking a model on a new task.
+    const fallbackModel =
+      unit?.defaultModel
+        ? this.modelForDisplay(unit.defaultModel.provider, unit.defaultModel.modelId)
+        : deferred?.provider && deferred.modelId
+          ? this.modelForDisplay(deferred.provider, deferred.modelId)
+          : null;
     // Return by reference: Electron IPC structured-clones the payload, so the
     // renderer gets an independent copy. The previous JSON deep-copy doubled
     // the cost on every call (and silently dropped `undefined` fields).
     return {
-      model: session?.model ?? unit?.defaultModel ?? null,
-      thinkingLevel: session?.thinkingLevel ?? null,
+      model: session?.model ?? fallbackModel,
+      thinkingLevel: session?.thinkingLevel ?? deferred?.thinkingLevel ?? null,
       isStreaming: session?.isStreaming ?? false,
       sessionId: session?.sessionId ?? null,
       messages: session?.messages ?? [],
       commands: this.getRegisteredCommands(unit),
+      // Authoritative "which sessions are mid-run" snapshot (across ALL cwds).
+      // The `pi:runningState` broadcast only fires when a run starts or ends,
+      // so a renderer that missed one (or that re-focused a session later) can
+      // end up with a stale set — which hides the stop button on a session that
+      // is still generating. Any getState() round-trip (session switch, reload)
+      // now resyncs it.
+      running: this.getRunningSessions(),
     };
+  }
+
+  /**
+   * Return the COMPLETE transcript for the focused session, including messages
+   * the SDK's context compaction dropped (e.g. the user's first question in a
+   * long session). `getState()` returns `session.messages`, which is the
+   * compaction-aware LLM context and therefore omits pre-compaction history;
+   * the raw `.jsonl` still holds everything, so we rebuild the display list
+   * straight from the persisted entries. Used by the renderer's history reload.
+   */
+  getFullMessages(cwd?: string): any[] {
+    const key = cwd && cwd.trim().length > 0 ? cwd : this.cwd ?? chatOnlyCwd();
+    const unit = this.units.get(key);
+    const session = unit?.runtime.session;
+    if (!session) return [];
+    try {
+      const entries: any[] = session.sessionManager?.getEntries?.() ?? [];
+      return entries
+        .filter((e) => e && e.type === "message" && e.message)
+        .map((e) => e.message);
+    } catch {
+      // Fall back to the in-memory (possibly compacted) context if the file
+      // can't be read — better to show part of the history than nothing.
+      return session.messages ?? [];
+    }
   }
 
   /** All slash commands the unit's session runtime has registered. */
@@ -3032,6 +3811,16 @@ export class PiDeskSessionManager {
           this.subscribeToUnit(srcUnit);
         } catch {
           /* non-fatal: the chat unit recovers on the next newSession */
+        }
+      }
+
+      // The source session is gone (replaced by the workspace-bound one) — drop
+      // its reservation too, otherwise the placeholder lingers in
+      // pendingTaskPaths and getCurrentSessionPath() keeps reporting a path
+      // that no longer exists.
+      if (src) {
+        for (const [cwd, path] of this.pendingTaskPaths) {
+          if (path === src) this.pendingTaskPaths.delete(cwd);
         }
       }
 

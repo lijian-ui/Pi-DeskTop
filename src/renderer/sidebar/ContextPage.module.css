@@ -93,6 +93,29 @@
   margin-bottom: 2px;
 }
 
+/* ── Sub-section title (built-in vs extension tools) ── */
+.subTitle {
+  margin: var(--spacer-12) 0 0;
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Non-switchable extension row (e.g. subagent) ── */
+.toggleDisabled {
+  cursor: default;
+}
+
+.toggleDisabled input {
+  cursor: default;
+}
+
+.extNote {
+  color: var(--text-tertiary);
+}
+
 /* ── Hint ── */
 .hint {
   font-size: var(--body-xs-font-size);

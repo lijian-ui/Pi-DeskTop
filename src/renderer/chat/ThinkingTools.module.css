@@ -1,49 +1,72 @@
+/* 「思考与工具」过程面板
+   ─────────────────────────────────────────────────────────
+   方向 B「安静行」：去掉外框与左侧色条，只保留浅底，像一条收起的
+   日志，不抢最终回复正文。四角圆角，展开时帽底压一条分隔线与正文
+   区分，无入场动画（贴合 UI 铁律）。全部颜色走 CSS 变量，暗色 /
+   浅色主题自动适配。 */
+
 .panel {
-  margin-bottom: var(--spacer-8);
-  border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-6);
   overflow: hidden;
   font-size: var(--body-sm-font-size);
+  background: var(--bg-base-secondary);
 }
 
+/* ── 折叠标题行 ────────────────────────────────────────── */
 .header {
   display: flex;
   align-items: center;
   gap: var(--spacer-6);
   width: 100%;
   padding: var(--spacer-6) var(--spacer-8);
-  background: var(--bg-overlay-l1);
+  background: transparent;
   border: none;
   cursor: pointer;
   user-select: none;
   text-align: left;
   font: inherit;
   color: var(--text-secondary);
-  /* 仅背景过渡，无位移抬升（符合项目 UI 约定）。 */
   transition: background 0.12s ease;
 }
 
 .header:hover {
+  background: var(--bg-overlay-l1);
+}
+
+/* 展开态：帽底压一条分隔线，与正文区区分（不再用外框隔断） */
+.header[aria-expanded="true"] {
+  background: var(--bg-overlay-l1);
+  border-bottom: 1px solid var(--border-neutral-l1);
+}
+
+.header[aria-expanded="true"]:hover {
   background: var(--bg-overlay-l2);
 }
 
+.header:focus-visible {
+  outline: 2px solid var(--border-brand);
+  outline-offset: -2px;
+}
+
+/* ── 状态徽标：圆形浅底 + 状态色图标 ────────────────────── */
 .statusIcon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
   border-radius: var(--radius-full);
 }
 
 .statusIcon.running {
   color: var(--status-primary-default);
+  background: var(--bg-overlay-l3);
 }
 
 .statusIcon.done {
   color: var(--status-success-default);
-  background: rgba(51, 193, 146, 0.18);
+  background: var(--bg-brand-popup);
 }
 
 .statusIcon.error {
@@ -51,6 +74,7 @@
   background: var(--status-error-surface-l1);
 }
 
+/* ── 标题与计数 chip ───────────────────────────────────── */
 .title {
   font-weight: var(--font-weight-medium);
   color: var(--text-default);
@@ -58,28 +82,95 @@
 }
 
 .count {
-  font-size: var(--body-xs-font-size);
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-overlay-l2);
   color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+  line-height: 1.4;
   flex-shrink: 0;
 }
 
+/* chevron：统一为 ChevronRight，展开时旋转 90°（状态指示，非入场动画） */
 .chevron {
   margin-left: auto;
   color: var(--text-tertiary);
   display: inline-flex;
+  transition: transform 0.18s ease;
 }
 
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+/* ── 流式思考有界预览（方向 B：2–3 行渐隐 peek）───────────
+   面板收起且仍在流式/运行时，在 header 下方露思考最新片段。
+   flex-end 对齐 + overflow:hidden → 始终显示文本底部（最新内容），
+   顶部用 mask 渐隐让旧文字溶解；高度锁 4.5em（≈3 行），永不撑高。
+   纯 CSS 静态遮罩，无位移动画，贴合 UI 铁律。 */
+.thinkingPeek {
+  padding: var(--spacer-4) var(--spacer-8) var(--spacer-8);
+}
+
+.thinkingPeekText {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  /* 固定高度（非 max-height）：盒子高度恒定，最新内容永远钉在底部同一位置，
+     旧文字向上溢出裁切——避免流式时 1→2→3 行盒子从上往下长导致的跳动。 */
+  height: 4.5em;
+  overflow: hidden;
+  font-size: var(--body-sm-font-size);
+  line-height: 1.5;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 30%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 30%);
+}
+
+.thinkingPeekText > span {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+}
+
+.peekHint {
+  display: inline-block;
+  margin-top: var(--spacer-4);
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.peekHint:hover {
+  color: var(--text-default);
+}
+
+/* ── 展开正文区 ─────────────────────────────────────────── */
 .body {
-  padding: var(--spacer-8);
+  padding: var(--spacer-12);
   background: var(--bg-base-secondary);
 }
 
+/* step 之间不再用硬分隔线——每个 step 的内容本身是带框卡片，
+   卡片之间靠留白区分即可 */
 .step + .step {
-  margin-top: var(--spacer-10);
-  padding-top: var(--spacer-10);
-  border-top: 1px solid var(--border-neutral-l1);
+  margin-top: var(--spacer-12);
 }
 
+/* 卡片收尾：去掉最后一个子元素多余的底边距，避免正文区底部出现空洞 */
+.step > :last-child {
+  margin-bottom: 0;
+}
+
+/* ── 思考过程卡片：淡色底 + 细边框，仿 Claude/GitHub 的
+      thinking 块，让大段推理文本不贴壁、可读性更好 ───────── */
 .thinkingContent {
   font-size: var(--body-sm-font-size);
   line-height: var(--body-sm-line-height);
@@ -87,11 +178,14 @@
   word-break: break-word;
   color: var(--text-secondary);
   margin-bottom: var(--spacer-8);
-  padding-left: var(--spacer-8);
-  border-left: 2px solid var(--status-primary-default);
+  padding: var(--spacer-10) var(--spacer-12);
+  background: var(--bg-base-tertiary);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
 }
 
-/* 思考过程折叠开关：独立于外层面板，始终默认折叠，用户手动展开查看。 */
+/* 「思考过程」二级折叠开关：独立小按钮行（thinking 内容分散在
+   各 step 中，故不与内容连体），默认始终折叠 */
 .thinkingToggle {
   display: flex;
   align-items: center;
@@ -101,7 +195,7 @@
   margin-bottom: var(--spacer-8);
   background: transparent;
   border: none;
-  border-bottom: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
   cursor: pointer;
   user-select: none;
   text-align: left;
@@ -114,9 +208,15 @@
   background: var(--bg-overlay-l1);
 }
 
+.thinkingToggle:focus-visible {
+  outline: 2px solid var(--border-brand);
+  outline-offset: -2px;
+}
+
 .thinkingToggleChevron {
   display: inline-flex;
   color: var(--text-tertiary);
+  transition: transform 0.18s ease;
 }
 
 .thinkingToggleLabel {
@@ -124,6 +224,7 @@
   color: var(--text-default);
 }
 
+/* ── 中间回复（非最终正文的 assistant 文本）────────────── */
 .intermediateSection {
   margin-bottom: var(--spacer-8);
 }
@@ -140,6 +241,10 @@
 .intermediateContent {
   font-size: var(--body-sm-font-size);
   color: var(--text-secondary);
+  background: var(--bg-base-tertiary);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-6);
+  padding: var(--spacer-10) var(--spacer-12);
 }
 
 @keyframes spin {

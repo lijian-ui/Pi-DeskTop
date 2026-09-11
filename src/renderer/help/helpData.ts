@@ -104,6 +104,5 @@ export const FEEDBACK_LINKS: HelpLink[] = [
 /** External documentation / resources. */
 export const RESOURCE_LINKS: HelpLink[] = [
   { id: "pi", labelKey: "help.resources.pi", url: "https://pi.dev", descKey: "help.resources.desc" },
-  { id: "packages", labelKey: "help.resources.packages", url: "https://pi.dev/packages" },
   { id: "releases", labelKey: "help.resources.releases", url: `${GITHUB_REPO}/releases` },
 ];

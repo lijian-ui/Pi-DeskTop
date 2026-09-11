@@ -1,9 +1,15 @@
 import { useEffect, useRef } from "react";
-import { useAgentStore, type Message } from "../store/agent-store";
+import { useAgentStore, type Message, type Artifact } from "../store/agent-store";
 import type { CodeAttachment } from "../store/ui-store";
 import { useSessionStore } from "../store/session-store";
 import { useWorkspaceStore } from "../store/workspace-store";
+import { useTodoStore } from "../store/todo-store";
 import { extractText, extractImages } from "../utils/content-utils";
+import { resolveAgainstCwd } from "../utils/path-utils";
+// Extraction logic is shared with the history-reload path (session-store →
+// artifact-utils.hydrateArtifacts) so live events and reloaded sessions can
+// never drift apart.
+import { extractFilePath, SHELL_TOOLS, extractShellFileTargets } from "../utils/artifact-utils";
 
 let msgCounter = 0;
 
@@ -13,6 +19,13 @@ function langOf(filePath: string): string {
   const i = base.lastIndexOf(".");
   return i > 0 ? base.slice(i + 1).toLowerCase() : "";
 }
+
+// ── Shell-command candidates (live) ───────────────────────────────────
+// While a turn streams we only remember which files each running shell call
+// MIGHT write (tool_execution_start); on tool_execution_end they are
+// stat()-verified and only the real files become artifacts.
+/** toolCallId → candidate output paths written by that shell command. */
+const shellTargetsByCall = new Map<string, string[]>();
 
 /** Rebuild the fenced-block text sent to the LLM from a code attachment. */
 function attachmentToText(a: CodeAttachment): string {
@@ -145,6 +158,9 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
         id: ev.toolCallId ?? `tool-${++msgCounter}`,
         toolName: ev.toolName ?? "unknown",
         input: ev.args,
+        // Resolve the target file path now (args are only present at start)
+        // so tool_execution_end — which carries no args — can attach it.
+        filePath: extractFilePath(ev.toolName, ev.args) ?? undefined,
         isRunning: true,
         isError: false,
       };
@@ -155,27 +171,36 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
       );
     }
 
-    case "tool_execution_end":
-      return msgs.map((m, i) =>
-        i === msgs.length - 1 && m.role === "assistant"
-          ? {
-              ...m,
-              toolExecutions: (m.toolExecutions ?? []).map((t: any) =>
-                t.id === ev.toolCallId
-                  ? {
-                      ...t,
-                      output:
-                        typeof ev.result === "string"
-                          ? ev.result
-                          : JSON.stringify(ev.result, null, 2),
-                      isError: ev.isError ?? false,
-                      isRunning: false,
-                    }
-                  : t
-              ),
-            }
-          : m
-      );
+    case "tool_execution_end": {
+      // `ev` carries no args, but the matching tool stored its resolved path
+      // at tool_execution_start — read it back from the tool object.
+      return msgs.map((m, i) => {
+        if (i !== msgs.length - 1 || m.role !== "assistant") return m;
+        let addedPath: string | null = null;
+        const toolExecutions = (m.toolExecutions ?? []).map((t: any) => {
+          if (t.id !== ev.toolCallId) return t;
+          addedPath = t.filePath ?? null;
+          return {
+            ...t,
+            output:
+              typeof ev.result === "string"
+                ? ev.result
+                : JSON.stringify(ev.result, null, 2),
+            isError: ev.isError ?? false,
+            isRunning: false,
+          };
+        });
+        const updated: Message = { ...m, toolExecutions };
+        // Append artifact when a file-writing tool finishes without error.
+        if (addedPath && !(ev.isError ?? false)) {
+          const existing = new Set((m.artifacts ?? []).map((a) => a.filePath));
+          if (!existing.has(addedPath)) {
+            updated.artifacts = [...(m.artifacts ?? []), { filePath: addedPath, size: null }];
+          }
+        }
+        return updated;
+      });
+    }
 
     default:
       return msgs;
@@ -216,6 +241,9 @@ function drainQueue() {
     };
     if (path) {
       session.mutateBuffer(path, (msgs) => [...msgs, userMsg]);
+      // Same as the composer's send path: a draft task becomes visible the
+      // moment its first message goes out.
+      session.graduateDraft(path);
     } else {
       s.addMessage(userMsg);
     }
@@ -284,19 +312,83 @@ export function useAgentSession() {
         // message, so merely hovering over a finished background session never
         // yanks focus away from what the user is reading.
         const liveStore = useSessionStore.getState();
-        if (targetPath && targetPath !== liveStore.currentPath) {
-          const targetStreaming = (liveStore.messagesByPath.get(targetPath) ?? []).some(
+        const focusedCwd = liveStore.currentCwd;
+        // Only auto-follow a background streaming session when it lives in the
+        // SAME cwd as the session the user is currently viewing — i.e. it is a
+        // fork/continuation of the focused task. A genuinely separate task runs
+        // in its own cwd (its own runtime/unit) and must NOT hijack focus:
+        // otherwise clicking another task while one streams would keep yanking
+        // the panel back to the running task and could lead to stopping the
+        // wrong session. Background output is still accumulated (mutateBuffer
+        // above) so switching to it later shows the full history.
+        if (
+          targetPath &&
+          targetPath !== liveStore.currentPath &&
+          payload?.cwd &&
+          payload.cwd === focusedCwd &&
+          (liveStore.messagesByPath.get(targetPath) ?? []).some(
             (m) => m.role === "assistant" && m.isStreaming,
-          );
-          if (targetStreaming) {
-            liveStore.setCurrentPath(targetPath);
-            liveStore.syncFocus(targetPath);
-          }
+          )
+        ) {
+          liveStore.setCurrentPath(targetPath);
+          liveStore.syncFocus(targetPath);
         }
         if (ev.type === "message_end") {
           // Refresh the session list (debounced — a tool loop can end dozens
           // of messages in a burst) so counts / new sessions stay current.
           scheduleSessionListReload();
+        }
+        if (ev.type === "tool_execution_end" && ev.toolName === "todo" && !ev.isError) {
+          // The model updated its checklist — pull the fresh snapshot (the
+          // result's details were persisted with the session file, so a quick
+          // IPC replay is authoritative) and auto-show the right-side panel
+          // when this session is focused. No-op when nothing changed.
+          void useTodoStore.getState().fetchTodo(targetPath);
+        }
+        // Shell commands: remember the files a command *might* write at start,
+        // then confirm they really exist at end before attaching them. The
+        // stat() round-trip is what makes the regex above safe to be loose —
+        // anything that doesn't resolve to a real file is silently dropped.
+        if (
+          ev.type === "tool_execution_start" &&
+          SHELL_TOOLS.has(String(ev.toolName ?? "").toLowerCase())
+        ) {
+          const cmd = ev.args?.command ?? ev.args?.cmd ?? ev.args?.script ?? "";
+          const targets = extractShellFileTargets(cmd);
+          if (targets.length) shellTargetsByCall.set(String(ev.toolCallId ?? ""), targets);
+        }
+        if (ev.type === "tool_execution_end" && !(ev.isError ?? false)) {
+          const callId = String(ev.toolCallId ?? "");
+          const targets = shellTargetsByCall.get(callId);
+          if (targets) {
+            shellTargetsByCall.delete(callId);
+            const base = payload?.cwd || "";
+            void Promise.all(
+              targets.map((rel) => {
+                const abs = resolveAgainstCwd(rel, base);
+                return window.piDesk
+                  .statFile(abs)
+                  .then((s): Artifact | null =>
+                    s?.size != null ? { filePath: abs, size: s.size } : null,
+                  )
+                  .catch(() => null);
+              }),
+            ).then((results) => {
+              const found = results.filter((a): a is Artifact => a != null);
+              if (!found.length) return;
+              useSessionStore.getState().mutateBuffer(targetPath, (msgs) => {
+                const i = msgs.length - 1;
+                const last = msgs[i];
+                if (!last || last.role !== "assistant") return msgs;
+                const seen = new Set((last.artifacts ?? []).map((a) => a.filePath));
+                const add = found.filter((a) => !seen.has(a.filePath));
+                if (!add.length) return msgs;
+                const next = [...msgs];
+                next[i] = { ...last, artifacts: [...(last.artifacts ?? []), ...add] };
+                return next;
+              });
+            });
+          }
         }
         return;
       }
@@ -370,7 +462,22 @@ export function useAgentSession() {
     // Track which sessions are currently running (one per busy cwd) so the
     // sidebar can show a spinner and the composer can show its stop button.
     const unsubRunning = window.piDesk.onRunningState((state: any) => {
-      useSessionStore.getState().setRunningPaths(state?.running ?? []);
+      const store = useSessionStore.getState();
+      const running = state?.running ?? [];
+      store.setRunningPaths(running);
+      // A task-mode draft (「新建任务」clicked, first message not yet sent)
+      // is hidden from the sidebar until its session file hits disk. The main
+      // process writes that file during switchSession() INSIDE prompt(), which
+      // runs BEFORE this running-state broadcast — so by now listSessions()
+      // can discover it. If the FOCUSED session just started running but isn't
+      // in the sidebar list yet (it was a draft graduated in-memory, or the
+      // optimistic entry was dropped), refresh now so the task appears the
+      // instant the user sends the first message — instead of waiting for the
+      // whole turn to finish (message_end → load()).
+      const cur = store.currentPath;
+      if (cur && running.includes(cur) && !store.sessions.some((s) => s.path === cur)) {
+        void store.refreshSessions();
+      }
     });
 
     // A prompt was rejected by the main process (e.g. the target cwd already

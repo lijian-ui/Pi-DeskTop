@@ -7,6 +7,11 @@ directories:
 asar: true
 asarUnpack:
   - "node_modules/node-pty/**/*"
+  # better-sqlite3 ships a prebuilt N-API native binary (.node) that cannot be
+  # loaded from inside asar; unpack the whole package so Electron resolves the
+  # native addon at runtime. N-API is ABI-stable, so the npm-installed prebuild
+  # loads in Electron 35 without a node-gyp rebuild (npmRebuild:false above).
+  - "node_modules/better-sqlite3/**/*"
   # @ffmpeg-installer/ffmpeg ships a prebuilt ffmpeg binary (executable) inside
   # its platform sub-package (e.g. @ffmpeg-installer/win32-x64). The binary must
   # be unpacked outside the asar archive to be executable; unpack the whole

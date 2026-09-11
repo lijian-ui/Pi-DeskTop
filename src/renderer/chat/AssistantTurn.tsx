@@ -1,11 +1,12 @@
 import { memo, useState, useRef, useEffect } from "react";
 import { Copy, Check, Volume2, Loader2, Square } from "lucide-react";
-import type { Message } from "../store/agent-store";
+import type { Message, Artifact } from "../store/agent-store";
 import { useTranslation } from "react-i18next";
 import { useTtsStore } from "../store/tts-store";
 import { PcmStreamPlayer } from "./pcm-player";
 import Markdown from "./Markdown";
 import ThinkingTools from "./ThinkingTools";
+import ArtifactCards from "./ArtifactCards";
 import styles from "./AssistantTurn.module.css";
 
 interface Props {
@@ -19,7 +20,7 @@ interface Props {
  *
  *  - 始终只显示**一个** Pi 头像；
  *  - 思考过程 / 工具调用 / 中间回复内容折叠在「思考与工具」面板内
- *    （流式时自动展开、完成时自动折叠）；
+ *    （默认始终折叠，可手动展开；运行状态看标题行徽标）；
  *  - 最终回复正文始终独立显示在面板下方。
  *
  * 这样流式和完成态都只有一个 Pi 图标，中间过程不再拆成多个气泡。
@@ -76,6 +77,23 @@ function AssistantTurn({ messages, highlight }: Props) {
   const hasTemporalContent = messages.some(
     (m) => !!m.thinking?.trim() || m.toolExecutions?.length
   );
+
+  // 收集整轮所有 assistant 消息里的产物（去重），避免 artifacts 落在非
+  // final 消息上时不显示。
+  const turnArtifacts = (() => {
+    const seen = new Set<string>();
+    const out: Artifact[] = [];
+    for (const m of messages) {
+      if (m.role !== "assistant" || !m.artifacts?.length) continue;
+      for (const a of m.artifacts) {
+        if (!seen.has(a.filePath)) {
+          seen.add(a.filePath);
+          out.push(a);
+        }
+      }
+    }
+    return out;
+  })();
 
   const copy = () => {
     navigator.clipboard
@@ -194,14 +212,25 @@ function AssistantTurn({ messages, highlight }: Props) {
         )}
       </div>
       <div className={styles.body}>
-        {/* 思考 / 工具 / 中间回复：聚合折叠面板（流式展开、完成折叠） */}
+        {/* 思考 / 工具 / 中间回复：聚合折叠面板（默认始终折叠，
+            流式时也不自动展开；想看过程可手动点开） */}
         <ThinkingTools messages={panelMessages} />
         {/* 最终回复正文：始终独立展示 */}
         {finalContent.trim() && (
           <div id={`msg-${finalMsg.id}`} className={styles.content}>
-            <Markdown content={finalContent} />
+            {/* Path links only once the turn has settled — enabling them
+                mid-stream would re-run the markdown pipeline (and its stat()
+                checks) on every streamed token. */}
+            <Markdown content={finalContent} linkifyPaths={!isStreaming} />
           </div>
         )}
+        {/* 产物文件卡片：一旦本回合产出第一个产物就固定显示（流式中也渲染），
+            不再用 !isStreaming 门控——isStreaming 在多个工具步骤之间会反复翻转，
+            门控反而导致卡片在流式过程中闪烁消失/出现。turnArtifacts 随工具执行
+            单调累积、稳定不回退，故直接按产物数量渲染即可。 */}
+        {turnArtifacts.length ? (
+          <ArtifactCards artifacts={turnArtifacts} />
+        ) : null}
         {(finalContent.trim() || finalMsg?.stoppedByUser) && (
           <div className={styles.meta}>
             <span className={styles.time}>{time}</span>
@@ -270,6 +299,7 @@ function areEqual(prev: Props, next: Props): boolean {
       x.isStreaming !== y.isStreaming ||
       x.timestamp !== y.timestamp ||
       x.toolExecutions !== y.toolExecutions ||
+      x.artifacts !== y.artifacts ||
       x.id !== y.id
     ) {
       return false;

@@ -31,6 +31,7 @@ export default defineConfig({
               external: [
                 "electron",
                 "node-pty",
+                "better-sqlite3",
                 /^@earendil-works\//,
                 // dingtalk-stream is CJS and pulls in `ws`, which tries to
                 // require optional native deps (bufferutil / utf-8-validate).

@@ -1,4 +1,4 @@
-import { BookOpen, Package, Tag } from "lucide-react";
+import { BookOpen, Tag } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { RESOURCE_LINKS } from "../helpData";
 import ExternalLink from "../ExternalLink";
@@ -6,7 +6,6 @@ import styles from "../HelpFeedbackPage.module.css";
 
 const ICONS: Record<string, typeof BookOpen> = {
   pi: BookOpen,
-  packages: Package,
   releases: Tag,
 };
 

@@ -3,7 +3,6 @@ import ChatPanel from "../chat/ChatPanel";
 import SettingsPage from "../sidebar/SettingsPage";
 import SkillsPage from "../skills/SkillsPage";
 import AutomatePage from "../automate/AutomatePage";
-import PackagesPage from "../packages/PackagesPage";
 import ImPage from "../im/ImPage";
 import TerminalPanel from "../chat/TerminalPanel";
 import FilePreviewPanel from "../chat/FilePreviewPanel";
@@ -65,8 +64,6 @@ export default function MainPanel() {
             <SkillsPage />
           ) : mainView === "automate" ? (
             <AutomatePage />
-          ) : mainView === "packages" ? (
-            <PackagesPage />
           ) : mainView === "im" ? (
             <ImPage />
           ) : null}

@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useRef } from "react";
-import { ChevronDown, ChevronRight, Check, AlertTriangle, Loader2 } from "lucide-react";
+import { ChevronRight, Check, AlertTriangle, Loader2 } from "lucide-react";
 import type { Message } from "../store/agent-store";
 import { useTranslation } from "react-i18next";
 import Markdown from "./Markdown";
@@ -19,9 +19,10 @@ interface Props {
  * 「思考与工具」折叠面板：聚合同一回合内所有中间过程（思考过程、
  * 工具调用、中间回复内容）。
  *
- * 流式输出期间自动展开（过程实时可见）；一旦整回合完成（无流式消息
- * 且无运行中的工具），自动折叠为一行摘要，只保留最终回复正文（由
- * AssistantTurn 独立渲染，点击标题行可手动展开回看）。
+ * 面板默认始终折叠——流式输出期间也不会自动展开，避免过程内容随
+ * 每个流式 token 反复跳动，只靠标题行的状态徽标表达进行中/完成；
+ * 想实时围观时手动展开查看，展开后保持到手动收起。最终回复正文由
+ * AssistantTurn 独立渲染，不受本面板状态影响。
  */
 function ThinkingTools({ messages }: Props) {
   const { t } = useTranslation();
@@ -34,32 +35,73 @@ function ThinkingTools({ messages }: Props) {
 
   // 流式时展开，全部完成后折叠。Hooks 必须先于任何条件返回，
   // 保证 hooks 调用次数稳定（组件可能在同一会话中被复用渲染）。
-  const streamingOrRunning =
-    messages.some((m) => m.isStreaming) || tools.some((tool) => tool.isRunning);
-  // 折叠面板：流式展开、完成折叠（由下方 useEffect 同步活跃态翻转）。
-  const [expanded, setExpanded] = useState(streamingOrRunning);
+  const isStreaming = messages.some((m) => m.isStreaming);
+  const isToolRunning = tools.some((tool) => tool.isRunning);
+  const streamingOrRunning = isStreaming || isToolRunning;
+  // 面板默认始终折叠：流式过程中也不自动展开（避免过程内容每 token 跳动），
+  // 运行状态只通过标题行徽标表达（运行中 spinner / 完成 ✓ / 出错 ⚠）。
+  // 完全由用户手动开合；展开后保持到手动收起，不被状态翻转回退。
+  const [expanded, setExpanded] = useState(false);
   // 思考内容默认始终折叠（流式/完成态均折叠），用户手动点开「思考过程」查看。
   // 大段思考不撑爆回复区；与外层面板独立，不受展开/折叠自动同步影响。
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
+  // peek 是否已收起：回合真正结束后由延时器置 true；新回合 / 段间空隙恢复 false。
+  const [peekCollapsed, setPeekCollapsed] = useState(false);
 
-  // 仅在活跃状态翻转时自动同步面板展开/折叠：
-  //  - 空闲 → 运行中：自动展开（流式中的思考/工具实时可见）
-  //  - 运行中 → 空闲：自动折叠（只保留最终回复正文）
-  // 运行期间（或完全空闲后）用户手动开合不回退。
-  const prevActiveRef = useRef(streamingOrRunning);
+  const turnSettled = !isStreaming && !isToolRunning;
+  // 所有 hooks 必须在 early return 之前调用，否则违反 React Rules of Hooks
+  // （跨渲染 hooks 顺序不一致会白板）。用 ref 区分「刚结束」与「早已结束」、
+  // 区分「回合内部段间空隙」与「回合真正完成」——后者用延时器收起 peek，
+  // 前者在空隙结束（turnSettled 翻回 false）时取消收起，避免误收导致跳变。
+  const prevSettledRef = useRef(turnSettled);
+  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    const prev = prevActiveRef.current;
-    if (streamingOrRunning !== prev) {
-      setExpanded(streamingOrRunning);
-      prevActiveRef.current = streamingOrRunning;
+    if (turnSettled && !prevSettledRef.current) {
+      // 回合刚结束：收起手动展开的面板；延时收起 peek，留出段间空隙缓冲。
+      setExpanded(false);
+      setThinkingExpanded(false);
+      if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
+      collapseTimerRef.current = setTimeout(() => setPeekCollapsed(true), 350);
+    } else if (!turnSettled && prevSettledRef.current) {
+      // 回合重新开始（段间空隙结束 / 新回合）：取消待收起，允许 peek 重新显示。
+      if (collapseTimerRef.current) {
+        clearTimeout(collapseTimerRef.current);
+        collapseTimerRef.current = null;
+      }
+      setPeekCollapsed(false);
     }
-  }, [streamingOrRunning]);
+    prevSettledRef.current = turnSettled;
+    return () => {
+      if (collapseTimerRef.current) {
+        clearTimeout(collapseTimerRef.current);
+        collapseTimerRef.current = null;
+      }
+    };
+  }, [turnSettled]);
 
   // 没有任何过程性内容 → 不渲染面板。
   if (!hasThinking && !hasTools && !hasIntermediate) return null;
 
   const anyError = tools.some((tool) => tool.isError);
   const overallStatus = streamingOrRunning ? "running" : anyError ? "error" : "done";
+
+  // 流式思考有界预览（方向 B：2–3 行渐隐 peek）。
+  // 关键：预览在**整个多步回合内持续挂载**——只要「仍在流式」或「本回合
+  // 已有工具调用」就保持显示，避免工具结束瞬间 isToolRunning 翻 false、
+  // streamingOrRunning 随之翻转导致 peek 卸载、下方内容上下跳动。
+  // 回合真正结束由上方 effect 的延时器（peekCollapsed）收起回安静行；
+  // 段间空隙（turnSettled 瞬间翻 true）因 < 延时会被取消收起，不抖动。
+  // 有界预览显示条件：
+  //  - 面板未手动展开；
+  //  - 存在思考内容；
+  //  - 回合进行中（流式 / 工具运行）或本回合出现过工具调用（hasTools 用于桥接
+  //    「思考→工具→思考」段间空隙，避免空隙瞬间 turnSettled 翻 true 导致 peek 卸载跳动）；
+  //  - 尚未被回合结束的延时器收起（peekCollapsed）。
+  const showPeek =
+    !expanded && hasThinking && (isStreaming || isToolRunning || hasTools) && !peekCollapsed;
+  const peekText = showPeek
+    ? [...messages].reverse().find((m) => m.thinking?.trim())?.thinking?.trim() ?? ""
+    : "";
 
   return (
     <div className={styles.panel}>
@@ -84,10 +126,27 @@ function ThinkingTools({ messages }: Props) {
             {tools.length} {t("chat.toolsCount")}
           </span>
         )}
-        <span className={styles.chevron}>
-          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}>
+          <ChevronRight size={12} />
         </span>
       </button>
+      {peekText && (
+        <div className={styles.thinkingPeek}>
+          <div className={styles.thinkingPeekText}>
+            <span>{peekText}</span>
+          </div>
+          <button
+            type="button"
+            className={styles.peekHint}
+            onClick={() => {
+              setExpanded(true);
+              setThinkingExpanded(true);
+            }}
+          >
+            {t("chat.expandThinking")}
+          </button>
+        </div>
+      )}
       {expanded && (
         <div className={styles.body}>
           {hasThinking && (
@@ -97,8 +156,12 @@ function ThinkingTools({ messages }: Props) {
               onClick={() => setThinkingExpanded((e) => !e)}
               aria-expanded={thinkingExpanded}
             >
-              <span className={styles.thinkingToggleChevron}>
-                {thinkingExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              <span
+                className={`${styles.thinkingToggleChevron} ${
+                  thinkingExpanded ? styles.chevronOpen : ""
+                }`}
+              >
+                <ChevronRight size={12} />
               </span>
               <span className={styles.thinkingToggleLabel}>{t("chat.thinking")}</span>
             </button>

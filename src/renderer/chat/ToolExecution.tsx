@@ -1,6 +1,7 @@
 import { memo, useState } from "react";
-import { ChevronDown, ChevronRight, Wrench } from "lucide-react";
+import { ChevronRight, Check, AlertTriangle, Loader2 } from "lucide-react";
 import type { ToolExecution as ToolExecutionType } from "../store/agent-store";
+import { useTranslation } from "react-i18next";
 import styles from "./ToolExecution.module.css";
 
 /** Tool outputs longer than this are collapsed with a "Show full output" button. */
@@ -60,6 +61,7 @@ function summarizeArgs(toolName: string, input: any): string {
 }
 
 function ToolExecution({ execution }: { execution: ToolExecutionType }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [outputExpanded, setOutputExpanded] = useState(false);
   const argsSummary = summarizeArgs(execution.toolName, execution.input);
@@ -72,47 +74,78 @@ function ToolExecution({ execution }: { execution: ToolExecutionType }) {
     typeof execution.output === "string" &&
     execution.output.length > OUTPUT_TRUNCATE_LENGTH;
 
+  const status = execution.isRunning
+    ? "running"
+    : execution.isError
+      ? "error"
+      : "done";
+
   return (
-    <div className={styles.toolExecution}>
-      <div className={styles.header} onClick={() => setExpanded(!expanded)}>
-        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <Wrench size={12} />
-        <span className={styles.toolName}>{execution.toolName}</span>
+    <div className={styles.toolExecution} data-status={status}>
+      <button
+        type="button"
+        className={styles.header}
+        onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+      >
+        <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}>
+          <ChevronRight size={14} />
+        </span>
+        <span className={`${styles.label} ${execution.isRunning ? styles.labelRunning : ""}`}>
+          {execution.toolName}
+        </span>
         {argsSummary && (
-          <span className={styles.argsSummary} title={argsSummary}>
+          <span className={styles.queryChip} title={argsSummary}>
             {argsSummary}
           </span>
         )}
-        {execution.isRunning && <div className={styles.spinner} />}
-        {!execution.isRunning && (
-          <span className={`${styles.statusTag} ${execution.isError ? styles.statusError : styles.statusSuccess}`}>
-            {execution.isError ? "Error" : "Done"}
-          </span>
-        )}
-      </div>
-      {expanded && (
-        <div className={styles.body}>
-          <div className={styles.input}>{JSON.stringify(execution.input, null, 2)}</div>
-          {execution.output && (
-            <div className={styles.output}>
-              {outputTruncated
-                ? execution.output!.slice(0, OUTPUT_TRUNCATE_LENGTH)
-                : execution.output}
-              {outputTruncated && (
-                <button
-                  className={styles.expandOutput}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setOutputExpanded(true);
-                  }}
-                >
-                  Show full output ({(execution.output!.length / 1024).toFixed(0)} KB)
-                </button>
-              )}
-            </div>
+        <span className={styles.status}>
+          {execution.isRunning ? (
+            <Loader2 size={12} className={styles.spinner} />
+          ) : execution.isError ? (
+            <AlertTriangle size={12} className={styles.statusIconError} />
+          ) : (
+            <Check size={12} className={styles.statusIconDone} />
           )}
+        </span>
+      </button>
+      {/* 平滑高度动画：grid-rows 0fr↔1fr，配合 collapseInner 的 overflow:hidden。
+          内容始终挂载，开合不跳动（对齐 assistant-ui tool-call 的 disclosure 行为）。 */}
+      <div className={`${styles.collapsePanel} ${expanded ? styles.collapseOpen : ""}`}>
+        <div className={styles.collapseInner}>
+          <div className={styles.body}>
+            <div className={styles.section}>
+              <div className={styles.sectionLabel}>{t("chat.toolRequest")}</div>
+              <div className={styles.code}>
+                {JSON.stringify(execution.input, null, 2)}
+              </div>
+            </div>
+            {execution.output && (
+              <div className={styles.section}>
+                <div className={styles.sectionLabel}>{t("chat.toolResult")}</div>
+                <div className={styles.code}>
+                  {outputTruncated
+                    ? execution.output!.slice(0, OUTPUT_TRUNCATE_LENGTH)
+                    : execution.output}
+                  {outputTruncated && (
+                    <button
+                      className={styles.expandOutput}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOutputExpanded(true);
+                      }}
+                    >
+                      {t("chat.showFullOutput", {
+                        size: (execution.output!.length / 1024).toFixed(0),
+                      })}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

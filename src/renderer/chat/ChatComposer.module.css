@@ -307,6 +307,17 @@
   color: var(--text-default);
 }
 
+/* Model without reasoning support: keep the pill in place but greyed out. */
+.modelPill:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.modelPill:disabled:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
 /* ── Model selector dropdown ── */
 .modelSelector {
   position: relative;
@@ -334,6 +345,23 @@
   padding: var(--spacer-4) var(--spacer-8);
   text-transform: uppercase;
   letter-spacing: 0.3px;
+}
+
+/* Narrower than the model dropdown: only holds the handful of levels the
+   current model actually supports. */
+.thinkingDropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  min-width: 116px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-base-tertiary);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  padding: var(--spacer-6);
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
 .modelItem {

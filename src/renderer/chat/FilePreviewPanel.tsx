@@ -135,6 +135,16 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** Build a file:// URL for a path's parent directory. Used as the <base> of
+ *  the HTML preview iframe so relative assets (css/img/js) resolve against the
+ *  file's own folder. Windows drive paths (C:\…) and POSIX paths both handled. */
+function fileDirUrl(p: string): string {
+  const norm = p.replace(/\\/g, "/");
+  const dir = norm.replace(/\/[^/]*$/, "");
+  if (/^[a-zA-Z]:/.test(dir)) return "file:///" + dir + "/";
+  return "file://" + dir + "/";
+}
+
 /**
  * File preview panel shown over the chat area when a file is clicked in the
  * sidebar file manager. Text files render with line numbers + syntax
@@ -203,6 +213,9 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
   const fileName = filePath.split(/[\\/]/).pop() || filePath;
   const ext = extOf(filePath);
   const isMarkdown = ext === "md" || ext === "markdown";
+  const isHtml = ext === "html" || ext === "htm";
+  // Markdown and HTML both get a "rendered vs source" toggle.
+  const isRenderable = isMarkdown || isHtml;
 
   useEffect(() => {
     let cancelled = false;
@@ -412,11 +425,31 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
       case "error":
         return <div className={styles.noticeError}>{result.error}</div>;
       case "text": {
-        if (isMarkdown && mdMode === "preview") {
+        if (isRenderable && mdMode === "preview") {
+          if (isMarkdown) {
+            return (
+              <div className={styles.mdPreview}>
+                <Markdown content={result.content} />
+              </div>
+            );
+          }
+          // HTML: render inside a sandboxed iframe. `allow-scripts` lets the
+          // page's JS run, but WITHOUT `allow-same-origin`/`allow-top-navigation`
+          // the iframe gets an opaque origin — it cannot touch the parent app,
+          // read cookies/localStorage, or navigate the top window. A <base>
+          // pointing at the file's directory lets relative assets resolve where
+          // the browser permits it.
+          const baseTag = `<base href="${fileDirUrl(filePath)}">`;
+          const srcDoc = /^\s*<!doctype/i.test(result.content)
+            ? result.content.replace(/^(\s*<!doctype[^>]*>)/i, `$1\n${baseTag}`)
+            : baseTag + result.content;
           return (
-            <div className={styles.mdPreview}>
-              <Markdown content={result.content} />
-            </div>
+            <iframe
+              className={styles.htmlFrame}
+              title={fileName}
+              sandbox="allow-scripts"
+              srcDoc={srcDoc}
+            />
           );
         }
         // Per-line rendering: each file line is a flex row [lineNo | code line].
@@ -514,7 +547,7 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
           <span className={styles.fileMeta}>{formatSize(result.size)}</span>
         )}
         <span className={styles.headerSpacer} />
-        {isMarkdown && result?.kind === "text" && (
+        {isRenderable && result?.kind === "text" && (
           <div className={styles.mdToggle}>
             <button
               className={`${styles.mdToggleBtn} ${mdMode === "preview" ? styles.mdToggleActive : ""}`}

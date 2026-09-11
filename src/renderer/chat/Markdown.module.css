@@ -50,6 +50,40 @@
   text-decoration: underline;
 }
 
+/* Clickable filesystem path (injected by rehype-file-paths.ts).
+   Same brand colour as a normal link, but a dotted underline tells it apart:
+   this opens a local file preview instead of navigating to a URL. */
+.pathLink {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--text-brand);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.pathLink:hover {
+  color: var(--text-brand-hover);
+  text-decoration-style: solid;
+}
+
+/* Inside inline code the grey chip already says "this is a path", so a
+   permanent dotted underline on top of it is noise. Keep the brand colour as
+   the only affordance and reveal the underline on hover. */
+.inlineCode .pathLink {
+  text-decoration: none;
+}
+
+.inlineCode .pathLink:hover {
+  text-decoration: underline;
+  text-decoration-style: solid;
+}
+
 .markdown :global(blockquote) {
   margin: 0 0 var(--spacer-8);
   padding: var(--spacer-4) var(--spacer-12);

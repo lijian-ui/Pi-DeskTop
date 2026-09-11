@@ -1,0 +1,142 @@
+/* ── Artifact cards rendered at the bottom of an assistant turn ── */
+
+.wrapper {
+  margin-top: var(--spacer-12);
+  padding-top: var(--spacer-12);
+  border-top: 1px solid var(--border-neutral-l1);
+}
+
+/* ── Collapsed summary: a single card (mirrors the expanded .card look)
+   so the fold reads as a file bundle instead of plain text. ────────── */
+.summaryCard {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-10);
+  padding: var(--spacer-10) var(--spacer-12);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  background: var(--bg-base-default);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: border-color 0.12s ease;
+}
+
+.summaryCard:hover {
+  border-color: var(--border-brand-default);
+}
+
+.summaryBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.summaryTitle {
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-default);
+}
+
+.summaryCount {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+}
+
+.summaryChevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.summaryCard:hover .summaryChevron {
+  color: var(--text-secondary);
+}
+
+.iconBundle {
+  color: var(--status-primary-default);
+  flex-shrink: 0;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-8);
+  margin-top: var(--spacer-6);
+}
+
+/* ── Single card ─────────────────────────────────────────────────── */
+.card {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-10);
+  padding: var(--spacer-10) var(--spacer-12);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  background: var(--bg-base-default);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: border-color 0.12s ease;
+}
+
+.card:hover {
+  border-color: var(--border-brand-default);
+}
+
+.cardBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fileName {
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-default);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileSize {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+}
+
+.openIcon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.card:hover .openIcon {
+  color: var(--text-secondary);
+}
+
+/* ── Show-more / collapse toggle ─────────────────────────────────── */
+.moreBtn {
+  margin-top: var(--spacer-8);
+  padding: var(--spacer-6) var(--spacer-10);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  background: var(--bg-base-default);
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+  cursor: pointer;
+  text-align: left;
+}
+
+.moreBtn:hover {
+  border-color: var(--border-brand-default);
+  color: var(--text-default);
+}
+
+/* ── File-type icon colors ──────────────────────────────────────── */
+.iconDoc   { color: #2563eb; flex-shrink: 0; }
+.iconSheet { color: #16a34a; flex-shrink: 0; }
+.iconCode  { color: #7c3aed; flex-shrink: 0; }
+.iconImg   { color: #ea580c; flex-shrink: 0; }
+.iconDefault { color: var(--icon-secondary); flex-shrink: 0; }

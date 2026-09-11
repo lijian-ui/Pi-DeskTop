@@ -1,89 +1,59 @@
-# Pi Desktop v0.6.0 Release Notes
+﻿# Pi Desktop v0.7.0 Release Notes
 
-## ✨ 本版概要
+## 本版概要
 
-- **语音合成（TTS）**：桌面端 LLM 回复支持朗读 + 流式自动播放，并可在 IM 渠道以语音消息回复（小米 MiMo-V2.5-TTS）。
-- **飞书（Feishu / Lark）IM 通道**：新增飞书机器人接入，与钉钉 / 微信 / QQ 并列。
-- **IM 语音回复**：QQ、飞书支持把 AI 回复合成语音发送，可设「仅发送语音」。
-- **IM 会话 / 工作区命令**：新增 `/workspaces` `/workspace` `/sessions` `/continue`。
-- **LLM 回复区重构**：思考过程 / 工具 / 中间回复折叠为「思考与工具」面板；思考内容默认折叠，避免大段思考撑爆回复区。
-- **用户消息代码引用卡片折叠**：引用卡片可点击展开 / 收起。
+- **子代理（Subagent）系统**：LLM 可将子任务委派给专门的子代理执行，支持单次 / 并行 / 链式调用，自带递归护栏与工具白名单。
+- **委派引导**：系统提示词注入可用角色清单 + 委派准则，强化 subagent 工具描述，并新增 `/subagent` 命令（裸命令列出所有可用角色）。
+- **并发执行**：同一轮可同时委派多个子代理（并行上限 4），修复了并发机制下的深度计数误判 bug。
+- **渲染端进度面板**：新增 SubagentProgress 面板，实时展示各子代理的运行 / 完成状态与运行过程。
 
 ---
 
 ## 新增功能
 
-### 1. 语音合成（TTS）
+### 1. 子代理（Subagent）系统
+- 主进程注册 subagent 工具：常规会话与定时任务会话均挂载 `createSubagentExtension(webContents, getModelRuntime)`（`src/main/pi/session-manager.ts`）。
+- 子代理定义：读取 `~/.pi/agent/agents/*.md`，frontmatter 含 `name` / `description` / `aliases` / `tools` / `thinking`；样例 `scout.md` / `summarizer.md` 已补全 frontmatter。
+- 模型复用：子代理默认复用当前会话下拉模型（透传主进程 `modelRuntime` 到 `createAgentSession`），frontmatter `model` 字段可覆盖；`thinkingLevel` 同理。
+- 指令发送：子代理指令以 user 消息形式发送（删除死代码 `systemPromptMode: replace`，`src/main/pi/subagent/agent-discovery.ts`）。
+- 委派引导：
+  - `before_agent_start` 钩子向系统提示词注入可用角色清单 + 委派准则（`src/main/pi/subagent/index.ts`）。
+  - 强化 subagent 工具描述，提升 LLM 主动委派意愿。
+  - 系统提示词「Available tools」段新增 subagent（补充 `promptSnippet` + `promptGuidelines`），使工具出现在官方工具清单中。
+- `/subagent` 命令：简化为裸命令，仅列出所有可用角色，引导 LLM 自行委派（删除 `<角色> <任务>` 执行与 `list` 子命令）。
+- 工具白名单：子代理仅能使用 agent-discovery 在 frontmatter 声明的 `tools`，防止越权。
+- 递归护栏（结构性）：子会话创建时不挂载 subagent 扩展 → 子代理自身没有 subagent 工具 → 无法自嵌套，从根本上防止递归爆炸。
 
-- 新增独立 TTS 子系统（主进程 `src/main/tts/tts-service.ts`，渲染端 `src/renderer/sidebar/TtsPage.tsx`）。
-- 模型：**MiMo-V2.5-TTS**（小米 mimo），通过 OpenAI 兼容接口调用。
-  - 非流式：返回完整 **WAV**（base64）。
-  - 流式：返回 **PCM16（24kHz 单声道）** 分块，渲染端 `pcm-player.ts` 实时播放，LLM 流式结束即同步朗读。
-- 设置页新增「语音合成」分区：
-  - 多配置管理（增 / 删 / 改 / 设为当前）、预置音色（冰糖 / 茉莉 / 苏打 / 白桦 / Mia / Chloe / Milo / Dean）、自然语言「语气风格」指令、测试语音、流式自动播放开关。
-  - 配置持久化到 `~/.pi/agent/tts-config.json`（独立于 `settings.json`，密钥隔离）。
-- 桌面端 LLM 回复气泡新增「朗读 / 停止」按钮（`AssistantTurn.tsx`），开启流式开关后回复完成自动播放。
-- IPC：`pi:getTtsConfig` / `pi:saveTtsConfig` / `pi:ttsSynthesize` / `pi:ttsSynthesizeStream`；主进程通过 `pi:ttsChunk` / `pi:ttsDone` 推送音频分块。预加载 `window.piDesk.ttsSynthesize` / `onTtsChunk` / `onTtsDone`。
+### 2. 并发执行
 
-### 2. 飞书（Feishu / Lark）IM 通道
+- 多个子任务走 `mapLimit(specs, MAX_PARALLEL=4)` 并行；LLM 可在同一轮同时委派多个子代理，SDK 以 `Promise.all` 处理同轮多 tool_call。
+- 修复全局 `depth` 计数器并发 bug：删除全局深度计数（并发的兄弟任务被误判为嵌套而触发误拦），结构性递归护栏已足够，无需运行时计数。
 
-- 新增 `feishu` 渠道类型（`src/main/im/feishu/`：adapter / connection / reply）。
-- 配置字段：`appId` / `appSecret` / `encryptKey`（可选）/ `verificationToken`（可选）/ `brand`（feishu / lark）。
-- 渠道弹窗（`ImChannelModal`）支持飞书字段与可选标记；`vite.config.ts` 将 `@larksuiteoapi/node-sdk` 设为 external（与 dingtalk-stream 同模式，运行时由 Electron 解析）。
+### 3. 渲染端进度面板
 
-### 3. IM 语音回复（QQ + 飞书）
-
-- 渠道实例新增 `ttsReply`（同时发语音）与 `ttsVoiceOnly`（仅发语音，失败自动回退文字）。
-- QQ 适配器 `sendVoice`：文本 → MiMo TTS → WAV → **SILK Base64** → QQ 语音消息（`@tencent-connect/qqbot-nodejs` 的 `audioFileToSilkBase64`）。
-- 网关在回复完成时按渠道配置合成语音；`voiceOnly` 模式下跳过文字流、仅发语音（语音失败回退文字）。
-
-### 4. IM 会话 / 工作区管理命令
-
-- `/workspaces`：列出所有工作区（近期目录 + 会话历史 cwd，标记当前会话）。
-- `/workspace <路径>`：设置待切换工作区（校验目录存在），下次 `/new` 生效。
-- `/sessions`：列出全部会话（编号 + 首条消息预览 + 工作区），供 `/continue` 快捷引用。
-- `/continue <id 或编号>`：将当前会话映射到已有 Pi 会话文件（`ImSessionMap.setMapping`）。
-- 帮助文本同步更新；`/model` 列表格式优化。
-
-### 5. LLM 回复区 · 思考与工具折叠
-
-- 会话回合折叠（消息列表重构为 `MessageList → AssistantTurn + ThinkingTools`），同一回合只显示**一个 Pi 头像**，中间过程（思考 / 工具 / 中间回复）聚合成「思考与工具」面板：流式自动展开、完成自动折叠。
-- **本版新增**：思考内容默认折叠——面板内新增「思考过程」开关，流式 / 完成态均折叠，用户手动点开查看大段思考，回复区始终保持清爽（折叠态下空 step 自动过滤，不留分隔线）。
-
-### 6. 用户消息代码引用卡片折叠
-
-- 用户气泡内的代码 / 终端引用卡片（`RefCard`）可点击标题折叠 / 展开（`ChevronRight` 旋转指示）。
+- 新增 `src/renderer/components/SubagentProgress.tsx` + `.module.css` + `store/subagent-store.ts`，在 `App.tsx` 挂载，实时展示子代理的运行中 / 已完成状态与结果摘要。
+- 运行过程可视化（本版新增）：子代理每步工具调用（`tool_call` / `tool_result`）实时以步骤列表展示在面板内（显示工具名 + 参数摘要 + 结果摘要），让主会话清楚「子代理在干什么」；按决策只显示工具级、不含思考过程、本会话内即时展示不落盘。
 
 ---
 
 ## 修复与体验优化
+- **subagent 不工作修复**：
+  - 样例 `scout.md` / `summarizer.md` 此前缺失 frontmatter → 重写补全，确保被 agent-discovery 正确识别。
+  - 子代理调不了模型（runner 漏传 `modelRuntime`）→ 透传主进程 `modelRuntime` getter 到子会话，子代理即可复用当前模型与密钥。
+- **缓存命中率**：本次改动注入内容稳定、工具定义为静态一次性变化，不会破坏 LLM 的提示词缓存命中率（纯调研结论，无行为变更）。
+- **子代理进度面板不显示（根因修复）**：`createSubagentExtension` 原在 `ensureUnit()` 内用 `this.webContents` 的当前值（管理器初始化早于 `setEventTarget` 赋值，故为 `null`）捕获进 `sendEvent` 闭包，导致默认 chat 会话的所有进度事件被 `null?.send()` 静默丢弃、面板永不刷新。改为发送时惰性取 `getWebContents()`（与 `getModelRuntime` 同款 getter 模式）并加 `isDestroyed()` 防护，同时兼容窗口重建后的 webContents 切换。
+- **子代理运行步骤（工具级过程）不显示（根因修复）**：进度面板本版新增了「每步工具调用 / 参数 / 结果摘要」的步骤列表，但初版用 `session.subscribe()` 监听 `tool_call` / `tool_result`，实测步骤始终为空。经排查 SDK（`@earendil-works/pi-coding-agent` 只读）确认：`tool_call` / `tool_result` 并不在 `AgentSession` 的订阅事件流里广播，而是仅经 `Agent` 的 `beforeToolCall` / `afterToolCall` 拦截点（SDK 内部据此向扩展转发工具事件）。因此改为在子会话 `session.agent.beforeToolCall` / `afterToolCall` 上挂转发钩子（保留原钩子语义、不拦截工具结果），将每一步工具名 / 参数摘要 / 结果摘要以 `subagent_step` 事件推到渲染端。主进程 `tsc -p tsconfig.node.json --noEmit` 通过。后续实机验证仍有用户反馈「日志显示 hook 触发、面板却不显示步骤」：根因在**渲染端** `src/renderer/store/subagent-store.ts` 的 `init()` 事件处理链只接了 `subagent_start` / `subagent_done` / `subagent_error` 三个分支、**漏接 `subagent_step`**，且 `subagent_start` 创建的 run 未初始化 `steps:[]`，导致主进程发出的步骤事件被整体忽略、`r.steps` 恒为 `undefined`、组件渲染条件不成立。补充 `subagent_step` 分支（upsert push `{kind,tool,label,detail,isError}` 到对应 run）并在 `subagent_start` 初始化 `steps:[]`，渲染端 `tsc -p tsconfig.json --noEmit` 通过。
 
-- **代码块复制修复**：`Markdown.tsx` 复制改为从渲染后 `<code>` 元素取 `textContent`，修复 rehype-highlight 把代码包成 `<span>` 导致复制内容带标签 / 丢失的问题；同时修正代码块首尾多余换行。
-- **发送流程优化**：`ChatComposer` / `useAgentSession` 在发送时乐观插入用户气泡（含 `attachments`，经 `mutateBuffer` 写入 `messagesByPath` 避免附件被 SDK 事件覆盖）；队列发送时重建 `fullBody`（用户文本 + 展开的代码引用），确保模型收到完整上下文，附件引用随消息入队转发。
-- **停止逻辑统一**：`steer` / `followUp` / `abort` 改用 `resolveCwd(cwd)` 解析工作目录（与既有「空 cwd 回退 chatOnlyCwd」约定一致），避免误定位到 null 工作区。
-- **主题 / 原生控件修复**：`tokens.css` 增加 `color-scheme: dark / light`；`global.css` 强制 `<option>` 背景 / 前景按主题着色，修复 Windows / Electron 下 `<select>` 下拉框始终白底黑字的问题。
-- **i18n**：新增飞书、TTS、语音回复、IM 命令等近 90 条中英文文案。
+---
+
+- **子代理运行时停止按钮无法中断（根因修复）**：主进程 `session-manager.ts` 的 `abort(cwd)` 仅 `unit.runtime.session?.abort()` 中断主会话，而子代理是 `runOne()` 内独立 `AgentSession`（`await session.prompt()`），不在 `units` 体系内，停止按钮够不到 → 子代理继续跑完。修复：`runner.ts` 用 module 级 `Map<runId,{session,cwd}>` 登记活动子会话（创建后登记、`finally` 删除），导出 `abortSubagents(cwd)`；`session-manager.abort(cwd)` 末尾调用 `abortSubagents(cwd)`（按 cwd 精确终止该会话的子代理）；`runOne` 的 catch 识别 `session.aborted` 返回「已被用户停止」文案而非失败。主进程 `tsc -p tsconfig.node.json --noEmit` 通过。
 
 ---
 
 ## 依赖与构建
+- 无新增 npm 依赖，复用现有 Pi SDK 的 `createAgentSession` 与扩展机制（`src/main/pi/subagent/`）。
+- 版本号仅维护在 `package.json`，`electron-builder.yml` 自动读取。
 
-- `vite.config.ts`：external 增加 `@larksuiteoapi/node-sdk`。
-- `package.json` / `package-lock.json`：TTS 服务使用 `axios`；QQ 适配复用 `@tencent-connect/qqbot-nodejs` 的 SILK 转换。
 
----
-
-## 验证状态
-
-| 项目 | 状态 |
-|---|---|
-| 类型检查（渲染端 `tsc -p tsconfig.json --noEmit`） | ✅ 通过 |
-| 类型检查（主进程 `tsc -p tsconfig.node.json --noEmit`，含 TTS / 飞书） | ⚠️ 待你本地验证（按约定我不跑主进程 build） |
-| 生产构建 / 打包（electron-builder） | ⚠️ 待你本地验证 |
-| TTS 实际合成 / 飞书接入 / QQ 语音回复 | ⚠️ 需配置 API Key 与渠道后实测 |
-
-> 本版为未提交的工作区改动汇总。发版前请在本地完成主进程类型检查与生产构建，并实测 TTS、飞书接入与 QQ 语音回复链路。
-
----
 
 *如果使用过程中遇到任何问题，请直接到 [Issues]( 反馈。*

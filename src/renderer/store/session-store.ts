@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { useAgentStore, type Message } from "./agent-store";
 import { useWorkspaceStore } from "./workspace-store";
 import { extractText, extractThinking, extractImages } from "../utils/content-utils";
+import { hydrateArtifacts } from "../utils/artifact-utils";
 import type { ScheduledTasksData } from "../../preload/api";
 
 export interface SessionInfo {
@@ -34,6 +35,42 @@ function extractToolCalls(content: any): any[] {
       isError: false,
       isRunning: false,
     }));
+}
+
+/**
+ * Each task created without an explicit workspace gets its OWN timestamped
+ * subdir under the chat-only dir (e.g. `~/.pi/agent/chat/2026-09-02-14-59-28`).
+ * The shared `chat` dir can only host one active generation, so a flat cwd
+ * would mean "new task aborts the previously running one". A unique cwd gives
+ * every task its own runtime/unit in the main process → tasks run in parallel.
+ */
+function taskTimestamp(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const ms = String(d.getMilliseconds()).padStart(3, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(
+    d.getHours(),
+  )}-${p(d.getMinutes())}-${p(d.getSeconds())}-${ms}`;
+}
+function newTaskCwd(chatOnly: string): string {
+  const sep = chatOnly.includes("\\") ? "\\" : "/";
+  return `${chatOnly.replace(/[\\/]+$/, "")}${sep}${taskTimestamp()}`;
+}
+
+/**
+ * True when `cwd` is one of the per-task timestamped subdirs under the
+ * chat-only dir (see {@link newTaskCwd}) — i.e. a task-mode session that owns
+ * its own runtime unit.
+ */
+function isTimestampedTaskCwd(cwd: string | undefined, chatOnly: string): boolean {
+  if (!cwd || !chatOnly) return false;
+  const root = chatOnly.replace(/[\\/]+$/, "");
+  const norm = cwd.replace(/[\\/]+$/, "");
+  if (norm === root || !norm.startsWith(root + (cwd.includes("\\") ? "\\" : "/"))) return false;
+  const rel = norm.slice(root.length).replace(/^[\\/]/, "");
+  // A timestamped task dir sits DIRECTLY under the chat root — anything nested
+  // deeper (e.g. `chat/im/<channel>`) is not a task cwd.
+  return /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}(-\d{1,3})?$/.test(rel);
 }
 
 /**
@@ -148,7 +185,21 @@ function convertMessages(raw: any[]): Message[] {
  */
 async function reloadMessages(cwd?: string): Promise<void> {
   const state = await window.piDesk.getState(cwd);
-  const msgs = state?.messages?.length ? convertMessages(state.messages) : [];
+  // Load the FULL transcript (pre-compaction history included). getState().messages
+  // is the SDK's compaction-aware LLM context and omits everything before the
+  // compaction point — which is exactly the user's first question in a long
+  // session, so it must never be the source for the chat panel's history.
+  const rawMessages = await window.piDesk.getFullMessages(cwd);
+  let msgs = rawMessages?.length ? convertMessages(rawMessages) : [];
+  if (msgs.length) {
+    // Artifacts are NOT persisted separately — live turns derive them from
+    // tool events, so a reload must REPLAY them from the same source
+    // (the persisted tool calls just converted above) or the cards would
+    // vanish on every refresh / session switch. Idempotent, and mirrors
+    // live behaviour: file-writer tools are replayed without stat, shell
+    // candidates are stat()-verified.
+    msgs = await hydrateArtifacts(msgs, cwd ?? "");
+  }
   const sess = useSessionStore.getState();
   const path = sess.currentPath;
   if (path) {
@@ -159,6 +210,14 @@ async function reloadMessages(cwd?: string): Promise<void> {
   if (state?.model) agent.setModel(state.model);
   if (state?.thinkingLevel) agent.setThinkingLevel(state.thinkingLevel);
   if (state?.commands) agent.setCommands(state.commands);
+  // Resync the running set from the main process. `pi:runningState` is only
+  // broadcast when a run starts/ends, so after switching sessions (or missing
+  // a broadcast while another page was mounted) the local set can go stale and
+  // hide the stop button on a session that is still generating. getState() now
+  // carries the authoritative snapshot — apply it on every reload.
+  if (Array.isArray(state?.running)) {
+    useSessionStore.getState().setRunningPaths(state.running);
+  }
 }
 
 interface SessionStoreState {
@@ -176,6 +235,18 @@ interface SessionStoreState {
   /** Path of the chat-only fallback directory (from the main process). Used
    * to tell "task" sessions (no workspace) apart from workspace-bound ones. */
   chatOnlyCwd: string;
+  /**
+   * Path of a task-mode session that exists only as a reserved placeholder:
+   * the user clicked「新建任务」but has NOT sent its first message yet, so no
+   * unit was built and no file was written. Such a draft is deliberately kept
+   * OUT of the sidebar (an empty entry per click is noise) — it becomes a
+   * normal session the moment the first message is sent, which builds the unit
+   * and adopts this very path as the real session file.
+   *
+   * Cleared when: the path shows up in listSessions() (persisted), the user
+   * switches to another session, or a new draft replaces it.
+   */
+  draftTaskPath: string | null;
   loading: boolean;
   /**
    * Path of a freshly created session that is NOT yet bound to a workspace
@@ -245,6 +316,17 @@ interface SessionStoreState {
   refreshCurrent: (cwd?: string) => Promise<void>;
   /** Replace the set of currently-running session paths (from pi:runningState). */
   setRunningPaths: (paths: string[]) => void;
+  /** Mark/clear the unsent draft task (see `draftTaskPath`). */
+  setDraftTaskPath: (path: string | null) => void;
+  /**
+   * Promote a draft task to a real, visible sidebar entry — called the moment
+   * the user sends its first message. The SDK writes the session file
+   * asynchronously, so listSessions() can lag behind by a whole turn (the
+   * entry would only appear once the reply finished). Materializing it from
+   * the in-memory buffer keeps the sidebar in sync with what the user did.
+   * No-op when `path` isn't the current draft (or isn't in the list yet).
+   */
+  graduateDraft: (path: string) => void;
   /** Clear a transient rejection notice. */
   clearRejected: () => void;
   /** Store a session's full message list into its buffer. */
@@ -263,11 +345,36 @@ interface SessionStoreState {
  *  oldest non-current entry is evicted. */
 const MAX_BUFFERED_SESSIONS = 20;
 
+/**
+ * Hide the still-unsent draft task (if any) from a session list.
+ *
+ * A draft is a task the user created with「新建任务」but never messaged: it has
+ * no unit and no file, so it shows up in neither listSessions() nor the user's
+ * mental model of "my tasks". It graduates — i.e. becomes a normal, visible
+ * session — the instant its first message is sent, which writes the file under
+ * this very path and makes it appear in the list.
+ */
+function filterDraftSession(
+  sessions: SessionInfo[],
+  draftPath: string | null,
+): { sessions: SessionInfo[]; draftPath: string | null } {
+  if (!draftPath) return { sessions, draftPath: null };
+  if (sessions.some((s) => s.path === draftPath)) {
+    // It hit the disk → no longer a draft.
+    return { sessions, draftPath: null };
+  }
+  return {
+    sessions: sessions.filter((s) => s.path !== draftPath),
+    draftPath,
+  };
+}
+
 export const useSessionStore = create<SessionStoreState>((set, get) => ({
   sessions: [],
   currentPath: null,
   currentCwd: "",
   chatOnlyCwd: "",
+  draftTaskPath: null,
   loading: false,
   pendingPath: null,
   runningPaths: new Set<string>(),
@@ -300,7 +407,11 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       ) {
         pendingPath = null;
       }
-      let finalSessions = sessions;
+      // A draft task (「新建任务」clicked, first message not sent yet) is
+      // invisible in the sidebar. It graduates the moment it hits disk —
+      // sending the first message builds the unit and writes this exact path.
+      const draft = filterDraftSession(sessions, get().draftTaskPath);
+      let finalSessions = draft.sessions;
       let currentCwd = get().currentCwd;
       const persisted = current
         ? sessions.find((s) => s.path === current)
@@ -308,7 +419,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       if (persisted) {
         // The file exists on disk: its header cwd is the source of truth.
         currentCwd = persisted.cwd;
-      } else if (current) {
+      } else if (current && current !== draft.draftPath) {
         // Surface the currently active session even though its file hasn't
         // been written yet (brand-new session with no messages).
         const base = String(current).split(/[\\/]/).pop() ?? "";
@@ -344,6 +455,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         currentPath: current ?? get().currentPath,
         currentCwd,
         pendingPath,
+        draftTaskPath: draft.draftPath,
         chatOnlyCwd,
         scheduledRuns: scheduled,
       });
@@ -366,7 +478,21 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   refreshSessions: async () => {
     try {
       const sessions = await window.piDesk.listSessions();
-      set({ sessions });
+      // Same draft filtering as load(): an unsent task stays out of the list,
+      // and a draft that just hit the disk (first message sent) graduates.
+      const draft = filterDraftSession(sessions, get().draftTaskPath);
+      let finalSessions = draft.sessions;
+      // Preserve the FOCUSED session's in-memory entry when it isn't on disk
+      // yet — e.g. a draft graduated by graduateDraft() whose .jsonl hasn't been
+      // scanned by listAll() on this exact refresh. Without this, a
+      // refreshSessions() fired right after the first prompt would briefly drop
+      // the brand-new task from the sidebar until the next list reload.
+      const cur = get().currentPath;
+      if (cur && !finalSessions.some((s) => s.path === cur)) {
+        const live = get().sessions.find((s) => s.path === cur);
+        if (live) finalSessions = [live, ...finalSessions];
+      }
+      set({ sessions: finalSessions, draftTaskPath: draft.draftPath });
     } catch (err) {
       console.error("Failed to refresh sessions:", err);
     }
@@ -385,7 +511,9 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       (t) => t.sessionPath === path,
     );
     await window.piDesk.switchSession(cwd, path, isScheduled);
-    set({ currentPath: path, currentCwd: cwd });
+    // Switching away abandons any unsent draft task (it never had a file, so
+    // nothing is lost — the sidebar simply stays clean).
+    set({ currentPath: path, currentCwd: cwd, draftTaskPath: null });
     // ALWAYS reload the full history from the main process. The buffer only
     // accumulates live events since subscription — for long-lived sessions
     // (IM / scheduled tasks) whose earlier turns happened before the desktop
@@ -397,7 +525,30 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   },
 
   createNew: async (cwd?: string) => {
-    const effectiveCwd = cwd ?? useWorkspaceStore.getState().cwd;
+    let effectiveCwd = cwd ?? useWorkspaceStore.getState().cwd;
+    // Task mode (no workspace chosen): give every new task its own timestamped
+    // subdir under chatOnlyCwd so it lands in an independent runtime/unit and
+    // can run in parallel with other tasks — instead of all sharing (and
+    // aborting each other via) the single shared chat unit.
+    let isTaskDraft = false;
+    if (!effectiveCwd) {
+      // No-op guard: if the FOCUSED session is already an empty task (created
+      // by a previous click, never sent a message), reuse it instead of
+      // stacking another empty placeholder entry in the sidebar.
+      const st = get();
+      const cur = st.currentPath;
+      if (
+        cur &&
+        isTimestampedTaskCwd(st.currentCwd, st.chatOnlyCwd) &&
+        (st.messagesByPath.get(cur)?.length ?? 0) === 0 &&
+        !st.runningPaths.has(cur) &&
+        !useAgentStore.getState().isStreaming
+      ) {
+        return;
+      }
+      effectiveCwd = newTaskCwd(st.chatOnlyCwd);
+      isTaskDraft = true;
+    }
     const current = await window.piDesk.newSession(effectiveCwd);
     if (!current) return;
     // Entry ② semantics: created directly in the current workspace (or an
@@ -408,6 +559,10 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       currentPath: current,
       currentCwd: effectiveCwd || get().chatOnlyCwd || "",
       pendingPath: null,
+      // Task mode with no workspace → this session is only a reserved
+      // placeholder (no unit, no file). Mark it as a draft so the sidebar
+      // stays empty until the first message is sent.
+      draftTaskPath: isTaskDraft ? current : null,
     });
     // Seed the new (empty) session's buffer and mirror it to the panel.
     const sess = useSessionStore.getState();
@@ -429,12 +584,36 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
   createNewPending: async () => {
     const cwd = useWorkspaceStore.getState().cwd;
-    const current = await window.piDesk.newSession(cwd);
+    // Same no-op guard as createNew: repeatedly clicking the nav-level new
+    // task button must not stack empty task entries in the sidebar.
+    if (!cwd) {
+      const st = get();
+      const cur = st.currentPath;
+      if (
+        cur &&
+        isTimestampedTaskCwd(st.currentCwd, st.chatOnlyCwd) &&
+        (st.messagesByPath.get(cur)?.length ?? 0) === 0 &&
+        !st.runningPaths.has(cur) &&
+        !useAgentStore.getState().isStreaming
+      ) {
+        return;
+      }
+    }
+    // No workspace bound yet → timestamped chat task (independent unit).
+    const effectiveCwd = cwd || newTaskCwd(get().chatOnlyCwd);
+    const current = await window.piDesk.newSession(effectiveCwd);
     if (!current) return;
     // Entry ① semantics: the new task is NOT bound to a folder yet — mark it
     // pending so the sidebar shows it under「未分组」until the user picks a
     // workspace (or sends a message, which binds to the current workspace).
-    set({ currentPath: current, currentCwd: cwd || "", pendingPath: current });
+    // With no workspace it is also a DRAFT (placeholder only): it stays out of
+    // the sidebar until the first message is sent.
+    set({
+      currentPath: current,
+      currentCwd: effectiveCwd || "",
+      pendingPath: current,
+      draftTaskPath: cwd ? null : current,
+    });
     const sess = useSessionStore.getState();
     sess.setBuffer(current, []);
     sess.syncFocus(current);
@@ -476,6 +655,13 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       return;
     }
     if (wasCurrent) {
+      // Detach from the deleted session BEFORE creating the replacement:
+      // createNew()'s no-op guard ("reuse the focused empty task") keys on
+      // currentPath + an empty buffer, and we just cleared the buffer above —
+      // so without this detach the guard would fire on the DELETED session
+      // and return without ever refreshing the list, leaving the dead entry
+      // visible in the sidebar until a manual reload.
+      set({ currentPath: null, currentCwd: "", pendingPath: null });
       // Don't leave the user staring at a deleted conversation — start fresh.
       await get().createNew();
     } else {
@@ -502,6 +688,37 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   setRunningPaths: (paths: string[]) => {
     set({ runningPaths: new Set(paths) });
   },
+
+  setDraftTaskPath: (path) => set({ draftTaskPath: path }),
+
+  graduateDraft: (path) => {
+    const st = get();
+    if (!st.draftTaskPath || st.draftTaskPath !== path) return;
+    const buffered = st.messagesByPath.get(path) ?? [];
+    const firstUser = buffered.find((m) => m.role === "user");
+    const text = firstUser ? String(firstUser.content ?? "").trim() : "";
+    const entry: SessionInfo = {
+      path,
+      id: String(path).split(/[\\/]/).pop() ?? path,
+      cwd: st.currentCwd,
+      created: new Date().toISOString(),
+      modified: new Date().toISOString(),
+      messageCount: buffered.length,
+      firstMessage: text.slice(0, 200),
+      allMessagesText: buffered
+        .map((m) => String(m.content ?? ""))
+        .join("\n")
+        .slice(0, 4000),
+    };
+    set({
+      draftTaskPath: null,
+      // Sending binds the task to its cwd — drop the「待定」flag so the
+      // composer's workspace pill stops showing 未绑定.
+      pendingPath: st.pendingPath === path ? null : st.pendingPath,
+      sessions: [entry, ...st.sessions.filter((s) => s.path !== path)],
+    });
+  },
+
 
   clearRejected: () => {
     set({ rejectedMessage: null });

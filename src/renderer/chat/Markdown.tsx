@@ -5,6 +5,10 @@ import rehypeHighlight from "rehype-highlight";
 import mermaid from "mermaid";
 import { Copy, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useUIStore } from "../store/ui-store";
+import { useSessionStore } from "../store/session-store";
+import { resolveAgainstCwd } from "../utils/path-utils";
+import { rehypeFilePaths, PATH_LINK_TAG } from "./rehype-file-paths";
 import styles from "./Markdown.module.css";
 
 /**
@@ -82,13 +86,83 @@ const MD_COMPONENTS: MarkdownOptions["components"] = {
   code: CodeBlock,
 };
 
-function Markdown({ content }: { content: string }) {
+// Path-link variants. Both stay module-level constants (see the note above)
+// so `memo(Markdown)` still works: switching between them is a cheap boolean
+// toggle, not a new plugin array on every render.
+const REHYPE_PLUGINS_PATHS: MarkdownOptions["rehypePlugins"] = [
+  rehypeFilePaths,
+  [rehypeHighlight, { ignoreMissing: true }],
+];
+// The cast is needed because `Components` only knows real HTML tag names —
+// `file-path` is our own marker element produced by rehype-file-paths.
+const MD_COMPONENTS_PATHS = {
+  pre: InlinePre,
+  code: CodeBlock,
+  [PATH_LINK_TAG]: FilePathLink,
+} as MarkdownOptions["components"];
+
+/**
+ * A filesystem path mentioned in prose. Renders as plain text until the main
+ * process confirms the file really exists (stat), then becomes a button that
+ * opens the preview panel. Unverified paths stay text — never a dead link.
+ */
+function FilePathLink({ path }: { path?: string }) {
+  const { t } = useTranslation();
+  const openFilePreview = useUIStore((s) => s.openFilePreview);
+  const cwd = useSessionStore((s) => s.currentCwd);
+  const raw = typeof path === "string" ? path : "";
+  const abs = raw ? resolveAgainstCwd(raw, cwd) : "";
+  const [exists, setExists] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!abs) return;
+    let cancelled = false;
+    window.piDesk
+      .statFile(abs)
+      .then((s) => {
+        if (!cancelled) setExists(s != null);
+      })
+      .catch(() => {
+        if (!cancelled) setExists(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [abs]);
+
+  if (!raw) return null;
+  if (exists !== true) return <>{raw}</>;
+
+  return (
+    <button
+      type="button"
+      className={styles.pathLink}
+      onClick={() => openFilePreview(abs)}
+      title={t("files.previewFile", { file: raw })}
+    >
+      {raw}
+    </button>
+  );
+}
+
+function Markdown({
+  content,
+  linkifyPaths = false,
+}: {
+  content: string;
+  /**
+   * Turn filesystem paths into clickable preview links. Disabled while a
+   * reply is streaming: every streamed token re-runs the markdown pipeline,
+   * which would fire a stat() per candidate path per token.
+   */
+  linkifyPaths?: boolean;
+}) {
   return (
     <div className={styles.markdown}>
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
-        components={MD_COMPONENTS}
+        rehypePlugins={linkifyPaths ? REHYPE_PLUGINS_PATHS : REHYPE_PLUGINS}
+        components={linkifyPaths ? MD_COMPONENTS_PATHS : MD_COMPONENTS}
       >
         {content}
       </ReactMarkdown>

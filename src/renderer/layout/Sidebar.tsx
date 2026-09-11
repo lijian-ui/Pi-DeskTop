@@ -19,7 +19,6 @@ import {
   ListTree,
   Loader2,
   MessageSquare,
-  Package,
 } from "lucide-react";
 import { useUIStore } from "../store/ui-store";
 import { useTranslation } from "react-i18next";
@@ -29,7 +28,7 @@ import ConfirmDialog from "../sidebar/ConfirmDialog";
 import { latestRunFor } from "../utils/scheduled";
 import styles from "./Sidebar.module.css";
 
-type NavKey = "chat" | "agents" | "projects" | "skills" | "automate" | "packages" | "im" | "settings";
+type NavKey = "chat" | "agents" | "projects" | "skills" | "automate" | "im" | "settings";
 
 interface NavItem {
   key: NavKey;
@@ -40,7 +39,6 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { key: "skills", icon: Sparkles, labelKey: "nav.skills" },
   { key: "automate", icon: Wrench, labelKey: "nav.automate" },
-  { key: "packages", icon: Package, labelKey: "nav.packages" },
   { key: "im", icon: MessageSquare, labelKey: "nav.im" },
   { key: "settings", icon: Settings, labelKey: "nav.settings" },
 ];
@@ -152,8 +150,6 @@ export default function Sidebar() {
       setMainView("skills");
     } else if (key === "automate") {
       setMainView("automate");
-    } else if (key === "packages") {
-      setMainView("packages");
     } else if (key === "im") {
       setMainView("im");
     } else {
@@ -248,8 +244,14 @@ function SessionsSection({
     [chatOnlyCwd],
   );
   const isTask = useCallback(
-    (s: SessionInfo): boolean =>
-      !s.cwd || normalizeCwd(s.cwd) === normalizedChatOnlyCwd,
+    (s: SessionInfo): boolean => {
+      if (!s.cwd) return true;
+      const n = normalizeCwd(s.cwd);
+      // A per-task timestamped subdir (chat/2026-09-02-14-59-28) is still a
+      // task — group it under「任务」, not「空间」. normalizeCwd collapses
+      // backslashes, so the prefix test uses "/".
+      return n === normalizedChatOnlyCwd || n.startsWith(normalizedChatOnlyCwd + "/");
+    },
     [normalizedChatOnlyCwd],
   );
   // A session is "scheduled" when it is the accumulated run log of a scheduled
@@ -635,10 +637,6 @@ function SessionsSection({
           )}
         </button>
       </div>
-
-      {!loading && sessions.length === 0 && (
-        <div className={styles.emptyState}>{t("sessions.empty")}</div>
-      )}
 
       {!taskCollapsed && (
         <div className={styles.spacesList}>

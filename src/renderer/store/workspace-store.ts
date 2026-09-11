@@ -97,6 +97,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       // pending flag, then reload messages + list from the new cwd.
       sess.setCurrentPath(res.newPath, res.cwd);
       sess.clearPending();
+      // The session now belongs to the workspace and is visible there — the
+      // draft marker (which hid the unsent task from the sidebar) must go, or
+      // it would linger pointing at the abandoned placeholder path.
+      sess.setDraftTaskPath(null);
       await sess.refreshCurrent(res.cwd);
       await useSkillStore.getState().load();
     } catch (err) {

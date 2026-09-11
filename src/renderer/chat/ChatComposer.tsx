@@ -16,6 +16,7 @@ import {
   Code2,
   SquareTerminal,
   ImagePlus,
+  Brain,
 } from "lucide-react";
 import { useAgentStore } from "../store/agent-store";
 import {
@@ -31,6 +32,8 @@ import { useTranslation } from "react-i18next";
 import type { SkillInfo } from "../../preload/api";
 import { useBashGuardStore, type BashMode } from "../store/bashGuard-store";
 import BashApprovalModal from "./BashApprovalModal";
+import AskUserPanel from "./AskUserPanel";
+import ToolModePicker from "./ToolModePicker";
 import AtFilePicker, { toRelative } from "./AtFilePicker";
 import { preloadDir } from "./atFileCache";
 import CacheHitBadge from "./CacheHitBadge";
@@ -40,6 +43,7 @@ interface ModelItem {
   id: string;
   provider: string;
   name?: string;
+  providerName?: string;
 }
 
 /** Show a cwd as its last 1–2 path segments so long paths fit in the pill. */
@@ -381,6 +385,18 @@ export default function ChatComposer() {
   const [loadingModels, setLoadingModels] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // ── Thinking-level selector state ──
+  // `available` is authoritative: the SDK clamps it to whatever the current
+  // provider/model supports (Kimi K3 → only "max", Grok 4.5 → low/medium/high,
+  // many local models → nothing at all), so never hardcode the level list.
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  const [thinking, setThinking] = useState<{
+    current: string;
+    available: string[];
+    supports: boolean;
+  }>({ current: "off", available: [], supports: false });
+  const thinkingRef = useRef<HTMLDivElement>(null);
+
   // ── Workspace selector state ──
   const [workspaceDropdownOpen, setWorkspaceDropdownOpen] = useState(false);
   const workspaceDropdownRef = useRef<HTMLDivElement>(null);
@@ -417,13 +433,21 @@ export default function ChatComposer() {
     [sessions, currentPath]
   );
   const isTaskSession = !!focusedSession &&
-    (!focusedSession.cwd ||
-      normalizeCwd(focusedSession.cwd) === normalizeCwd(chatOnlyCwd));
+    (() => {
+      if (!focusedSession.cwd) return true;
+      const n = normalizeCwd(focusedSession.cwd);
+      const c = normalizeCwd(chatOnlyCwd);
+      // A per-task timestamped subdir (chat/2026-09-02-14-59-28) still counts
+      // as a task, so the workspace selector stays available for it.
+      return n === c || n.startsWith(c + "/");
+    })();
   // Any still-empty session may be (re)bound — including one already bound to
   // a workspace, so switching folders before the first message never has to
-  // touch the global cwd.
+  // touch the global cwd. A DRAFT task (created but not messaged yet) has no
+  // sidebar entry, hence no focusedSession — key off currentPath instead so it
+  // stays bindable before its first message.
   const canBindWorkspace =
-    !!focusedSession && focusedSession.messageCount === 0;
+    !!currentPath && (focusedSession?.messageCount ?? 0) === 0;
   // After the first message the workspace choice is locked: hide the selector
   // entirely for chat sessions, or show a static (non-interactive) workspace
   // label for already-bound workspace sessions. IM conversations are the
@@ -540,6 +564,38 @@ export default function ChatComposer() {
     return () => document.removeEventListener("mousedown", handler);
   }, [dropdownOpen]);
 
+  // Thinking levels are a property of the CURRENT model, so refetch whenever the
+  // model or workspace changes. Switching models can shrink the list to a single
+  // option or empty it out entirely (model without reasoning support).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await window.piDesk.getThinkingLevels(currentCwd);
+        if (!cancelled && res) setThinking(res);
+      } catch {
+        if (!cancelled) {
+          setThinking({ current: "off", available: [], supports: false });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentCwd, model?.provider, model?.id]);
+
+  // Close thinking dropdown on outside click
+  useEffect(() => {
+    if (!thinkingOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (thinkingRef.current && !thinkingRef.current.contains(e.target as Node)) {
+        setThinkingOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [thinkingOpen]);
+
   // ── Slash menu: built-in commands + skills ──
   // Matches "/query" (skills may also be written as "/skill:query") while the
   // user hasn't typed a space yet.
@@ -554,9 +610,22 @@ export default function ChatComposer() {
   // 内置斜杠命令 + 当前会话已注册的扩展命令（来自 getState → agent-store）。
   // 执行由 SDK 处理（prompt() 里以 / 开头的文本会先查扩展命令），这里只负责展示。
   const extensionCommands = useAgentStore((s) => s.commands);
+  // 扩展自带的 description 由扩展提供者撰写（pi-hermes-memory 全为英文）。
+  // 按命令名查 i18n（key = slash.cmd.<name>）做覆盖；没有对应文案时
+  // i18next 会原样返回 key，此时回退到扩展自带的原始描述。
+  const localizeCommand = (c: { name: string; description: string }) => {
+    const key = `slash.cmd.${c.name}`;
+    const localized = t(key);
+    return {
+      name: c.name,
+      description: localized === key ? c.description : localized,
+    };
+  };
   const COMMANDS: { name: string; description: string }[] = [
     { name: "compact", description: t("slash.compactDesc") },
-    ...extensionCommands.filter((c) => c.name && c.name !== "compact"),
+    ...extensionCommands
+      .filter((c) => c.name && c.name !== "compact")
+      .map(localizeCommand),
   ];
 
   const commandEntries: CommandEntry[] = COMMANDS.filter((c) =>
@@ -761,7 +830,8 @@ export default function ChatComposer() {
     // Manual context compaction: `/compact [instructions]`. Handled by the SDK
     // session.compact(), NOT as a normal LLM prompt, and not shown as a user
     // message bubble. Any text after "/compact " becomes custom instructions.
-    const compactMatch = body.match(/^\/compact(?:\s+(.*))?$/);
+    // [\s\S] (not .) so a multi-line focus instruction is captured intact.
+    const compactMatch = body.match(/^\/compact(?:\s+([\s\S]*))?$/);
     if (compactMatch) {
       const instructions = (compactMatch[1] ?? "").trim();
       window.piDesk
@@ -787,7 +857,7 @@ export default function ChatComposer() {
     // Reflect both the focused session's live streaming flag AND whether this
     // session is currently running in the background (cwd-level concurrency),
     // so a queued send is used even right after focusing a running task.
-    if (isStreaming || (currentPath ? runningPaths.has(currentPath) : false)) {
+    if (currentPath ? runningPaths.has(currentPath) : false) {
       enqueueMessage(body, stagedImages, attachments.length ? attachments : undefined);
       return;
     }
@@ -807,6 +877,11 @@ export default function ChatComposer() {
     };
     if (currentPath) {
       useSessionStore.getState().mutateBuffer(currentPath, (msgs) => [...msgs, userMsg]);
+      // A draft task (「新建任务」clicked, first message not yet sent) is
+      // hidden from the sidebar. This send graduates it right away — waiting
+      // for the SDK to flush the session file would leave the task invisible
+      // until the reply finished.
+      useSessionStore.getState().graduateDraft(currentPath);
     } else {
       useAgentStore.getState().addMessage(userMsg);
     }
@@ -907,6 +982,21 @@ export default function ChatComposer() {
     }
   };
 
+  // Session-scoped by design (the main process passes persist:false), so this
+  // only affects the focused session — it never rewrites global settings.
+  const handleSelectThinking = async (level: string) => {
+    try {
+      // The main process returns the EFFECTIVE level — the SDK clamps requests
+      // the model can't honour, so the pill must show what actually applied.
+      const effective = await window.piDesk.setThinkingLevel(level, currentCwd);
+      setThinking((prev) => ({ ...prev, current: effective ?? level }));
+      setThinkingOpen(false);
+    } catch (err) {
+      console.error("Failed to set thinking level:", err);
+      setError(err instanceof Error ? err.message : "Failed to set thinking level");
+    }
+  };
+
   // Group models by provider (memoised to avoid rebuilding every render)
   const groupedModels = useMemo(() => {
     const groups: Record<string, ModelItem[]> = {};
@@ -924,9 +1014,17 @@ export default function ChatComposer() {
       ? `${model.provider ?? ""}/${model.id ?? ""}`
       : t("chat.selectModel");
 
+  // Fall back to the raw value if an adapter ever reports a level we have no
+  // translation for, rather than leaking a "chat.thinking_…" key into the UI.
+  const knownThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+  const thinkingLabel = knownThinkingLevels.includes(thinking.current)
+    ? t(`chat.thinking_${thinking.current}`)
+    : thinking.current;
+
   return (
     <div className={styles.composer}>
       <BashApprovalModal />
+      <AskUserPanel />
       {(isCompacting || showCompactDone) && (
         <div className={styles.statusBars}>
           {isCompacting && (
@@ -1174,12 +1272,47 @@ export default function ChatComposer() {
             >
               <ImagePlus size={16} />
             </button>
+            <ToolModePicker cwd={currentCwd} />
           </div>
           <div className={styles.toolbarRight}>
             {contextUsage && contextUsage.contextWindow > 0 && (
               <ContextRing usage={contextUsage} />
             )}
             <CacheHitBadge stats={cacheStats} />
+            <div className={styles.modelSelector} ref={thinkingRef}>
+              <button
+                className={styles.modelPill}
+                onClick={() => setThinkingOpen((v) => !v)}
+                disabled={!thinking.supports}
+                title={
+                  thinking.supports
+                    ? t("chat.thinkingLevel")
+                    : t("chat.thinkingUnsupported")
+                }
+              >
+                <Brain size={11} />
+                <span>{thinkingLabel}</span>
+                <ChevronDown size={10} />
+              </button>
+              {thinkingOpen && (
+                <div className={styles.thinkingDropdown}>
+                  {thinking.available.map((lv) => (
+                    <button
+                      key={lv}
+                      className={`${styles.modelItem} ${
+                        lv === thinking.current ? styles.modelItemActive : ""
+                      }`}
+                      onClick={() => handleSelectThinking(lv)}
+                    >
+                      <span className={styles.modelItemName}>
+                        {knownThinkingLevels.includes(lv) ? t(`chat.thinking_${lv}`) : lv}
+                      </span>
+                      {lv === thinking.current && <Check size={12} />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className={styles.modelSelector} ref={dropdownRef}>
               <button
                 className={styles.modelPill}
@@ -1192,7 +1325,9 @@ export default function ChatComposer() {
                 <div className={styles.modelDropdown}>
                   {Object.entries(groupedModels).map(([provider, models]) => (
                     <div key={provider}>
-                      <div className={styles.modelGroupLabel}>{provider}</div>
+                      <div className={styles.modelGroupLabel}>
+                      {models[0]?.providerName || provider}
+                    </div>
                       {models.map((m) => {
                         const isActive =
                           model?.provider === m.provider && model?.id === m.id;
@@ -1222,7 +1357,7 @@ export default function ChatComposer() {
             <button className={styles.iconBtn} title={t("chat.voice")}>
               <Mic size={16} />
             </button>
-            {(isStreaming || (currentPath ? runningPaths.has(currentPath) : false)) ? (
+            {(currentPath ? runningPaths.has(currentPath) : false) ? (
               <button
                 className={styles.stopBtn}
                 onClick={handleStop}

@@ -145,7 +145,9 @@ function UserMessage({ message, highlight }: Props) {
                   })}
                 </div>
               )}
-              {message.content.trim() && <Markdown content={message.content} />}
+              {message.content.trim() && (
+                <Markdown content={message.content} linkifyPaths />
+              )}
             </>
           )}
         </div>

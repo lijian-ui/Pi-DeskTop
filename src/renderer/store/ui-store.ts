@@ -46,7 +46,7 @@ interface UIState {
   codeAttachments: CodeAttachment[];
   /** Images staged in the composer, sent with the next prompt. */
   imageAttachments: ImageAttachment[];
-  mainView: "chat" | "settings" | "skills" | "automate" | "packages" | "im";
+  mainView: "chat" | "settings" | "skills" | "automate" | "im";
   /** When true, the Automate page opens the "new scheduled task" editor right
    *  away (deep-link from the sidebar "+"). Consumed on mount, then cleared. */
   pendingScheduledNew: boolean;
@@ -55,6 +55,9 @@ interface UIState {
   modelsVersion: number;
   terminalOpen: boolean;
   terminalWidth: number;
+  /** Right-side Todo checklist panel (auto-opens when the model starts a
+   *  checklist on the focused session; user can close/collapse it). */
+  todoPanelOpen: boolean;
 
   // In-session content search (Titlebar search box → MessageList locator).
   searchOpen: boolean;
@@ -87,6 +90,7 @@ interface UIState {
   toggleTerminal: () => void;
   setTerminalOpen: (open: boolean) => void;
   setTerminalWidth: (w: number) => void;
+  setTodoPanelOpen: (open: boolean) => void;
 
   openSearch: () => void;
   closeSearch: () => void;
@@ -115,6 +119,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   modelsVersion: 0,
   terminalOpen: false,
   terminalWidth: 460,
+  todoPanelOpen: false,
 
   searchOpen: false,
   searchQuery: "",
@@ -171,6 +176,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   toggleTerminal: () => set((state) => ({ terminalOpen: !state.terminalOpen })),
   setTerminalOpen: (open) => set({ terminalOpen: open }),
   setTerminalWidth: (w) => set({ terminalWidth: w }),
+  setTodoPanelOpen: (open) => set({ todoPanelOpen: open }),
 
   openSearch: () => set({ searchOpen: true }),
   closeSearch: () =>

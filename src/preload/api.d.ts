@@ -45,6 +45,13 @@ export interface PiDeskAPI {
   onTtsDone(callback: (data: { requestId: string }) => void): () => void;
   setModel(provider: string, modelId: string, cwd?: string): Promise<void>;
   cycleModel(): Promise<void>;
+  getThinkingLevels(cwd?: string): Promise<{
+    current: string;
+    available: string[];
+    supports: boolean;
+  }>;
+  /** Resolves to the EFFECTIVE level (the SDK clamps unsupported requests). */
+  setThinkingLevel(level: string, cwd?: string): Promise<string>;
   getAvailableModels(): Promise<any[]>;
   switchSession(cwd: string, sessionPath: string, force?: boolean): Promise<void>;
   compact(
@@ -65,6 +72,16 @@ export interface PiDeskAPI {
       }
     | undefined
   >;
+  /** Latest todo-checklist snapshot for a session file, or null when the
+   *  session has no checklist yet (replayed from the last tool result). */
+  getTodoSnapshot(sessionPath: string): Promise<TodoSnapshot | null>;
+
+  // ask_user_question — model-driven questionnaire answered in the renderer
+  onAskUserPrompt(callback: (data: AskUserPromptPayload) => void): () => void;
+  onAskUserClosed(callback: (data: AskUserClosedPayload) => void): () => void;
+  /** Submit the user's answers (or cancel); false when the questionnaire was
+   *  already settled (timed out / aborted / answered elsewhere). */
+  answerAskUserQuestion(payload: AskUserAnswerPayload): Promise<boolean>;
   /** Cumulative prompt-cache waste for the focused session. */
   getCacheStats(cwd?: string): Promise<
     | {
@@ -115,9 +132,18 @@ export interface PiDeskAPI {
   onImStatus(callback: (s: Record<string, string>) => void): () => void;
 
   getState(cwd?: string): Promise<AgentState | null>;
+  /** Full transcript for a session (pre-compaction history included), for the
+   *  chat panel history reload. Unlike getState().messages, this is NOT the
+   *  compaction-aware LLM context and therefore retains the earliest messages. */
+  getFullMessages(cwd?: string): Promise<any[]>;
   onEvent(callback: (event: any) => void): () => void;
   onRunningState(callback: (state: { running: string[]; cwds: string[] }) => void): () => void;
   onRejected(callback: (info: { reason: string; cwd: string; sessionPath?: string }) => void): () => void;
+  /** Output of an extension slash command (ctx.ui.notify). Rendered as a
+   *  dismissible notice card — extension commands have no other way to report. */
+  onExtensionNotice(
+    callback: (info: { message: string; type: "info" | "warning" | "error" }) => void,
+  ): () => void;
   onShowAbout(callback: () => void): () => void;
   /** Open an external http(s) URL in the OS default browser (main process). */
   openExternal(url: string): Promise<void>;
@@ -131,6 +157,14 @@ export interface PiDeskAPI {
   getActiveTools(): Promise<string[]>;
   saveActiveTools(tools: string[]): Promise<void>;
 
+  // Extension-tool features (设置 → 可用工具 → 扩展工具)
+  getExtensionTools(): Promise<ExtensionToolFeature[]>;
+  saveExtensionTools(updates: ExtensionToolFeatureUpdate[]): Promise<void>;
+
+  // Chat-composer tool mode (极简/标准/办公) — session-scoped per cwd
+  getSessionToolMode(cwd: string): Promise<ToolMode>;
+  setSessionToolMode(cwd: string, mode: ToolMode): Promise<void>;
+
   // Context-file import toggles (规则与记忆 → 导入设置)
   getContextFilesConfig(): Promise<ContextFilesConfig>;
   setContextFilesConfig(cfg: ContextFilesConfig): Promise<void>;
@@ -140,36 +174,34 @@ export interface PiDeskAPI {
   saveRulesContent(content: string): Promise<void>;
   deleteRulesFile(): Promise<void>;
 
-  // Pi Packages (扩展商店)
-  searchPackages(
-    keyword?: string,
-    from?: number,
-    size?: number,
-    category?: string,
-  ): Promise<{
-    ok: boolean;
-    packages?: PiPackageInfo[];
-    total?: number;
-    error?: string;
+  // ── Hermes 记忆浏览面板（可编辑）──
+  listMemories(): Promise<MemoryView[]>;
+  searchMemories(query: string): Promise<MemoryView[]>;
+  updateMemory(
+    id: number,
+    content?: string,
+    category?: string | null
+  ): Promise<{ success: boolean; error?: string }>;
+  deleteMemory(id: number): Promise<boolean>;
+  setMemoryPinned(id: number, pinned: boolean): Promise<{ ok: boolean }>;
+  resolveMemoryConflict(id: number): Promise<{ ok: boolean }>;
+  getMemoryEpisodic(id: number, aroundCount?: number): Promise<EpisodicResult>;
+
+  // ── 记忆库快照（7 天轮转 + 手动）──
+  memorySnapshotNow(): Promise<SnapshotInfo>;
+  memoryListSnapshots(): Promise<SnapshotInfo[]>;
+
+  // ── 记忆功能配置（热重载生效）──
+  getMemoryConfig(): Promise<MemoryConfigView>;
+  saveMemoryConfig(patch: MemoryConfigPatch): Promise<{
+    view: MemoryConfigView;
+    hotReloaded: boolean;
   }>;
-  getPackageDetail(name: string): Promise<{
-    ok: boolean;
-    detail?: PiPackageDetail;
-    error?: string;
-  }>;
-  getInstalledPackages(): Promise<{
-    ok: boolean;
-    packages?: InstalledPackage[];
-    error?: string;
-  }>;
-  installPackage(source: string): Promise<{ ok: boolean; message: string }>;
-  removePackage(source: string): Promise<{ ok: boolean; message: string }>;
-  checkPackageUpdates(): Promise<{
-    ok: boolean;
-    updates?: PackageUpdateInfo[];
-    error?: string;
-  }>;
-  updatePackage(source: string): Promise<{ ok: boolean; message: string }>;
+
+  // ── Web 搜索（web_search / web_fetch 工具）──
+  getWebSearchConfig(): Promise<WebSearchConfig>;
+  saveWebSearchConfig(cfg: WebSearchConfig): Promise<void>;
+  testWebSearch(): Promise<WebSearchProviderTest[]>;
 
   // Auto-update (electron-updater, generic provider -> Gitee Releases)
   checkForUpdates(): Promise<{
@@ -205,6 +237,8 @@ export interface PiDeskAPI {
   listProvidersCatalog(): Promise<ProviderCatalog>;
   getCustomModelsJson(): Promise<Record<string, any>>;
   saveCustomModelsJson(data: Record<string, any>): Promise<void>;
+  /** Fetch the model ids a custom OpenAI-compatible endpoint exposes. */
+  fetchRemoteModels(baseUrl: string, apiKey?: string): Promise<string[]>;
 
   // Session management
   listSessions(): Promise<SessionInfo[]>;
@@ -263,6 +297,8 @@ export interface PiDeskAPI {
 
   // File preview (sidebar file manager → chat-area preview panel)
   readFileForPreview(filePath: string): Promise<FilePreviewResult>;
+  // Lightweight stat for artifact cards
+  statFile(filePath: string): Promise<{ size: number } | null>;
 }
 
 export type FilePreviewResult =
@@ -282,7 +318,39 @@ export type {
   TaskStateMap,
 } from "../shared/schedule";
 
+// Todo checklist shapes (shared with the main-process reducer).
+export type { TodoSnapshot, TodoStatus, TodoTask } from "../shared/todo-types";
+
+// ask_user_question questionnaire shapes (shared with the main-process tool).
+export type {
+  AskUserAnswer,
+  AskUserAnswerPayload,
+  AskUserClosedPayload,
+  AskUserOption,
+  AskUserPromptPayload,
+  AskUserQuestion,
+  AskUserResult,
+} from "../shared/ask-user-types";
+
+// Extension-tool feature shapes (设置 → 可用工具 → 扩展工具) + tool modes.
+export type {
+  ExtensionToolFeature,
+  ExtensionToolFeatureUpdate,
+  ToolMode,
+} from "../shared/tool-catalog-types";
+
+import type { TodoSnapshot } from "../shared/todo-types";
 import type { TaskSchedule, TaskStateMap } from "../shared/schedule";
+import type {
+  AskUserAnswerPayload,
+  AskUserClosedPayload,
+  AskUserPromptPayload,
+} from "../shared/ask-user-types";
+import type {
+  ExtensionToolFeature,
+  ExtensionToolFeatureUpdate,
+  ToolMode,
+} from "../shared/tool-catalog-types";
 
 export interface ScheduledTask {
   id: string;
@@ -309,6 +377,36 @@ export type RunStatus = "success" | "error" | "running";
 export interface ContextFilesConfig {
   agents: boolean;
   claude: boolean;
+}
+
+/** Web 搜索配置（与 src/main/websearch/config.ts 的 WebSearchConfig 对齐）。 */
+export interface WebSearchProviderConfig {
+  apiKey: string;
+  enabled: boolean;
+}
+export interface WebSearchConfig {
+  enabled: boolean;
+  provider: "anysearch" | "tinyfish" | "tavily" | "bocha";
+  searchProviders: Record<
+    "anysearch" | "tinyfish" | "tavily" | "bocha",
+    WebSearchProviderConfig
+  >;
+  fetchProvider: "anysearch" | "tinyfish" | "local" | "electron";
+  resultCount: number;
+  timeoutMs: number;
+  fetchTimeoutMs: number;
+  maxFetchChars: number;
+  ssrfProtection: boolean;
+  /** 用内置无头 Chromium 渲染 JS 重度页面（今日头条/公众号壳等）。 */
+  electronRender: boolean;
+  internalHostAllowlist: string[];
+}
+/** 连通性测试结果（设置页「测试」按钮）。 */
+export interface WebSearchProviderTest {
+  id: "anysearch" | "tinyfish" | "tavily" | "bocha";
+  ok: boolean;
+  backend?: string;
+  error?: string;
 }
 
 /** IM 网关：渠道类型。 */
@@ -380,46 +478,6 @@ export interface QqLoginStatus {
   };
 }
 
-/** 扩展商店：市场包（来自 npm registry 搜索）。 */
-export interface PiPackageInfo {
-  name: string;
-  description: string;
-  version: string;
-  author: string;
-  monthlyDownloads: number;
-  updatedAt: string;
-  repository: string;
-  npmUrl: string;
-  source: string;
-  keywords: string[];
-}
-
-/** 扩展商店：已安装包。 */
-export interface InstalledPackage {
-  source: string;
-  name: string;
-  scope: "global" | "project";
-}
-
-/** 扩展商店：包详情（packument + 下载量 API，对标 pi.dev 详情页）。 */
-export interface PiPackageDetail extends PiPackageInfo {
-  license: string;
-  publishedAt: string;
-  unpackedSize: number;
-  dependencyCount: number;
-  peerDependencyCount: number;
-  downloadsWeek: number;
-  homepage: string;
-  readme: string;
-}
-
-/** 扩展商店：可更新的包（SDK 对比已装版本 vs 最新）。 */
-export interface PackageUpdateInfo {
-  source: string;
-  name: string;
-  type: "npm" | "git";
-  scope: "user" | "project";
-}
 
 export interface ScheduledTaskRun {
   /** Unique per run — one session accumulates many runs sharing sessionPath. */
@@ -444,6 +502,8 @@ export interface ProviderInfo {
   baseUrl?: string;
   configured: boolean;
   authSource: string | null;
+  /** Friendly channel label for custom OpenAI-compatible providers (optional). */
+  channel?: string;
 }
 
 export interface AuthStatus {
@@ -460,6 +520,9 @@ export interface AgentState {
   messages: any[];
   /** 当前会话已注册的斜杠命令（内置 + 扩展），invocationName 即 /名称 */
   commands: Array<{ name: string; description: string }>;
+  /** 主进程权威快照：当前仍在生成中的会话路径（跨全部 cwd）。
+   *  用于补上 pi:runningState 广播遗漏导致的停止按钮状态漂移。 */
+  running?: string[];
 }
 
 export interface SessionInfo {
@@ -505,6 +568,8 @@ export interface CustomProviderItem {
   name: string;
   baseUrl?: string;
   api?: string;
+  /** Friendly channel label (optional). */
+  channel?: string;
   models: CustomProviderModel[];
 }
 
@@ -537,6 +602,121 @@ export interface TtsConfig {
   configs: TtsConfigItem[];
   activeConfigId: string | null;
   streamEnabled: boolean;
+}
+
+/** 一条 Hermes 记忆（记忆浏览面板用，纯可序列化 DTO）。 */
+export interface MemoryView {
+  id: number;
+  project: string | null;
+  target: "memory" | "user" | "failure";
+  category: string | null;
+  content: string;
+  failureReason: string | null;
+  toolState: string | null;
+  correctedTo: string | null;
+  created: string;
+  lastReferenced: string;
+  /** 预计算的分词（ranking 用）。 */
+  searchTokens: string;
+  /** 被检索/引用次数，驱动衰减强化。 */
+  accessCount: number;
+  /** 是否已钉选为持久锚点。 */
+  pinned: boolean;
+  /** 该记忆沉淀自哪个会话（episodic 链），未知为 null。 */
+  sourceSessionId: string | null;
+  /** 与之词法冲突的另一条记忆 id（被标记时）。 */
+  conflictWith: number | null;
+  /** "flagged" 表示检测到冲突，待人工裁决；否则 null。 */
+  conflictStatus: string | null;
+}
+
+/** 一条记忆的 episodic 回溯结果（原会话 + 原始消息切片）。 */
+export interface EpisodicResult {
+  sessionId: string | null;
+  sessionProject: string | null;
+  sessionCwd: string | null;
+  messages: Array<{ role: string; content: string; timestamp: string }>;
+  transcriptUnavailable: boolean;
+}
+
+/** 一份记忆库快照的元信息（7 天轮转）。 */
+export interface SnapshotInfo {
+  name: string;
+  path: string;
+  /** mtime（ms），作为快照创建时间。 */
+  createdAt: number;
+  size: number;
+}
+
+/** 记忆功能配置视图（纯可序列化，供设置面板渲染）。 */
+export interface MemoryConfigView {
+  // 自动沉淀（session flush）
+  flushOnShutdown: boolean;
+  flushOnCompact: boolean;
+  flushMinTurns: number;
+  flushRecentMessages: number;
+  // 后台复习（background review）
+  reviewEnabled: boolean;
+  reviewRecentMessages: number;
+  nudgeInterval: number;
+  nudgeToolCalls: number;
+  // 纠正检测
+  correctionDetection: boolean;
+  // 失败教训（两种模式都注入 —— 见 prompt-context.ts）
+  failureInjectionEnabled: boolean;
+  failureInjectionMaxAgeDays: number;
+  failureInjectionMaxEntries: number;
+  // 排序 / 时间衰减
+  rankingEnabled: boolean;
+  halfLifeDays: number;
+  reinforcementFactor: number;
+  /** 新记忆写入时的初始强化分（0 = 旧行为，永远不会自动涨到锚点）。 */
+  initialAccessCount: number;
+  /** 新记忆的衰减宽限天数，期内按满权重参与排序。 */
+  decayGraceDays: number;
+  // 锚点
+  anchorsEnabled: boolean;
+  minAccessCount: number;
+  maxAnchors: number;
+  // 守卫
+  guardEnabled: boolean;
+  guardSeverity: "block" | "warn";
+  /** 运行中的 extension 是否可热重载（否则需重启 agent）。 */
+  hotReloadAvailable: boolean;
+}
+
+/** 记忆配置的可写补丁（仅暴露核心记忆旋钮）。 */
+export interface MemoryConfigPatch {
+  flushOnShutdown?: boolean;
+  flushOnCompact?: boolean;
+  flushMinTurns?: number;
+  flushRecentMessages?: number;
+  reviewEnabled?: boolean;
+  reviewRecentMessages?: number;
+  nudgeInterval?: number;
+  nudgeToolCalls?: number;
+  correctionDetection?: boolean;
+  failureInjection?: {
+    enabled?: boolean;
+    maxAgeDays?: number;
+    maxEntries?: number;
+  };
+  ranking?: {
+    enabled?: boolean;
+    halfLifeDays?: number;
+    reinforcementFactor?: number;
+    initialAccessCount?: number;
+    decayGraceDays?: number;
+  };
+  anchors?: {
+    enabled?: boolean;
+    minAccessCount?: number;
+    maxAnchors?: number;
+  };
+  guard?: {
+    enabled?: boolean;
+    severity?: "block" | "warn";
+  };
 }
 
 declare global {

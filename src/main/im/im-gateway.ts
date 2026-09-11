@@ -20,9 +20,13 @@ import { join, basename } from "node:path";
 import { stat } from "node:fs/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-/** Split "/name args" → { name, args }. Multi-slash tolerated. */
+/**
+ * Split "/name args" → { name, args }. Multi-slash tolerated.
+ * `args` may span multiple lines (e.g. a multi-line /compact focus) — the
+ * capture uses [\s\S] rather than . so newlines are not dropped.
+ */
 function parseCommand(text: string): { name: string; args: string } | null {
-  const m = /^\s*\/+([a-z][\w-]*)(?:\s+(.*))?$/i.exec(text.trim());
+  const m = /^\s*\/+([a-z][\w-]*)(?:\s+([\s\S]*))?$/i.exec(text.trim());
   if (!m) return null;
   return { name: m[1], args: (m[2] ?? "").trim() };
 }
@@ -86,7 +90,7 @@ const HELP_TEXT = [
   "- /workspace <路径> —— 切换工作区（需 /new 生效）",
   "- /sessions —— 列出全部会话",
   "- /continue <会话id> —— 继续已有会话",
-  "- /compact —— 压缩上下文（减少 token 占用）",
+  "- /compact [聚焦指令] —— 压缩上下文，可指定摘要侧重点",
   "- /allow <ID> / /deny <ID> —— 允许 / 拒绝命令审批",
   "- /stop —— 停止当前正在运行的任务（含正在执行的命令）",
   "- /reset /clear /new —— 开启新会话",
@@ -701,7 +705,9 @@ export class ImGateway {
     }
     if (lower === "compact") {
       try {
-        const res = await this.piManager.compact(undefined, ctx.cwd);
+        // Forward any trailing text as the summary's "Additional focus"
+        // (mirrors the desktop composer's /compact <instructions>).
+        const res = await this.piManager.compact(args.trim() || undefined, ctx.cwd);
         if (res.ok) {
           await ctx.adapter.sendText(ctx.peer, "✅ 已压缩上下文");
         } else if (res.reason === "too_small") {

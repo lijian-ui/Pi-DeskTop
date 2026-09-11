@@ -70,7 +70,9 @@ export default function ModelsPage() {
     for (const p of catalog.customProviders) {
       rows.push({
         id: p.id,
-        name: LOCAL_PROVIDER_NAMES[p.id] ?? p.name,
+        name:
+          LOCAL_PROVIDER_NAMES[p.id] ??
+          ((p.channel && p.channel.trim()) || p.name),
         sub: t("models.modelCount", { count: p.models.length }),
         kind: "custom",
         models: p.models,

@@ -220,6 +220,18 @@
   padding: var(--spacer-16) var(--spacer-24);
 }
 
+/* ── HTML preview (sandboxed iframe) ──
+   Fills the panel; the iframe scrolls its own content, so the parent
+   `.body` never double-scrolls. White canvas matches typical rendered pages
+   regardless of the app's dark theme. */
+.htmlFrame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+
 /* ── Image preview ── */
 .imageWrap {
   display: flex;

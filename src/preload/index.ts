@@ -1,5 +1,15 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ContextFilesConfig } from "./api";
+import type {
+  AskUserAnswerPayload,
+  AskUserClosedPayload,
+  AskUserPromptPayload,
+} from "../shared/ask-user-types";
+import type {
+  ExtensionToolFeature,
+  ExtensionToolFeatureUpdate,
+  ToolMode,
+} from "../shared/tool-catalog-types";
 
 // Pi-ready signaling: the main process sends "pi:ready" once the (slow,
 // synchronous) SDK initialization completes. Buffer it so a late subscriber
@@ -49,6 +59,10 @@ const piAPI = {
   setModel: (provider: string, modelId: string, cwd?: string) =>
     ipcRenderer.invoke("pi:setModel", { provider, modelId, cwd }),
   cycleModel: () => ipcRenderer.invoke("pi:cycleModel"),
+  getThinkingLevels: (cwd?: string) =>
+    ipcRenderer.invoke("pi:getThinkingLevels", { cwd }),
+  setThinkingLevel: (level: string, cwd?: string) =>
+    ipcRenderer.invoke("pi:setThinkingLevel", { level, cwd }),
   getAvailableModels: () => ipcRenderer.invoke("pi:getAvailableModels"),
 
   newSession: (cwd?: string) =>
@@ -60,6 +74,22 @@ const piAPI = {
 
   getContextUsage: (cwd?: string) => ipcRenderer.invoke("pi:getContextUsage", { cwd }),
   getCacheStats: (cwd?: string) => ipcRenderer.invoke("pi:getCacheStats", { cwd }),
+  getTodoSnapshot: (sessionPath: string) =>
+    ipcRenderer.invoke("pi:getTodoSnapshot", sessionPath),
+
+  // ask_user_question — model-driven questionnaire answered in the renderer
+  onAskUserPrompt: (callback: (payload: AskUserPromptPayload) => void) => {
+    const listener = (_: unknown, payload: AskUserPromptPayload) => callback(payload);
+    ipcRenderer.on("pi:askUserPrompt", listener);
+    return () => ipcRenderer.removeListener("pi:askUserPrompt", listener);
+  },
+  onAskUserClosed: (callback: (payload: AskUserClosedPayload) => void) => {
+    const listener = (_: unknown, payload: AskUserClosedPayload) => callback(payload);
+    ipcRenderer.on("pi:askUserClosed", listener);
+    return () => ipcRenderer.removeListener("pi:askUserClosed", listener);
+  },
+  answerAskUserQuestion: (payload: AskUserAnswerPayload) =>
+    ipcRenderer.invoke("pi:askUserAnswer", payload),
 
   // IM gateway (DingTalk etc.)
   imGetConfig: () => ipcRenderer.invoke("pi:imGetConfig"),
@@ -90,6 +120,7 @@ const piAPI = {
   },
 
   getState: (cwd?: string) => ipcRenderer.invoke("pi:getState", { cwd }),
+  getFullMessages: (cwd?: string) => ipcRenderer.invoke("pi:getFullMessages", { cwd }),
 
   setApiKey: (providerId: string, apiKey: string) =>
     ipcRenderer.invoke("pi:setApiKey", { providerId, apiKey }),
@@ -115,6 +146,9 @@ const piAPI = {
   getCustomModelsJson: () => ipcRenderer.invoke("pi:getCustomModelsJson"),
   saveCustomModelsJson: (data: Record<string, any>) =>
     ipcRenderer.invoke("pi:saveCustomModelsJson", { data }),
+
+  fetchRemoteModels: (baseUrl: string, apiKey?: string) =>
+    ipcRenderer.invoke("pi:fetchRemoteModels", { baseUrl, apiKey }),
 
   saveCustomProvider: (providerId: string, config: any) =>
     ipcRenderer.invoke("pi:saveCustomProvider", { providerId, config }),
@@ -166,6 +200,9 @@ const piAPI = {
   // File preview (sidebar file manager)
   readFileForPreview: (filePath: string) =>
     ipcRenderer.invoke("pi:readFileForPreview", { filePath }),
+  // Lightweight stat for artifact cards (size only)
+  statFile: (filePath: string) =>
+    ipcRenderer.invoke("pi:statFile", { filePath }),
   searchWorkspace: (query: string, maxResults?: number) =>
     ipcRenderer.invoke("pi:searchWorkspace", { query, maxResults }),
 
@@ -185,6 +222,16 @@ const piAPI = {
     const listener = (_: any, state: any) => callback(state);
     ipcRenderer.on("pi:runningState", listener);
     return () => ipcRenderer.removeListener("pi:runningState", listener);
+  },
+
+  // Output of extension slash commands (ctx.ui.notify) — the only channel
+  // extension commands use to report back to the user.
+  onExtensionNotice: (
+    callback: (info: { message: string; type: "info" | "warning" | "error" }) => void,
+  ) => {
+    const listener = (_: any, info: any) => callback(info);
+    ipcRenderer.on("pi:extensionNotice", listener);
+    return () => ipcRenderer.removeListener("pi:extensionNotice", listener);
   },
 
   onRejected: (callback: (info: { reason: string; cwd: string; sessionPath?: string }) => void) => {
@@ -224,6 +271,18 @@ const piAPI = {
   saveActiveTools: (tools: string[]) =>
     ipcRenderer.invoke("pi:saveActiveTools", tools),
 
+  // Extension-tool features (设置 → 可用工具 → 扩展工具)
+  getExtensionTools: (): Promise<ExtensionToolFeature[]> =>
+    ipcRenderer.invoke("pi:getExtensionTools"),
+  saveExtensionTools: (updates: ExtensionToolFeatureUpdate[]) =>
+    ipcRenderer.invoke("pi:saveExtensionTools", updates),
+
+  // Chat-composer tool mode (极简/标准/办公) — session-scoped per cwd
+  getSessionToolMode: (cwd: string): Promise<ToolMode> =>
+    ipcRenderer.invoke("pi:getSessionToolMode", cwd),
+  setSessionToolMode: (cwd: string, mode: ToolMode): Promise<void> =>
+    ipcRenderer.invoke("pi:setSessionToolMode", cwd, mode),
+
   // Context-file import toggles (规则与记忆 → 导入设置)
   getContextFilesConfig: () => ipcRenderer.invoke("pi:getContextFilesConfig"),
   setContextFilesConfig: (cfg: ContextFilesConfig) =>
@@ -235,19 +294,35 @@ const piAPI = {
     ipcRenderer.invoke("pi:saveRulesContent", content),
   deleteRulesFile: () => ipcRenderer.invoke("pi:deleteRulesFile"),
 
-  // Pi Packages (扩展商店)
-  searchPackages: (keyword?: string, from?: number, size?: number, category?: string) =>
-    ipcRenderer.invoke("pi:searchPackages", { keyword, from, size, category }),
-  getPackageDetail: (name: string) =>
-    ipcRenderer.invoke("pi:getPackageDetail", { name }),
-  getInstalledPackages: () => ipcRenderer.invoke("pi:getInstalledPackages"),
-  installPackage: (source: string) =>
-    ipcRenderer.invoke("pi:installPackage", { source }),
-  removePackage: (source: string) =>
-    ipcRenderer.invoke("pi:removePackage", { source }),
-  checkPackageUpdates: () => ipcRenderer.invoke("pi:checkPackageUpdates"),
-  updatePackage: (source: string) =>
-    ipcRenderer.invoke("pi:updatePackage", { source }),
+  // ── Hermes 记忆浏览面板（可编辑）──
+  listMemories: () => ipcRenderer.invoke("pi:memoryList"),
+  searchMemories: (query: string) =>
+    ipcRenderer.invoke("pi:memorySearch", { query }),
+  updateMemory: (id: number, content?: string, category?: string | null) =>
+    ipcRenderer.invoke("pi:memoryUpdate", { id, content, category }),
+  deleteMemory: (id: number) =>
+    ipcRenderer.invoke("pi:memoryDelete", { id }),
+  setMemoryPinned: (id: number, pinned: boolean) =>
+    ipcRenderer.invoke("pi:memorySetPinned", { id, pinned }),
+  resolveMemoryConflict: (id: number) =>
+    ipcRenderer.invoke("pi:memoryResolveConflict", { id }),
+  getMemoryEpisodic: (id: number, aroundCount?: number) =>
+    ipcRenderer.invoke("pi:memoryEpisodic", { id, aroundCount }),
+
+  // ── 记忆库快照（7 天轮转 + 手动）──
+  memorySnapshotNow: () => ipcRenderer.invoke("pi:memorySnapshotNow"),
+  memoryListSnapshots: () => ipcRenderer.invoke("pi:memoryListSnapshots"),
+
+  // ── 记忆功能配置（热重载生效）──
+  getMemoryConfig: () => ipcRenderer.invoke("pi:memoryGetConfig"),
+  saveMemoryConfig: (patch: any) =>
+    ipcRenderer.invoke("pi:memorySaveConfig", patch),
+
+  // ── Web 搜索（web_search / web_fetch 工具）──
+  getWebSearchConfig: () => ipcRenderer.invoke("pi:getWebSearchConfig"),
+  saveWebSearchConfig: (cfg: any) =>
+    ipcRenderer.invoke("pi:saveWebSearchConfig", cfg),
+  testWebSearch: () => ipcRenderer.invoke("pi:testWebSearch"),
 
   // Auto-update (electron-updater, generic provider -> Gitee Releases)
   checkForUpdates: () => ipcRenderer.invoke("pi:checkForUpdates"),
