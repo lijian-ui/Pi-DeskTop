@@ -155,9 +155,15 @@ export async function syncMarkdownMemoriesToSqlite(
     target: 'memory' | 'user' | 'failure',
     project: string | null = null,
   ) => {
+    // 记忆是长期上下文，不应因删除会话 / 项目目录 / 记忆文件而消失。
+    // 权威源 Markdown 缺失时保留 SQLite 镜像、不触发孤儿清理；
+    // 仅当 md 存在但被手编删除了条目，才视为用户主动删除记忆。
+    if (!filePath || !fs.existsSync(filePath)) {
+      return;
+    }
     const reconcile = () => {
-      if (filePath && fs.existsSync(filePath)) counters.filesScanned++;
-      const entries = filePath ? readEntries(filePath) : [];
+      counters.filesScanned++;
+      const entries = readEntries(filePath);
       counters.entriesScanned += entries.length;
       try {
         const result = target === 'failure'
@@ -177,8 +183,7 @@ export async function syncMarkdownMemoriesToSqlite(
         );
       }
     };
-    if (filePath) await withMarkdownMutationLock(filePath, reconcile);
-    else reconcile();
+    await withMarkdownMutationLock(filePath, reconcile);
   };
 
   await reconcileFile(globalMemoryFile, 'memory');
