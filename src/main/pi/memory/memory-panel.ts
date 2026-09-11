@@ -22,8 +22,16 @@ import { getEpisodicForMemory, type EpisodicResult } from "./store/episodic";
 import { flagConflictsForWrite } from "./store/conflict-flag";
 import { scanMemoryContent } from "./guard";
 import { loadConfig } from "./config";
-import { resolveGlobalMemoryDir } from "./paths";
-import { GUARD_RULES_FILENAME } from "./constants";
+import { resolveGlobalMemoryDir, AGENT_ROOT } from "./paths";
+import {
+  GUARD_RULES_FILENAME,
+  ENTRY_DELIMITER,
+  MEMORY_FILE,
+  USER_FILE,
+  DEFAULT_PROJECTS_MEMORY_DIR,
+} from "./constants";
+import { resolveAuthoritativeMemoryFile } from "./handlers/sync-markdown-memories";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MemoryCategory } from "./types";
 
@@ -94,7 +102,80 @@ export function searchMemoriesView(globalDir: string, query: string): MemoryView
 }
 
 export function deleteMemory(globalDir: string, id: number): boolean {
-  return removeMemory(dbFor(globalDir), id);
+  const dbManager = dbFor(globalDir);
+  const db = dbManager.getDb();
+  const row = db
+    .prepare("SELECT id, content, target, project FROM memories WHERE id = ?")
+    .get(id) as
+    | { id: number; content: string; target: "memory" | "user" | "failure"; project: string | null }
+    | undefined;
+  if (!row) return false;
+
+  // 同步删除 Markdown 权威源中的对应条目，避免下次对账时从 md 重新插回 SQLite（"删除复活"）。
+  // 先动权威源、再删镜像：即使镜像删除失败，对账也会按"md 已无此条目"把孤儿 SQL 行清掉。
+  removeMarkdownMemoryEntry(globalDir, row.target, row.project, row.content);
+
+  return removeMemory(dbManager, id);
+}
+
+/**
+ * 从 Markdown 权威源文件中删除与给定 SQLite 记忆行匹配的那一条。
+ * - md 文件缺失：按"记忆不应因文件被删而消失"的设计直接跳过（此时 removeMemory 会清掉 SQL 行，且不会复活）。
+ * - md 中找不到匹配条目：跳过写回（不误删）。
+ * - 匹配到多条（超罕见）：全部移除，确保该记忆彻底消失、不会被对账复活。
+ */
+function removeMarkdownMemoryEntry(
+  globalDir: string,
+  target: "memory" | "user" | "failure",
+  project: string | null,
+  content: string,
+): void {
+  const filePath = resolveMarkdownFileForScope(globalDir, target, project);
+  if (!filePath || !fs.existsSync(filePath)) return;
+
+  const raw = fs.readFileSync(filePath, "utf-8");
+  const entries = raw.split(ENTRY_DELIMITER).map((e) => e.trim()).filter(Boolean);
+  if (entries.length === 0) return;
+
+  const needle = content.trim();
+  if (!needle) return;
+
+  const visibleOf = (entry: string) => stripMarkdownEntryMetadata(entry);
+  const exact = entries.filter((e) => visibleOf(e) === needle);
+  const candidates = exact.length > 0 ? exact : entries.filter((e) => visibleOf(e).includes(needle));
+  if (candidates.length === 0) return;
+
+  const toRemove = new Set(candidates);
+  const remaining = entries.filter((e) => !toRemove.has(e));
+  if (remaining.length === entries.length) return;
+
+  writeMemoryFileAtomic(filePath, remaining.join(ENTRY_DELIMITER));
+}
+
+function resolveMarkdownFileForScope(
+  globalDir: string,
+  target: "memory" | "user" | "failure",
+  project: string | null,
+): string | null {
+  if (target === "user") return path.join(globalDir, USER_FILE);
+  if (target === "failure") return path.join(globalDir, "failures.md");
+  // target === "memory"
+  if (!project) return path.join(globalDir, MEMORY_FILE);
+  const projectsRoot = path.resolve(AGENT_ROOT, DEFAULT_PROJECTS_MEMORY_DIR);
+  return resolveAuthoritativeMemoryFile(projectsRoot, project)
+    ?? path.join(projectsRoot, project, MEMORY_FILE);
+}
+
+/** 去掉记忆条目尾部 `<!-- created=... -->` 元数据注释，取可见文本用于匹配。 */
+function stripMarkdownEntryMetadata(entry: string): string {
+  return entry.replace(/<!--[\s\S]*?-->/g, "").trim();
+}
+
+/** 同目录临时文件 + rename 的原子写，避免写到一半进程退出导致 md 损坏（与 MemoryStore 一致）。 */
+function writeMemoryFileAtomic(filePath: string, content: string): void {
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, content, "utf-8");
+  fs.renameSync(tmp, filePath);
 }
 
 export function setPinned(globalDir: string, id: number, pinned: boolean): void {

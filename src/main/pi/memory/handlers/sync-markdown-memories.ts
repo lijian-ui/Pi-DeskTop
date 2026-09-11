@@ -85,7 +85,7 @@ function realpathIfPresent(filePath: string): string {
   }
 }
 
-function resolveAuthoritativeMemoryFile(root: string, projectName: string): string | null {
+export function resolveAuthoritativeMemoryFile(root: string, projectName: string): string | null {
   const canonicalRoot = realpathIfPresent(root);
   if (!isSafeProjectName(projectName, path.resolve(root))) return null;
 
