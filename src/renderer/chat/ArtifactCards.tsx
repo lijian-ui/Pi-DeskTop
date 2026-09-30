@@ -101,14 +101,25 @@ interface Props {
 }
 
 /**
- * 产物列表默认**折叠成一张摘要卡片**（文件束图标 + "产物文件" + 数量），
- * 点击才展开为单个文件卡片列表。一轮 agentic 任务可能创建几十个文件，
- * 全部平铺会把聊天区挤满。箭头样式与同区域的 ThinkingTools 折叠条保持一致。
+ * 产物列表：
+ *  - **只有 1 个产物** → 直接展示该产物卡片（不折叠，省一次点击）；
+ *  - **多于 1 个** → 折叠成一张摘要卡片（文件束图标 + "产物文件" + 数量），
+ *    点击才展开为单个文件卡片列表。一轮 agentic 任务可能创建几十个文件，
+ *    全部平铺会把聊天区挤满。箭头样式与同区域的 ThinkingTools 折叠条保持一致。
  */
 export default function ArtifactCards({ artifacts }: Props) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   if (!artifacts.length) return null;
+
+  // 单产物：直接展示该产物卡片，不做「展开全部」折叠
+  if (artifacts.length === 1) {
+    return (
+      <div className={styles.wrapper}>
+        <ArtifactCard artifact={artifacts[0]} />
+      </div>
+    );
+  }
 
   return (
     <div className={styles.wrapper}>

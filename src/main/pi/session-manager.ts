@@ -46,7 +46,9 @@ import { loadConfig } from "./memory/config";
 import { scanMemoryContent } from "./memory/guard";
 import { webSearchExtension } from "./web-search-extension";
 import { todoExtension } from "./todo/todo-extension";
+import { browserTool, browserToolUnattended } from "./browser/browser-tool";
 import { createAskUserExtension } from "./ask-user/ask-user-extension";
+import { createSendFileExtension } from "./send-file/send-file-extension";
 import {
   BUILTIN_TOOL_NAMES,
   disabledExtensionToolNames,
@@ -1156,7 +1158,7 @@ export class PiDeskSessionManager {
         cwd: servicesKey,
         modelRuntime: this.modelRuntime!,
         resourceLoaderOptions: {
-          extensionFactories: [soulExtension, rulesExtension, webSearchExtension, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), hermesMemoryExtension],
+          extensionFactories: [soulExtension, rulesExtension, webSearchExtension, browserTool, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), createSendFileExtension(), hermesMemoryExtension],
           agentsFilesOverride: createContextFilesOverride(),
         },
       });
@@ -2955,7 +2957,7 @@ export class PiDeskSessionManager {
       cwd,
       modelRuntime: this.modelRuntime,
       resourceLoaderOptions: {
-        extensionFactories: [createScheduledTaskExtension(task), rulesExtension, webSearchExtension, createSubagentExtension(() => this.webContents, () => this.modelRuntime)],
+        extensionFactories: [createScheduledTaskExtension(task), rulesExtension, webSearchExtension, browserToolUnattended, createSubagentExtension(() => this.webContents, () => this.modelRuntime)],
         agentsFilesOverride: createContextFilesOverride(),
       },
     });

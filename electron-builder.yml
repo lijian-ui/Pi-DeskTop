@@ -17,6 +17,10 @@ asarUnpack:
   # be unpacked outside the asar archive to be executable; unpack the whole
   # @ffmpeg-installer tree to keep the JS and binary co-located.
   - "node_modules/@ffmpeg-installer/**/*"
+  # 页面脚本（resources/browser/snapshot-page.js）由主进程在运行时按路径读取后注入页面；
+  # 解包到 asar 之外可确保它是磁盘上的真实文件。与 src/main/pi/browser/paths.ts 的
+  # browserResourceDir() 保持一致。
+  - "resources/browser/**/*"
 # node-pty ships prebuilt binaries (prebuilds/win32-x64/pty.node etc.) and is
 # N-API (ABI-stable), so it does NOT need to be rebuilt for Electron on Windows.
 # We keep npmRebuild:false here so electron-builder never runs node-gyp (which

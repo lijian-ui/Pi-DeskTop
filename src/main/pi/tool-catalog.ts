@@ -15,6 +15,7 @@
  */
 import { readTodoConfigSync, writeTodoConfig } from "./todo/todo-config";
 import { readAskUserConfigSync, writeAskUserConfig } from "./ask-user/ask-user-config";
+import { readBrowserConfigSync, writeBrowserConfig } from "./browser/browser-config";
 import {
   readWebSearchConfig,
   readWebSearchConfigSync,
@@ -47,13 +48,13 @@ export const TOOL_MODES: Record<ToolMode, { builtins: readonly string[]; feature
   // listed too).
   standard: {
     builtins: BUILTIN_TOOL_NAMES,
-    features: ["subagent", "todo", "ask-user", "web-search", "memory"],
+    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file"],
   },
   // Standard + the planned office-operation feature set (registered later as
   // FEATURES key "office"; harmless while the feature does not exist yet).
   office: {
     builtins: BUILTIN_TOOL_NAMES,
-    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory"],
+    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file"],
   },
 };
 
@@ -96,10 +97,26 @@ const FEATURES: ReadonlyArray<Omit<ExtensionToolFeature, "enabled">> = [
     configFile: "websearch-config.json",
   },
   {
+    // 业务系统 browser-use（伴侣 Chrome 扩展 + 本地回环桥）。
+    // 挂载在普通会话与定时任务两个数组（见 session-manager）。
+    key: "office",
+    // 业务系统 browser-use：单一 `browser` 工具（action 参数区分操作），
+    // 内核 send→bridge→service_worker 不变。挂载在普通会话与定时任务两个数组（见 session-manager）。
+    toolNames: ["browser"],
+    switchable: true,
+    configFile: "browser-config.json",
+  },
+  {
     key: "subagent",
     toolNames: ["subagent"],
     switchable: false, // always loaded with the app; no separate config today
     configFile: "",
+  },
+  {
+    key: "send-file",
+    toolNames: ["send_file"],
+    switchable: true,
+    configFile: "sendfile-config.json",
   },
   {
     // Persistent memory layer (src/main/pi/memory, ported from
@@ -126,6 +143,8 @@ function readFeatureEnabled(key: string): boolean {
       return readAskUserConfigSync().enabled;
     case "web-search":
       return readWebSearchConfigSync().enabled;
+    case "office":
+      return readBrowserConfigSync().enabled;
     default:
       return true; // subagent (or unknown) → always on
   }
@@ -170,6 +189,11 @@ export async function setExtensionToolFeatureEnabled(
       const cfg = await readWebSearchConfig();
       cfg.enabled = enabled;
       await writeWebSearchConfig(cfg);
+      return;
+    }
+    case "office": {
+      // 读-改-写整对象，保留 allowedDomains / screenshot 等字段。
+      await writeBrowserConfig({ enabled });
       return;
     }
     default:

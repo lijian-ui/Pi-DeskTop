@@ -36,6 +36,7 @@ import {
   getMimeFromFilename,
   uploadLocalFileToWeixin,
 } from "./weixin-media";
+import { extractMediaRefs, isImageFile } from "../media-shared";
 
 const LONG_POLL_TIMEOUT_MS = 35_000;
 const BASE_BACKOFF_DELAY = 2_000;
@@ -71,27 +72,6 @@ function sniffImageMime(buf: Buffer): string {
   if (buf.length >= 4 && buf.subarray(0, 4).toString("ascii") === "RIFF")
     return "image/webp";
   return "image/jpeg";
-}
-
-/** True when a path points at a local file (drive letter, /, ~, file://). */
-function isLocalPath(raw: string): boolean {
-  return (
-    raw.startsWith("file://") ||
-    /^[A-Za-z]:[\\/]/.test(raw) ||
-    raw.startsWith("/") ||
-    raw.startsWith("~")
-  );
-}
-
-/** Strip file:// / URL-encoding to get the on-disk absolute path. */
-function toLocalPath(raw: string): string {
-  let p = raw.startsWith("file://") ? raw.slice("file://".length) : raw;
-  try {
-    p = decodeURIComponent(p);
-  } catch {
-    /* keep as-is */
-  }
-  return p;
 }
 
 /** Extract the plain-text body from an item list (quotes + voice-to-text). */
@@ -415,26 +395,16 @@ export class WeixinAdapter implements ImChannelAdapter {
     contextToken?: string,
   ): Promise<string> {
     let result = text;
-    // 1. markdown image syntax: ![alt](<local path>)
-    for (const m of text.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)) {
-      const [full, alt, p] = m;
-      if (!isLocalPath(p)) continue;
-      const filePath = toLocalPath(p);
-      if (!existsSync(filePath)) continue;
-      await this.sendLocalMedia(target, filePath, contextToken);
-      result = result.replace(full, alt ? `[${alt}]` : "[图片]");
-    }
-    // 2. bare absolute paths that exist on disk (the AI often writes
-    //    "saved to C:\x\a.png" without any marker).
-    const bareFile =
-      /(?:file:\/\/)?[A-Za-z]:[\\/][^\s"'()<>]+|(?:\/(?:Users|home|tmp|var|private|root)\/[^\s"'()<>]+)/g;
-    for (const m of result.matchAll(bareFile)) {
-      const filePath = toLocalPath(m[0]);
-      if (!existsSync(filePath)) continue;
-      const ok = await this.sendLocalMedia(target, filePath, contextToken);
-      if (ok) {
-        const isImg = /\.(png|jpe?g|gif|bmp|webp)$/i.test(filePath);
-        result = result.replace(m[0], isImg ? "[图片]" : `[文件已发送：${basename(filePath)}]`);
+    // Shared scan: md-image + bare on-disk paths (image vs file classified).
+    for (const ref of extractMediaRefs(text)) {
+      const ok = await this.sendLocalMedia(target, ref.path, contextToken);
+      if (ref.kind === "image") {
+        result = result.replace(ref.full, ok ? "[图片]" : "⚠️ 图片上传失败");
+      } else if (ok) {
+        result = result.replace(
+          ref.full,
+          `[文件已发送：${basename(ref.path)}]`,
+        );
       }
     }
     return result;
@@ -447,7 +417,7 @@ export class WeixinAdapter implements ImChannelAdapter {
     contextToken?: string,
   ): Promise<boolean> {
     try {
-      const isImage = /\.(png|jpe?g|gif|bmp|webp)$/i.test(filePath);
+      const isImage = isImageFile(filePath);
       const uploaded = await uploadLocalFileToWeixin({
         filePath,
         toUserId: target,
@@ -501,6 +471,13 @@ export class WeixinAdapter implements ImChannelAdapter {
       console.warn(`[im:weixin] media send failed (${filePath}):`, String(err));
       return false;
     }
+  }
+
+  /** Explicit `send_file` tool path — deliver a local file directly (no text
+   *  scanning). */
+  async sendFile(target: string, filePath: string): Promise<boolean> {
+    const contextToken = this.contextTokens.get(this.contextTokenKey(target));
+    return await this.sendLocalMedia(target, filePath, contextToken);
   }
 
   /**

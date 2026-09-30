@@ -1,16 +1,11 @@
 /* Tool call — 模仿 assistant-ui 的 tool-call 元素（不引库，纯 CSS）：
-   · 收起态是一行 disclosure：chevron + 运行中微光 label + 主参数 chip + 完成后打勾
-   · 展开才露出 Request / Result（各自带浅底分区块 + 顶部分隔条）
-   · 开合用 grid-rows 0fr↔1fr 平滑高度动画（用户触发，不位移、非入场动画）
-   全部颜色走 CSS 变量，暗色 / 浅色主题自动适配；动画仅限状态 pulse（spinner / 微光），
-   贴合 UI 铁律。工具行之间用发丝分隔线区分，不再各自包重卡片。 */
+   · 收起态是一行 disclosure：chevron + 运行中微光 label + 主参数 chip + 状态点
+   · 展开才露出 ToolCard（无外框）
+   · 工具行之间靠留白区分，不再各自包重卡片、无分隔线
+   颜色走 CSS 变量，暗/亮自适应；动画仅限状态 pulse（微光），贴合 UI 铁律。 */
 
 .toolExecution {
-  border-top: 1px solid var(--border-neutral-l1);
-}
-
-.toolExecution:first-child {
-  border-top: none;
+  /* 无外框：工具行之间靠留白区分，不再用分隔线 */
 }
 
 /* ── 折叠标题行（disclosure trigger） ───────────────────── */
@@ -56,8 +51,12 @@
   flex-shrink: 0;
 }
 
-/* 运行中：label 走微光扫光（状态指示，属 UI 铁律允许的 pulse 范畴；
-   用 background-clip 文本渐变实现，文字本身仍清晰可读） */
+/* cordis_ 前缀扩展工具名走品牌色 */
+.labelBrand {
+  color: var(--bg-brand);
+}
+
+/* 运行中：label 走微光扫光（状态指示，属 UI 铁律允许的 pulse 范畴） */
 .labelRunning {
   background: linear-gradient(
     90deg,
@@ -93,12 +92,22 @@
   color: var(--text-secondary);
   padding: 1px var(--spacer-6);
   background: var(--bg-base-secondary);
-  border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-full);
   flex-shrink: 0;
 }
 
-/* 状态图标：运行中 spinner / 完成打勾 / 出错告警，靠右对齐 */
+/* 类型图标：DSH 风格，按工具族用不同图标，三级灰 */
+.toolIcon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+/* cordis_ 前缀扩展工具走品牌色 */
+.toolIconBrand {
+  color: var(--bg-brand);
+}
+
+/* 状态：靠右对齐的 2px 圆点（颜色即状态） */
 .status {
   margin-left: auto;
   display: inline-flex;
@@ -106,12 +115,36 @@
   flex-shrink: 0;
 }
 
-.statusIconDone {
-  color: var(--status-success-default);
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
 }
 
-.statusIconError {
-  color: var(--status-error-default);
+.statusDot[data-state="running"] {
+  background: var(--status-primary-default);
+}
+
+.statusDot[data-state="done"] {
+  background: var(--status-success-default);
+}
+
+.statusDot[data-state="error"] {
+  background: var(--status-error-default);
+}
+
+/* 屏幕阅读器专用：状态点本身是装饰性的 */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ── 展开面板：grid-rows 平滑高度动画 ───────────────────── */
@@ -135,74 +168,4 @@
   display: flex;
   flex-direction: column;
   gap: var(--spacer-8);
-}
-
-/* Request / Result 分区块：浅底 + 1px 边框 + 顶部分隔条 */
-.section {
-  border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-6);
-  background: var(--bg-base-tertiary);
-  overflow: hidden;
-}
-
-.sectionLabel {
-  font-size: var(--body-xs-font-size);
-  font-weight: var(--font-weight-medium);
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: var(--spacer-4) var(--spacer-8);
-  background: var(--bg-base-secondary);
-  border-bottom: 1px solid var(--border-neutral-l1);
-}
-
-.code {
-  max-height: 300px;
-  overflow: auto;
-  padding: var(--spacer-8);
-  font-family: var(--font-family-mono);
-  font-size: var(--code-terminal-font-size);
-  line-height: var(--code-terminal-line-height);
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text-default);
-}
-
-/* 原始 input 偏次要（Request 区块），与 Result 区分层级 */
-.section:first-child .code {
-  color: var(--text-secondary);
-}
-
-.expandOutput {
-  display: block;
-  width: 100%;
-  margin-top: var(--spacer-4);
-  padding: var(--spacer-6) var(--spacer-8);
-  background: var(--bg-overlay-l1);
-  border: 1px dashed var(--border-neutral-l1);
-  border-radius: var(--radius-4);
-  color: var(--text-secondary);
-  font-size: var(--body-sm-font-size);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.expandOutput:hover {
-  background: var(--bg-overlay-l2);
-  color: var(--text-default);
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--border-neutral-l2);
-  border-top-color: var(--status-primary-default);
-  border-radius: var(--radius-full);
-  animation: spin 0.8s linear infinite;
 }

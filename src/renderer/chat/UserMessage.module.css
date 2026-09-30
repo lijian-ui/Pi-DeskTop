@@ -21,6 +21,43 @@
   min-width: 0;
 }
 
+/* ── 气泡下方 meta：发送时间 + 一键复制 ── */
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-8);
+  margin-top: var(--spacer-4);
+  padding-right: var(--spacer-4);
+}
+
+.time {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+}
+
+.copyBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-4);
+  font-size: var(--body-xs-font-size);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.copyBtn:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}
+
+.copyLabel {
+  line-height: 1;
+}
+
 .highlight {
   outline: 2px solid var(--border-brand);
   outline-offset: 3px;

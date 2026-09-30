@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { X, FileText, Eye, Code2, Loader2, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import hljs from "highlight.js";
-import { useUIStore } from "../store/ui-store";
+import { useUIStore, MIN_CHAT_WIDTH } from "../store/ui-store";
 import Markdown from "./Markdown";
 import type { FilePreviewResult } from "../../preload/api";
 import styles from "./FilePreviewPanel.module.css";
@@ -163,9 +163,19 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
     e.preventDefault();
     const startX = e.clientX;
     const startWidth = previewWidth;
+    // 预算 = 本面板宽 + 聊天区宽（.chatRow 的第一个子元素）。
+    // 拖拽上限要保证聊天区至少保留 MIN_CHAT_WIDTH —— 拖到就"拖不动"，
+    // 否则右侧面板能把聊天区压没、底部输入框变形。
+    const panelEl = (e.currentTarget as HTMLElement).parentElement;
+    const chatEl = panelEl?.parentElement?.firstElementChild as HTMLElement | null | undefined;
+    const budget =
+      panelEl && chatEl
+        ? panelEl.getBoundingClientRect().width + chatEl.getBoundingClientRect().width
+        : 900 + MIN_CHAT_WIDTH;
+    const maxWidth = Math.max(320, Math.min(900, budget - MIN_CHAT_WIDTH));
     const onMove = (ev: MouseEvent) => {
       // Dragging left (startX > ev.clientX) widens the column on the right.
-      const next = Math.min(900, Math.max(320, startWidth + (startX - ev.clientX)));
+      const next = Math.min(maxWidth, Math.max(320, startWidth + (startX - ev.clientX)));
       setPreviewWidth(next);
     };
     const onUp = () => {

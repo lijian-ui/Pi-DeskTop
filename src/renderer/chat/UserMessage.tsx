@@ -3,7 +3,7 @@ import type { Message } from "../store/agent-store";
 import type { CodeAttachment } from "../store/ui-store";
 import SkillInvocation from "./SkillInvocation";
 import Markdown from "./Markdown";
-import { Code2, SquareTerminal, ChevronRight } from "lucide-react";
+import { Code2, SquareTerminal, ChevronRight, Copy, Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toDataUrl } from "../utils/image";
 import styles from "./UserMessage.module.css";
@@ -105,6 +105,29 @@ function UserMessage({ message, highlight }: Props) {
   const images = message.images;
   // Full-size preview overlay for a clicked thumbnail (null = closed).
   const [zoomed, setZoomed] = useState<string | null>(null);
+  // 气泡下方 meta：发送时间 + 一键复制已发送内容
+  const [copied, setCopied] = useState(false);
+  const time = message.timestamp
+    ? new Date(message.timestamp).toLocaleString([], {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+    : "";
+  // 技能消息（渲染为 SkillInvocation 卡片）与纯图片消息没有可复制的正文。
+  const canCopy = !parsed && !!message.content.trim();
+  const copy = () => {
+    navigator.clipboard
+      ?.writeText(message.content)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {});
+  };
 
   return (
     <div
@@ -146,9 +169,26 @@ function UserMessage({ message, highlight }: Props) {
                 </div>
               )}
               {message.content.trim() && (
-                <Markdown content={message.content} linkifyPaths />
+                <Markdown content={message.content} linkifyPaths breaks />
               )}
             </>
+          )}
+        </div>
+        {/* 发送时间 + 一键复制（气泡右下方） */}
+        <div className={styles.meta}>
+          <span className={styles.time}>{time}</span>
+          {canCopy && (
+            <button
+              type="button"
+              className={styles.copyBtn}
+              onClick={copy}
+              title={t("chat.copy")}
+            >
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+              <span className={styles.copyLabel}>
+                {copied ? t("chat.copied") : t("chat.copy")}
+              </span>
+            </button>
           )}
         </div>
       </div>

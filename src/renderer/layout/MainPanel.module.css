@@ -17,7 +17,11 @@
 
 .chatArea {
   flex: 1;
-  min-width: 0;
+  /* 聊天区最小宽度 —— 与 ui-store 的 `MIN_CHAT_WIDTH` 保持一致（640）。
+     640 是底部输入框工具栏「单行」所需的宽度（约 582px）+ 富余：低于它
+     工具栏会折行"变形"。这样即使右侧面板被拖得很宽，flex 也压不下去聊天区
+     （改由面板收缩吸收）。 */
+  min-width: 640px;
   display: flex;
   flex-direction: column;
 }

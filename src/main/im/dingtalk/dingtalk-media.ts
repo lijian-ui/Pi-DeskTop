@@ -5,9 +5,10 @@
  * use the newer /v1.0 API. Ported from dingtalk-openclaw-connector (MIT).
  */
 import axios from "axios";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import { basename, extname } from "node:path";
 import FormData from "form-data";
+import { MAX_MEDIA_BYTES } from "../media-shared";
 
 /** DingTalk robot credentials (extracted from ImChannelInstance.config). */
 export interface DingtalkCredentials {
@@ -17,6 +18,9 @@ export interface DingtalkCredentials {
 
 const DINGTALK_API = "https://api.dingtalk.com";
 const DINGTALK_OAPI = "https://oapi.dingtalk.com";
+
+/** Retry count for transient upload/download failures. */
+const MEDIA_RETRY_COUNT = 3;
 
 const OAPI_TOKEN_CACHE_TTL_MS = 1000 * 60 * 55;
 
@@ -65,31 +69,44 @@ export async function uploadDingtalkMedia(
 ): Promise<DingtalkUploadResult | null> {
   try {
     if (!existsSync(filePath)) return null;
+    if (statSync(filePath).size > MAX_MEDIA_BYTES) {
+      console.warn("[im:dingtalk] media upload skipped: exceeds size cap");
+      return null;
+    }
     const token = await getOapiAccessToken(cfg);
     if (!token) return null;
-    const form = new FormData();
-    // Content-Type must match the media kind — DingTalk rejects/garbles audio
-    // uploaded as generic octet-stream. Voice needs audio/amr (reference:
-    // dingtalk-openclaw-connector media.ts uploadMediaToDingTalk).
-    const contentType =
-      mediaType === "image"
-        ? "image/jpeg"
-        : mediaType === "voice"
-          ? "audio/amr"
-          : "application/octet-stream";
-    form.append("media", createReadStream(filePath), {
-      filename: basename(filePath),
-      contentType,
-    });
-    const res = await axios.post(`${DINGTALK_OAPI}/media/upload`, form, {
-      params: { access_token: token, type: mediaType },
-      headers: form.getHeaders(),
-      timeout: 60_000,
-      maxBodyLength: Infinity,
-    });
-    const mediaId = res.data?.media_id as string | undefined;
-    if (!mediaId) return null;
-    return { mediaId };
+
+    for (let attempt = 1; attempt <= MEDIA_RETRY_COUNT; attempt++) {
+      try {
+        const form = new FormData();
+        // Content-Type must match the media kind — DingTalk rejects/garbles audio
+        // uploaded as generic octet-stream. Voice needs audio/amr (reference:
+        // dingtalk-openclaw-connector media.ts uploadMediaToDingTalk).
+        const contentType =
+          mediaType === "image"
+            ? "image/jpeg"
+            : mediaType === "voice"
+              ? "audio/amr"
+              : "application/octet-stream";
+        form.append("media", createReadStream(filePath), {
+          filename: basename(filePath),
+          contentType,
+        });
+        const res = await axios.post(`${DINGTALK_OAPI}/media/upload`, form, {
+          params: { access_token: token, type: mediaType },
+          headers: form.getHeaders(),
+          timeout: 60_000,
+          maxBodyLength: Infinity,
+        });
+        const mediaId = res.data?.media_id as string | undefined;
+        if (!mediaId) return null;
+        return { mediaId };
+      } catch (err) {
+        if (attempt === MEDIA_RETRY_COUNT) throw err;
+        console.warn(`[im:dingtalk] media upload retry ${attempt}/${MEDIA_RETRY_COUNT}`);
+      }
+    }
+    return null;
   } catch (err) {
     console.warn(
       "[im:dingtalk] media upload failed:",
@@ -107,36 +124,47 @@ export async function downloadDingtalkMedia(
   cfg: DingtalkCredentials,
   downloadCode: string,
 ): Promise<{ data: Buffer; mimeType: string } | null> {
-  try {
-    const token = await getOapiAccessToken(cfg);
-    if (!token) return null;
-    const res = await axios.post(
-      `${DINGTALK_API}/v1.0/robot/messageFiles/download`,
-      { downloadCode, robotCode: cfg.clientId },
-      {
-        headers: { "x-acs-dingtalk-access-token": token },
-        timeout: 15_000,
-      },
-    );
-    const downloadUrl = res.data?.downloadUrl as string | undefined;
-    if (!downloadUrl) return null;
+  for (let attempt = 1; attempt <= MEDIA_RETRY_COUNT; attempt++) {
+    try {
+      const token = await getOapiAccessToken(cfg);
+      if (!token) return null;
+      const res = await axios.post(
+        `${DINGTALK_API}/v1.0/robot/messageFiles/download`,
+        { downloadCode, robotCode: cfg.clientId },
+        {
+          headers: { "x-acs-dingtalk-access-token": token },
+          timeout: 15_000,
+        },
+      );
+      const downloadUrl = res.data?.downloadUrl as string | undefined;
+      if (!downloadUrl) return null;
 
-    const bin = await axios.get(downloadUrl, {
-      responseType: "arraybuffer",
-      timeout: 30_000,
-      // OSS presigned URLs reject requests carrying a default JSON Content-Type;
-      // dropping it lets the signature check pass.
-      headers: { "Content-Type": undefined },
-    });
-    const mimeType = (bin.headers["content-type"] as string) || "application/octet-stream";
-    return { data: Buffer.from(bin.data as ArrayBuffer), mimeType };
-  } catch (err) {
-    console.warn(
-      "[im:dingtalk] media download failed:",
-      err instanceof Error ? err.message : String(err),
-    );
-    return null;
+      const bin = await axios.get(downloadUrl, {
+        responseType: "arraybuffer",
+        timeout: 30_000,
+        // OSS presigned URLs reject requests carrying a default JSON Content-Type;
+        // dropping it lets the signature check pass.
+        headers: { "Content-Type": undefined },
+      });
+      const data = Buffer.from(bin.data as ArrayBuffer);
+      if (data.length > MAX_MEDIA_BYTES) {
+        console.warn("[im:dingtalk] media download skipped: exceeds size cap");
+        return null;
+      }
+      const mimeType = (bin.headers["content-type"] as string) || "application/octet-stream";
+      return { data, mimeType };
+    } catch (err) {
+      if (attempt === MEDIA_RETRY_COUNT) {
+        console.warn(
+          "[im:dingtalk] media download failed:",
+          err instanceof Error ? err.message : String(err),
+        );
+        return null;
+      }
+      console.warn(`[im:dingtalk] media download retry ${attempt}/${MEDIA_RETRY_COUNT}`);
+    }
   }
+  return null;
 }
 
 const TEXT_FILE_EXTENSIONS = new Set([

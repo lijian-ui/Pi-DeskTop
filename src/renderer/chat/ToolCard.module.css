@@ -1,0 +1,246 @@
+/* 专用工具卡片（对标 DSH 的 toolview 家族卡片）
+   ─────────────────────────────────────────────────────────
+   无外框、无圆角、无自带底色 —— 背景与聊天区一致（继承 default），
+   不再用浅底色差分区，仅靠排版/图标/语义着色区分。无入场动画。
+   颜色走 CSS 变量，暗/亮自适应；reduced-motion 由 tokens.css 兜底。
+   · 终端/bash：命令头 + 退出码药丸 + 等宽输出（卡内滚动）
+   · read：文件路径头 + 行号 + 等宽内容（卡内滚动）
+   · write/edit：+/− 着色的统一差异（卡内滚动）
+   · search：path:line 匹配列表
+   · web：URL 引用列表
+   · other：JSON 输入 + 结果文本（兜底） */
+
+.card {
+  min-width: 0;
+}
+
+/* ── 终端 / bash ─────────────────────────────────────── */
+.terminalHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  padding: var(--spacer-6) 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--code-terminal-font-size);
+}
+
+.prompt {
+  color: var(--status-success-default);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.command {
+  color: var(--text-default);
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-width: 0;
+}
+
+.cwd {
+  color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+  flex-shrink: 0;
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+
+.exitPill {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  font-size: var(--body-xs-font-size);
+  line-height: 1.4;
+  font-family: var(--font-family-mono);
+}
+
+.exitOk {
+  color: var(--status-success-default);
+  background: var(--status-success-surface-l1);
+}
+
+.exitFail {
+  color: var(--status-error-default);
+  background: var(--status-error-surface-l1);
+}
+
+.terminal {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: var(--spacer-8) var(--spacer-12);
+  background: var(--bg-tool-code);
+  font-family: var(--font-family-mono);
+  font-size: var(--code-terminal-font-size);
+  line-height: var(--code-terminal-line-height);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-default);
+}
+
+/* ── read：行号代码 ───────────────────────────────────── */
+.fileHeader {
+  padding: var(--spacer-6) 0;
+  color: var(--text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--body-xs-font-size);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.codeScroll {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.codeRow {
+  display: flex;
+  align-items: flex-start;
+  font-family: var(--font-family-mono);
+  font-size: var(--code-terminal-font-size);
+  line-height: var(--code-terminal-line-height);
+}
+
+.lineNo {
+  flex-shrink: 0;
+  width: 3em;
+  padding: 0 var(--spacer-8) 0 0;
+  text-align: right;
+  color: var(--text-tertiary);
+  user-select: none;
+}
+
+.lineText {
+  padding: 0 var(--spacer-8);
+  white-space: pre;
+  color: var(--text-default);
+}
+
+/* ── write/edit：差异 ─────────────────────────────────── */
+.diffMeta {
+  padding: var(--spacer-6) 0;
+  color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+  font-family: var(--font-family-mono);
+}
+
+.diffLine {
+  display: flex;
+  align-items: flex-start;
+  font-family: var(--font-family-mono);
+  font-size: var(--code-terminal-font-size);
+  line-height: var(--code-terminal-line-height);
+}
+
+.diffGutter {
+  flex-shrink: 0;
+  width: 1.5em;
+  text-align: center;
+  color: var(--text-tertiary);
+  user-select: none;
+}
+
+.diffText {
+  padding-right: var(--spacer-8);
+  white-space: pre;
+  color: var(--text-default);
+}
+
+.diffAdd {
+  background: var(--status-success-surface-l1);
+}
+
+.diffAdd .diffText {
+  color: var(--status-success-default);
+}
+
+.diffDel {
+  background: var(--status-error-surface-l1);
+}
+
+.diffDel .diffText {
+  color: var(--status-error-default);
+}
+
+/* ── search：匹配列表 ─────────────────────────────────── */
+.searchMeta {
+  padding: var(--spacer-6) 0;
+  color: var(--text-tertiary);
+  font-size: var(--body-xs-font-size);
+  font-family: var(--font-family-mono);
+}
+
+.searchRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacer-8);
+  padding: var(--spacer-4) 0;
+}
+
+.searchLoc {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-family: var(--font-family-mono);
+  font-size: var(--code-terminal-font-size);
+  white-space: nowrap;
+}
+
+.searchText {
+  color: var(--text-default);
+  font-size: var(--code-terminal-font-size);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── web：引用列表 ────────────────────────────────────── */
+.webList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-6);
+  padding: var(--spacer-8) 0;
+}
+
+.webLink {
+  color: var(--bg-brand);
+  font-family: var(--font-family-mono);
+  font-size: var(--code-terminal-font-size);
+  word-break: break-all;
+  text-decoration: none;
+}
+
+.webLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── 兜底：JSON 输入 / 结果 ───────────────────────────── */
+.section {
+  /* 无外框、无底色，靠留白区分 */
+}
+
+.sectionLabel {
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: var(--spacer-4) 0;
+}
+
+.code {
+  margin: 0;
+  max-height: 300px;
+  overflow: auto;
+  padding: var(--spacer-8) var(--spacer-12);
+  background: var(--bg-tool-code);
+  font-family: var(--font-family-mono);
+  font-size: var(--code-terminal-font-size);
+  line-height: var(--code-terminal-line-height);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-default);
+}

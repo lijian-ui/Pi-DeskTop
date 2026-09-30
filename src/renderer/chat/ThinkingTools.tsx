@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useRef } from "react";
-import { ChevronRight, Check, AlertTriangle, Loader2 } from "lucide-react";
+import { ChevronRight, Brain } from "lucide-react";
 import type { Message } from "../store/agent-store";
 import { useTranslation } from "react-i18next";
 import Markdown from "./Markdown";
@@ -16,13 +16,50 @@ interface Props {
 }
 
 /**
+ * 单条思考（DSH 风格）：一行 disclosure，形如
+ *   `🧠 思考 · <内容>`
+ * 默认折叠——内容超出宽度用省略号截断，只显示一行；点击该行展开显示
+ * 全部思考内容，再点收起。每条思考各自独立，互不影响。
+ */
+function ThinkingRow({ text }: { text: string }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  return (
+    <button
+      type="button"
+      className={styles.thinkingRow}
+      data-open={open ? "true" : undefined}
+      onClick={() => setOpen((o) => !o)}
+      aria-expanded={open}
+      title={open ? undefined : text}
+    >
+      <Brain size={14} className={styles.thinkingIcon} />
+      <span className={styles.thinkingLabel}>{t("chat.thinking")}</span>
+      <span className={styles.thinkingSep} aria-hidden="true">
+        ·
+      </span>
+      <span className={styles.thinkingText}>{text}</span>
+    </button>
+  );
+}
+
+/**
  * 「思考与工具」折叠面板：聚合同一回合内所有中间过程（思考过程、
  * 工具调用、中间回复内容）。
  *
+ * **顺序**：严格按 message 的时间顺序交错渲染——每条消息内部依次为
+ * 「思考 → 中间回复 → 该步的工具调用」，还原真实回合时间线
+ * （思考 → 工具 → 思考 → 中间回复 → 工具 → …），不再把思考堆在一起、
+ * 工具统一聚合到末尾。
+ *
+ * **思考样式**：对标 DSH——每段思考是一条独立的一行 disclosure
+ * （图标 + 「思考」 + 内容），默认折叠（单行省略号截断），点击展开全文；
+ * 不再用一个「思考过程」开关统一控制所有思考。
+ *
  * 面板默认始终折叠——流式输出期间也不会自动展开，避免过程内容随
  * 每个流式 token 反复跳动，只靠标题行的状态徽标表达进行中/完成；
- * 想实时围观时手动展开查看，展开后保持到手动收起。最终回复正文由
- * AssistantTurn 独立渲染，不受本面板状态影响。
+ * 想实时围观时手动展开查看。最终回复正文由 AssistantTurn 独立渲染，
+ * 不受本面板状态影响。
  */
 function ThinkingTools({ messages }: Props) {
   const { t } = useTranslation();
@@ -39,44 +76,15 @@ function ThinkingTools({ messages }: Props) {
   const isToolRunning = tools.some((tool) => tool.isRunning);
   const streamingOrRunning = isStreaming || isToolRunning;
   // 面板默认始终折叠：流式过程中也不自动展开（避免过程内容每 token 跳动），
-  // 运行状态只通过标题行徽标表达（运行中 spinner / 完成 ✓ / 出错 ⚠）。
-  // 完全由用户手动开合；展开后保持到手动收起，不被状态翻转回退。
+  // 运行状态只通过标题行徽标表达（2px 状态点）。完全由用户手动开合。
   const [expanded, setExpanded] = useState(false);
-  // 思考内容默认始终折叠（流式/完成态均折叠），用户手动点开「思考过程」查看。
-  // 大段思考不撑爆回复区；与外层面板独立，不受展开/折叠自动同步影响。
-  const [thinkingExpanded, setThinkingExpanded] = useState(false);
-  // peek 是否已收起：回合真正结束后由延时器置 true；新回合 / 段间空隙恢复 false。
-  const [peekCollapsed, setPeekCollapsed] = useState(false);
 
   const turnSettled = !isStreaming && !isToolRunning;
-  // 所有 hooks 必须在 early return 之前调用，否则违反 React Rules of Hooks
-  // （跨渲染 hooks 顺序不一致会白板）。用 ref 区分「刚结束」与「早已结束」、
-  // 区分「回合内部段间空隙」与「回合真正完成」——后者用延时器收起 peek，
-  // 前者在空隙结束（turnSettled 翻回 false）时取消收起，避免误收导致跳变。
+  // 回合真正结束时，自动收起用户手动展开的面板（回到安静的一行）。
   const prevSettledRef = useRef(turnSettled);
-  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (turnSettled && !prevSettledRef.current) {
-      // 回合刚结束：收起手动展开的面板；延时收起 peek，留出段间空隙缓冲。
-      setExpanded(false);
-      setThinkingExpanded(false);
-      if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
-      collapseTimerRef.current = setTimeout(() => setPeekCollapsed(true), 350);
-    } else if (!turnSettled && prevSettledRef.current) {
-      // 回合重新开始（段间空隙结束 / 新回合）：取消待收起，允许 peek 重新显示。
-      if (collapseTimerRef.current) {
-        clearTimeout(collapseTimerRef.current);
-        collapseTimerRef.current = null;
-      }
-      setPeekCollapsed(false);
-    }
+    if (turnSettled && !prevSettledRef.current) setExpanded(false);
     prevSettledRef.current = turnSettled;
-    return () => {
-      if (collapseTimerRef.current) {
-        clearTimeout(collapseTimerRef.current);
-        collapseTimerRef.current = null;
-      }
-    };
   }, [turnSettled]);
 
   // 没有任何过程性内容 → 不渲染面板。
@@ -84,24 +92,6 @@ function ThinkingTools({ messages }: Props) {
 
   const anyError = tools.some((tool) => tool.isError);
   const overallStatus = streamingOrRunning ? "running" : anyError ? "error" : "done";
-
-  // 流式思考有界预览（方向 B：2–3 行渐隐 peek）。
-  // 关键：预览在**整个多步回合内持续挂载**——只要「仍在流式」或「本回合
-  // 已有工具调用」就保持显示，避免工具结束瞬间 isToolRunning 翻 false、
-  // streamingOrRunning 随之翻转导致 peek 卸载、下方内容上下跳动。
-  // 回合真正结束由上方 effect 的延时器（peekCollapsed）收起回安静行；
-  // 段间空隙（turnSettled 瞬间翻 true）因 < 延时会被取消收起，不抖动。
-  // 有界预览显示条件：
-  //  - 面板未手动展开；
-  //  - 存在思考内容；
-  //  - 回合进行中（流式 / 工具运行）或本回合出现过工具调用（hasTools 用于桥接
-  //    「思考→工具→思考」段间空隙，避免空隙瞬间 turnSettled 翻 true 导致 peek 卸载跳动）；
-  //  - 尚未被回合结束的延时器收起（peekCollapsed）。
-  const showPeek =
-    !expanded && hasThinking && (isStreaming || isToolRunning || hasTools) && !peekCollapsed;
-  const peekText = showPeek
-    ? [...messages].reverse().find((m) => m.thinking?.trim())?.thinking?.trim() ?? ""
-    : "";
 
   return (
     <div className={styles.panel}>
@@ -111,14 +101,13 @@ function ThinkingTools({ messages }: Props) {
         onClick={() => setExpanded((e) => !e)}
         aria-expanded={expanded}
       >
-        <span className={`${styles.statusIcon} ${styles[overallStatus]}`}>
-          {overallStatus === "running" ? (
-            <Loader2 size={11} className={styles.spin} />
-          ) : anyError ? (
-            <AlertTriangle size={11} />
-          ) : (
-            <Check size={11} />
-          )}
+        <span className={styles.statusDot} data-state={overallStatus} aria-hidden="true" />
+        <span className={styles.srOnly}>
+          {overallStatus === "running"
+            ? t("chat.statusRunning")
+            : anyError
+              ? t("chat.statusError")
+              : t("chat.statusDone")}
         </span>
         <span className={styles.title}>{t("chat.thinkingAndTools")}</span>
         {hasTools && (
@@ -130,67 +119,32 @@ function ThinkingTools({ messages }: Props) {
           <ChevronRight size={12} />
         </span>
       </button>
-      {peekText && (
-        <div className={styles.thinkingPeek}>
-          <div className={styles.thinkingPeekText}>
-            <span>{peekText}</span>
-          </div>
-          <button
-            type="button"
-            className={styles.peekHint}
-            onClick={() => {
-              setExpanded(true);
-              setThinkingExpanded(true);
-            }}
-          >
-            {t("chat.expandThinking")}
-          </button>
-        </div>
-      )}
       {expanded && (
         <div className={styles.body}>
-          {hasThinking && (
-            <button
-              type="button"
-              className={styles.thinkingToggle}
-              onClick={() => setThinkingExpanded((e) => !e)}
-              aria-expanded={thinkingExpanded}
-            >
-              <span
-                className={`${styles.thinkingToggleChevron} ${
-                  thinkingExpanded ? styles.chevronOpen : ""
-                }`}
-              >
-                <ChevronRight size={12} />
-              </span>
-              <span className={styles.thinkingToggleLabel}>{t("chat.thinking")}</span>
-            </button>
-          )}
+          {/* 按 message 时间顺序交错渲染：思考 → 中间回复 → 该步工具调用。
+              每段思考是一条独立的 DSH 风格 disclosure 行（默认折叠单行省略）。 */}
           {messages.map((msg) => {
-            const thinking = thinkingExpanded ? msg.thinking?.trim() : "";
+            const thinking = msg.thinking?.trim();
             const content = msg.content?.trim();
-            const tools = msg.toolExecutions ?? [];
-            // 仅当该 step 有可见内容（展开的思考 / 中间回复 / 工具）才渲染，
-            // 避免折叠态下留下空的 step 分隔线。
-            if (!thinking && !content && tools.length === 0) return null;
+            const msgTools = msg.toolExecutions ?? [];
+            if (!thinking && !content && msgTools.length === 0) return null;
             return (
               <div key={msg.id} id={`msg-${msg.id}`} className={styles.step}>
-                {!!thinking && (
-                  <div className={styles.thinkingContent}>{thinking}</div>
-                )}
+                {!!thinking && <ThinkingRow text={thinking} />}
                 {!!content && (
                   <div className={styles.intermediateSection}>
-                    <div className={styles.intermediateLabel}>
-                      {t("chat.intermediateReply")}
-                    </div>
                     <div className={styles.intermediateContent}>
                       <Markdown content={msg.content} />
                     </div>
                   </div>
                 )}
-                {tools.map((tool) => (
-                  <ToolExecution key={tool.id} execution={tool} />
-                ))}
+                {msgTools.length > 0 && (
+                  <div className={styles.stepTools}>
+                    {msgTools.map((tool) => (
+                      <ToolExecution key={tool.id} execution={tool} />
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}

@@ -84,13 +84,16 @@
   text-decoration-style: solid;
 }
 
+/* 引用：去掉左边条，改浅底块（无框，靠缩进 + 浅底表达引用） */
 .markdown :global(blockquote) {
   margin: 0 0 var(--spacer-8);
-  padding: var(--spacer-4) var(--spacer-12);
-  border-left: 3px solid var(--border-neutral-l2);
+  padding: var(--spacer-8) var(--spacer-12);
+  background: var(--bg-base-tertiary);
+  border-radius: var(--radius-6);
   color: var(--text-secondary);
 }
 
+/* 表格：去外框与竖线，仅留横向行线 + 表头浅底（无框感，保留可读性） */
 .markdown :global(table) {
   border-collapse: collapse;
   margin: var(--spacer-8) 0;
@@ -99,9 +102,14 @@
 
 .markdown :global(th),
 .markdown :global(td) {
-  border: 1px solid var(--border-neutral-l1);
+  border-bottom: 1px solid var(--border-neutral-l1);
   padding: var(--spacer-4) var(--spacer-8);
   text-align: left;
+}
+
+.markdown :global(th) {
+  background: var(--bg-base-tertiary);
+  font-weight: var(--font-weight-medium);
 }
 
 .markdown :global(hr) {
@@ -110,21 +118,20 @@
   margin: var(--spacer-12) 0;
 }
 
+/* 行内代码：去边框 + 圆角，留浅底芯片（无框） */
 .inlineCode {
   font-family: var(--font-family-mono);
   font-size: 12px;
   background: var(--bg-overlay-l2);
-  border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-4);
   padding: 1px 4px;
 }
 
+/* 代码块：去外框 + 圆角，整块浅底 tertiary（无框） */
 .codeBlock {
   margin: var(--spacer-10) 0;
-  border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-8);
   overflow: hidden;
-  background: var(--bg-base-default);
+  background: var(--bg-base-tertiary);
 }
 
 .codeHead {
@@ -133,7 +140,6 @@
   justify-content: space-between;
   padding: var(--spacer-4) var(--spacer-10);
   background: var(--bg-base-tertiary);
-  border-bottom: 1px solid var(--border-neutral-l1);
 }
 
 .codeLang {
@@ -166,7 +172,7 @@
   margin: 0;
   padding: var(--spacer-12);
   overflow-x: auto;
-  background: var(--bg-base-default);
+  background: var(--bg-base-tertiary);
 }
 
 .codePre code {
@@ -183,8 +189,7 @@
   display: flex;
   justify-content: center;
   overflow-x: auto;
-  background: var(--bg-base-default);
-  border: 1px solid var(--border-neutral-l1);
+  background: var(--bg-base-tertiary);
   border-radius: var(--radius-8);
   padding: var(--spacer-12);
 }

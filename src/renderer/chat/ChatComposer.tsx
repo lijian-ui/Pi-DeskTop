@@ -1317,6 +1317,7 @@ export default function ChatComposer() {
               <button
                 className={styles.modelPill}
                 onClick={handleToggleDropdown}
+                title={currentLabel}
               >
                 <span>{loadingModels ? t("chat.loadingModels") : currentLabel}</span>
                 <ChevronDown size={10} />

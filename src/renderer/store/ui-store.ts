@@ -2,6 +2,15 @@ import { create } from "zustand";
 import { useImageSettingsStore } from "./settings-store";
 
 /**
+ * 拖拽终端 / 文件预览分隔线时，聊天列至少保留的宽度（px）。
+ * 取 640 是为了让底部输入框（composer）始终保持**单行原样**：
+ * 那条工具栏单行约需 582px（左组≈94 + 右组≈426 + 内外内边距 56），
+ * 640 留出富余（模型名长短会影响右组宽度）。
+ * ⚠️ 与 `layout/MainPanel.module.css` 的 `.chatArea { min-width }` 必须同步。
+ */
+export const MIN_CHAT_WIDTH = 640;
+
+/**
  * A code reference captured from the file-preview panel. The user picks a
  * range of lines; we keep the structured meta (so the composer can render a
  * nice pill) plus the raw `content` (so the real text is what gets sent to the

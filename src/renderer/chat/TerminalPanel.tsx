@@ -5,7 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { Plus } from "lucide-react";
-import { useUIStore } from "../store/ui-store";
+import { useUIStore, MIN_CHAT_WIDTH } from "../store/ui-store";
 import { useWorkspaceStore } from "../store/workspace-store";
 import { useTranslation } from "react-i18next";
 import styles from "./TerminalPanel.module.css";
@@ -112,9 +112,19 @@ export default function TerminalPanel({ visible }: { visible: boolean }) {
     e.preventDefault();
     const startX = e.clientX;
     const startWidth = terminalWidth;
+    // 预算 = 本面板宽 + 聊天区宽（.chatRow 的第一个子元素）。
+    // 拖拽上限要保证聊天区至少保留 MIN_CHAT_WIDTH —— 拖到就"拖不动"，
+    // 否则右侧面板能把聊天区压没、底部输入框变形。
+    const panelEl = (e.currentTarget as HTMLElement).parentElement;
+    const chatEl = panelEl?.parentElement?.firstElementChild as HTMLElement | null | undefined;
+    const budget =
+      panelEl && chatEl
+        ? panelEl.getBoundingClientRect().width + chatEl.getBoundingClientRect().width
+        : 820 + MIN_CHAT_WIDTH;
+    const maxWidth = Math.max(300, Math.min(820, budget - MIN_CHAT_WIDTH));
     const onMove = (ev: MouseEvent) => {
       // Drag left (startX > ev.clientX) widens the terminal on the right.
-      const next = Math.min(820, Math.max(300, startWidth + (startX - ev.clientX)));
+      const next = Math.min(maxWidth, Math.max(300, startWidth + (startX - ev.clientX)));
       setTerminalWidth(next);
     };
     const onUp = () => {

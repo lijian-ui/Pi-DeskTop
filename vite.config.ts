@@ -32,6 +32,11 @@ export default defineConfig({
                 "electron",
                 "node-pty",
                 "better-sqlite3",
+                // playwright-core 是 CDP 直连托管 Chrome 用的依赖（对标 OpenClaw）。
+                // 它是 Node 端包，内含原生/可选依赖（kerberos、chromium-bidi 等），
+                // 打包它们会失败。保持 external，运行时由 Electron 从 node_modules
+                // 解析（connectOverCDP 不需要 kerberos，playwright-core 按需懒加载）。
+                "playwright-core",
                 /^@earendil-works\//,
                 // dingtalk-stream is CJS and pulls in `ws`, which tries to
                 // require optional native deps (bufferutil / utf-8-validate).

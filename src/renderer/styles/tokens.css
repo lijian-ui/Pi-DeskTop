@@ -71,6 +71,8 @@
   --bg-overlay-l4: rgba(224, 226, 242, 0.12);
   --bg-menu: #2A2E34;
   --bg-tooltip: #25282E;
+  /* 工具卡「请求 / 结果」内容块底色（柔和偏冷的浅色调，区别于全局 pre 灰） */
+  --bg-tool-code: #2B303A;
 
   --bg-brand: #32F08C;
   --bg-brand-hover: #0FDC78;
@@ -128,6 +130,8 @@
   --bg-overlay-l4: rgba(15, 23, 42, 0.12);
   --bg-menu: #FFFFFF;
   --bg-tooltip: #FFFFFF;
+  /* 工具卡「请求 / 结果」内容块底色（浅色主题：极淡冷蓝灰，比 tertiary 更轻更干净） */
+  --bg-tool-code: #F4F7FB;
 
   --bg-brand: #14C46A;
   --bg-brand-hover: #0FB35F;
@@ -163,6 +167,7 @@
 
   --status-primary-default: #2D6BE0;
   --status-success-default: #1FA97A;
+  --status-success-surface-l1: rgba(31, 169, 122, 0.14);
   --status-alert-default: #B8860B;
   --status-warning-default: #C26A1E;
   --status-error-default: #DC3D3D;
@@ -236,6 +241,23 @@
 /* Numbers / booleans / symbols */
 .hljs-number,
 .hljs-symbol { color: var(--code-number); }
+
+/* ════════════════════════════════════════════════════════════════
+   无障碍：用户开启「减弱动效」时，关闭所有装饰性动画 / 过渡
+   （微光扫光、spinner 旋转、chevron 位移等），仅保留静态呈现。
+   对齐 UI 铁律「反对动画」的底线——默认仍保留 DSH 式微光，
+   仅对明确要求减少运动的患者关闭。
+   ════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 
 /* Functions / titles / sections */
 .hljs-built_in,

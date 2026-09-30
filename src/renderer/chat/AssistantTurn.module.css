@@ -156,3 +156,10 @@
   outline-offset: 3px;
   border-radius: var(--radius-8);
 }
+
+/* 过程区（思考与工具）↔ 最终回复正文 之间的浅分割线。
+   仅当两者同时存在时由 JSX 渲染；用最浅一档中性边框色，保持"浅浅"的存在感。 */
+.divider {
+  height: 1px;
+  background: var(--border-neutral-l1);
+}

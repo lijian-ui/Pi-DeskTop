@@ -15,7 +15,7 @@ import type {
   ImStatus,
 } from "../types";
 import type { ImChannelInstance } from "../im-config";
-import { statSync, writeFileSync, unlinkSync } from "node:fs";
+import { writeFileSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DingtalkConnection } from "./dingtalk-connection";
@@ -42,6 +42,7 @@ import {
   type AICardInstance,
   type AICardTarget,
 } from "./dingtalk-card";
+import { extractMediaRefs, toLocalPath } from "../media-shared";
 
 interface DingtalkMessageData {
   senderStaffId?: string;
@@ -116,27 +117,6 @@ function extractQuotedMedia(container: any): string[] {
       .filter(Boolean);
   }
   return [];
-}
-
-/** True when a path points at a local file (drive letter, /, ~, file://). */
-function isLocalPath(raw: string): boolean {
-  return (
-    raw.startsWith("file://") ||
-    /^[A-Za-z]:[\\/]/.test(raw) ||
-    raw.startsWith("/") ||
-    raw.startsWith("~")
-  );
-}
-
-/** Strip file:// / URL-encoding to get the on-disk absolute path. */
-function toLocalPath(raw: string): string {
-  let p = raw.startsWith("file://") ? raw.slice("file://".length) : raw;
-  try {
-    p = decodeURIComponent(p);
-  } catch {
-    /* keep as-is */
-  }
-  return p;
 }
 
 export class DingtalkAdapter implements ImChannelAdapter {
@@ -367,6 +347,20 @@ async sendKeyboard(
   await this.sendText(target, `${text}\n\n${codes}`);
 }
 
+  /** Explicit `send_file` tool path — upload + deliver a local file directly
+   *  (no text scanning); the optional caption goes out as a separate text. */
+  async sendFile(target: string, filePath: string, caption?: string): Promise<boolean> {
+    const info = this.peerInfo.get(target) ?? { isGroup: true, userId: "" };
+    const fileName = basename(filePath);
+    const up = await uploadDingtalkMedia(this.credentials, filePath, "file");
+    if (!up) return false;
+    await sendDingtalkFile(this.credentials, target, up.mediaId, fileName, info.isGroup).catch(() => {});
+    if (caption && caption.trim()) {
+      void this.sendText(target, caption).catch(() => {});
+    }
+    return true;
+  }
+
   /**
    * Identify local images/files referenced in the reply, upload them, send as
    * dedicated media messages, and replace the reference with a short note.
@@ -391,21 +385,32 @@ async sendKeyboard(
     isGroup: boolean,
   ): Promise<string> {
     let result = text;
-    const imageMd = /!\[([^\]]*)\]\(([^)]+)\)/g;
-    for (const m of text.matchAll(imageMd)) {
-      const [full, alt, path] = m;
-      if (!isLocalPath(path) || !/\.(png|jpe?g|gif|bmp|webp)$/i.test(path)) continue;
-      const up = await uploadDingtalkMedia(this.credentials, toLocalPath(path), "image");
-      if (up) {
+    // Shared scan: md-image + bare on-disk paths (image vs file classified).
+    for (const ref of extractMediaRefs(text)) {
+      if (ref.kind === "image") {
         // The image is delivered as a stand-alone sampleImageMsg (photoURL =
         // RAW media_id WITH the leading `@` — the only form DingTalk renders).
         // Inline markdown images are NOT supported by DingTalk's markdown
         // renderer (cards or messages), so scrub the syntax from the text and
         // leave a plain-text note instead of a broken/raw image tag.
-        await sendDingtalkImage(this.credentials, target, up.mediaId, isGroup).catch(() => {});
-        result = result.replace(full, alt ? `[图片]` : "[图片]");
+        const up = await uploadDingtalkMedia(this.credentials, ref.path, "image");
+        if (up) {
+          await sendDingtalkImage(this.credentials, target, up.mediaId, isGroup).catch(() => {});
+          result = result.replace(ref.full, "[图片]");
+        } else {
+          result = result.replace(ref.full, "⚠️ 图片上传失败");
+        }
       } else {
-        result = result.replace(full, "⚠️ 图片上传失败");
+        const fileName = basename(ref.path);
+        const up = await uploadDingtalkMedia(this.credentials, ref.path, "file");
+        if (up) {
+          // sampleFile's mediaId field also expects the RAW media_id WITH the
+          // leading `@` (novaclaw send_private_file / send_group_file).
+          await sendDingtalkFile(this.credentials, target, up.mediaId, fileName, isGroup).catch(() => {});
+          result = result.replace(ref.full, `[文件已发送：${fileName}]`);
+        } else {
+          result = result.replace(ref.full, "⚠️ 文件上传失败");
+        }
       }
     }
     const fileMarker = /\[DINGTALK_FILE\](.*?)\[\/DINGTALK_FILE\]/gs;
@@ -431,39 +436,6 @@ async sendKeyboard(
         result = result.replace(full, `[文件已发送：${fileName}]`);
       } else {
         result = result.replace(full, "⚠️ 文件上传失败");
-      }
-    }
-    // Bare absolute paths the AI wrote out (e.g. "saved to C:\x\a.md"): when
-    // the file really exists on disk, deliver it as a media message instead of
-    // a bare mention. existsSync keeps casual path talk from uploading.
-    // Iterate over `result` so already-replaced marker/media references are not
-    // picked up again.
-    const bareFile =
-      /(?:file:\/\/)?[A-Za-z]:[\\/][^\s"'()<>]+|(?:\/(?:Users|home|tmp|var|private|root)\/[^\s"'()<>]+)/g;
-    for (const m of result.matchAll(bareFile)) {
-      const path = toLocalPath(m[0]);
-      // Regular files only — a `pwd`-style directory output must not be
-      // uploaded as media (existsSync alone matches directories → EISDIR).
-      let isFile = false;
-      try {
-        isFile = statSync(path).isFile();
-      } catch {
-        isFile = false;
-      }
-      if (!isFile) continue;
-      if (/\.(png|jpe?g|gif|bmp|webp)$/i.test(path)) {
-        const up = await uploadDingtalkMedia(this.credentials, path, "image");
-        if (up) {
-          await sendDingtalkImage(this.credentials, target, up.mediaId, isGroup).catch(() => {});
-          result = result.replace(m[0], "[图片]");
-        }
-      } else {
-        const fileName = basename(path);
-        const up = await uploadDingtalkMedia(this.credentials, path, "file");
-        if (up) {
-          await sendDingtalkFile(this.credentials, target, up.mediaId, fileName, isGroup).catch(() => {});
-          result = result.replace(m[0], `[文件已发送：${fileName}]`);
-        }
       }
     }
     return result;

@@ -1,15 +1,11 @@
 /* 「思考与工具」过程面板
    ─────────────────────────────────────────────────────────
-   方向 B「安静行」：去掉外框与左侧色条，只保留浅底，像一条收起的
-   日志，不抢最终回复正文。四角圆角，展开时帽底压一条分隔线与正文
-   区分，无入场动画（贴合 UI 铁律）。全部颜色走 CSS 变量，暗色 /
-   浅色主题自动适配。 */
+   无外框、无圆角、无自带底色 —— 背景与聊天区完全一致（继承 default），
+   仅靠图标 / 状态点 / 排版区分；只有交互态（hover）才出现浅底反馈。
+   颜色走 CSS 变量，暗/亮自适应。 */
 
 .panel {
-  border-radius: var(--radius-6);
-  overflow: hidden;
   font-size: var(--body-sm-font-size);
-  background: var(--bg-base-secondary);
 }
 
 /* ── 折叠标题行 ────────────────────────────────────────── */
@@ -33,45 +29,43 @@
   background: var(--bg-overlay-l1);
 }
 
-/* 展开态：帽底压一条分隔线，与正文区区分（不再用外框隔断） */
-.header[aria-expanded="true"] {
-  background: var(--bg-overlay-l1);
-  border-bottom: 1px solid var(--border-neutral-l1);
-}
-
-.header[aria-expanded="true"]:hover {
-  background: var(--bg-overlay-l2);
-}
-
 .header:focus-visible {
   outline: 2px solid var(--border-brand);
   outline-offset: -2px;
 }
 
-/* ── 状态徽标：圆形浅底 + 状态色图标 ────────────────────── */
-.statusIcon {
+/* ── 状态：2px 圆点（颜色即状态）──────────────────────── */
+.statusDot {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 6px;
+  height: 6px;
   flex-shrink: 0;
   border-radius: var(--radius-full);
 }
 
-.statusIcon.running {
-  color: var(--status-primary-default);
-  background: var(--bg-overlay-l3);
+.statusDot[data-state="running"] {
+  background: var(--status-primary-default);
 }
 
-.statusIcon.done {
-  color: var(--status-success-default);
-  background: var(--bg-brand-popup);
+.statusDot[data-state="done"] {
+  background: var(--status-success-default);
 }
 
-.statusIcon.error {
-  color: var(--status-error-default);
-  background: var(--status-error-surface-l1);
+.statusDot[data-state="error"] {
+  background: var(--status-error-default);
+}
+
+/* 屏幕阅读器专用：状态点本身是装饰性的 */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ── 标题与计数 chip ───────────────────────────────────── */
@@ -93,7 +87,7 @@
   flex-shrink: 0;
 }
 
-/* chevron：统一为 ChevronRight，展开时旋转 90°（状态指示，非入场动画） */
+/* chevron：统一为 ChevronRight，展开时旋转 90° */
 .chevron {
   margin-left: auto;
   color: var(--text-tertiary);
@@ -105,61 +99,12 @@
   transform: rotate(90deg);
 }
 
-/* ── 流式思考有界预览（方向 B：2–3 行渐隐 peek）───────────
-   面板收起且仍在流式/运行时，在 header 下方露思考最新片段。
-   flex-end 对齐 + overflow:hidden → 始终显示文本底部（最新内容），
-   顶部用 mask 渐隐让旧文字溶解；高度锁 4.5em（≈3 行），永不撑高。
-   纯 CSS 静态遮罩，无位移动画，贴合 UI 铁律。 */
-.thinkingPeek {
-  padding: var(--spacer-4) var(--spacer-8) var(--spacer-8);
-}
-
-.thinkingPeekText {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  /* 固定高度（非 max-height）：盒子高度恒定，最新内容永远钉在底部同一位置，
-     旧文字向上溢出裁切——避免流式时 1→2→3 行盒子从上往下长导致的跳动。 */
-  height: 4.5em;
-  overflow: hidden;
-  font-size: var(--body-sm-font-size);
-  line-height: 1.5;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 30%);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 30%);
-}
-
-.thinkingPeekText > span {
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text-secondary);
-}
-
-.peekHint {
-  display: inline-block;
-  margin-top: var(--spacer-4);
-  padding: 0;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--body-xs-font-size);
-  color: var(--text-tertiary);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.peekHint:hover {
-  color: var(--text-default);
-}
-
-/* ── 展开正文区 ─────────────────────────────────────────── */
+/* ── 展开正文区：无自带底色，与聊天区一致 ─────────────── */
 .body {
-  padding: var(--spacer-12);
-  background: var(--bg-base-secondary);
+  padding: var(--spacer-12) 0;
 }
 
-/* step 之间不再用硬分隔线——每个 step 的内容本身是带框卡片，
-   卡片之间靠留白区分即可 */
+/* step 之间靠留白区分 */
 .step + .step {
   margin-top: var(--spacer-12);
 }
@@ -169,90 +114,81 @@
   margin-bottom: 0;
 }
 
-/* ── 思考过程卡片：淡色底 + 细边框，仿 Claude/GitHub 的
-      thinking 块，让大段推理文本不贴壁、可读性更好 ───────── */
-.thinkingContent {
-  font-size: var(--body-sm-font-size);
-  line-height: var(--body-sm-line-height);
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text-secondary);
-  margin-bottom: var(--spacer-8);
-  padding: var(--spacer-10) var(--spacer-12);
-  background: var(--bg-base-tertiary);
-  border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-6);
-}
-
-/* 「思考过程」二级折叠开关：独立小按钮行（thinking 内容分散在
-   各 step 中，故不与内容连体），默认始终折叠 */
-.thinkingToggle {
+/* ── DSH 风格思考行：图标 + 「思考」 + · + 内容 ────────────
+   默认折叠 —— 内容单行、超出用省略号截断；点击展开显示全文
+   （pre-wrap 换行），再点收起。每条思考各自独立。 */
+.thinkingRow {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--spacer-6);
   width: 100%;
-  padding: var(--spacer-4) var(--spacer-8);
-  margin-bottom: var(--spacer-8);
+  padding: var(--spacer-4) 0;
   background: transparent;
   border: none;
-  border-radius: var(--radius-6);
   cursor: pointer;
   user-select: none;
   text-align: left;
   font: inherit;
+  font-size: var(--body-sm-font-size);
+  line-height: var(--body-sm-line-height);
   color: var(--text-secondary);
-  transition: background 0.12s ease;
 }
 
-.thinkingToggle:hover {
-  background: var(--bg-overlay-l1);
-}
-
-.thinkingToggle:focus-visible {
+.thinkingRow:focus-visible {
   outline: 2px solid var(--border-brand);
   outline-offset: -2px;
 }
 
-.thinkingToggleChevron {
-  display: inline-flex;
+.thinkingIcon {
+  flex-shrink: 0;
+  margin-top: 2px;
   color: var(--text-tertiary);
-  transition: transform 0.18s ease;
 }
 
-.thinkingToggleLabel {
-  font-weight: var(--font-weight-medium);
-  color: var(--text-default);
+.thinkingLabel {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.thinkingSep {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.thinkingText {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 展开态：显示全部思考内容（换行，完整铺开） */
+.thinkingRow[data-open] .thinkingText {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: visible;
+}
+
+/* 该步的工具调用行：按时间顺序紧跟该步的思考 / 中间回复之后。
+   上间距与「工具行 → 下一思考行」的间距对齐，让整列行距均匀、
+   不出现「思考贴工具、工具远离下一思考」的头重脚轻感。 */
+.stepTools {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--spacer-6);
 }
 
 /* ── 中间回复（非最终正文的 assistant 文本）────────────── */
 .intermediateSection {
+  margin-top: var(--spacer-10);
   margin-bottom: var(--spacer-8);
 }
 
-.intermediateLabel {
-  font-size: var(--body-xs-font-size);
-  font-weight: var(--font-weight-medium);
-  color: var(--text-tertiary);
-  margin-bottom: var(--spacer-6);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
+/* 中间回复：无自带底色（与聊天区一致） */
 .intermediateContent {
   font-size: var(--body-sm-font-size);
   color: var(--text-secondary);
-  background: var(--bg-base-tertiary);
-  border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-6);
-  padding: var(--spacer-10) var(--spacer-12);
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.spin {
-  animation: spin 0.8s linear infinite;
+  padding: 0;
 }

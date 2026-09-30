@@ -1,3 +1,8 @@
+/* 技能调用卡（LLM 回复区）
+   ─────────────────────────────────────────────────────────
+   无外框、无圆角、无左侧色条；head 与 body 都用浅底区分层级，
+   靠图标/chevron 表达可折叠。颜色走 CSS 变量，暗/亮自适应。 */
+
 .wrap {
   display: flex;
   flex-direction: column;
@@ -10,9 +15,7 @@
   gap: var(--spacer-6);
   width: 100%;
   padding: var(--spacer-4) var(--spacer-8);
-  border: 1px solid var(--border-neutral-l1);
   background: var(--bg-overlay-l1);
-  border-radius: var(--radius-6);
   cursor: pointer;
   text-align: left;
   color: var(--text-secondary);
@@ -53,9 +56,7 @@
 
 .body {
   padding: var(--spacer-4) var(--spacer-8);
-  border-left: 2px solid var(--border-brand);
   background: var(--bg-overlay-l1);
-  border-radius: var(--radius-4);
   font-size: var(--body-sm-font-size);
   line-height: 1.7;
   color: var(--text-default);
@@ -73,8 +74,6 @@
 
 .body :global(pre) {
   background: var(--bg-base-tertiary);
-  border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-4);
   padding: var(--spacer-8);
   overflow-x: auto;
 }

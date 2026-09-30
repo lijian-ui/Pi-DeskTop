@@ -1,11 +1,9 @@
 import { memo, useState } from "react";
-import { ChevronRight, Check, AlertTriangle, Loader2 } from "lucide-react";
+import { ChevronRight, Search, FileText, Terminal, Pencil, Code2, Sparkles, Globe, type LucideIcon } from "lucide-react";
 import type { ToolExecution as ToolExecutionType } from "../store/agent-store";
 import { useTranslation } from "react-i18next";
+import ToolCard from "./ToolCard";
 import styles from "./ToolExecution.module.css";
-
-/** Tool outputs longer than this are collapsed with a "Show full output" button. */
-const OUTPUT_TRUNCATE_LENGTH = 5000;
 
 /**
  * 从工具参数中提炼一行摘要，直接在 header 显示（不用展开就能看到参数）。
@@ -60,25 +58,40 @@ function summarizeArgs(toolName: string, input: any): string {
   }
 }
 
+/**
+ * 按工具名映射一个 DSH 风格的图标，让工具行一眼可辨类型
+ * （browser/web / search / read / bash / write-edit / code / 其它）。
+ */
+function toolIcon(name: string): LucideIcon {
+  const n = name.toLowerCase();
+  // 浏览器 / 联网类工具统一走地球图标（与设置页 websearch 的图标语义一致）
+  if (/browser|chrome|playwright|puppeteer|web|fetch|http|scrape|curl/.test(n)) return Globe;
+  if (/search|grep|find/.test(n)) return Search;
+  if (/read/.test(n)) return FileText;
+  if (/bash|shell|exec|terminal/.test(n)) return Terminal;
+  if (/write|edit|create|patch/.test(n)) return Pencil;
+  if (/code|diff/.test(n)) return Code2;
+  return Sparkles;
+}
+
 function ToolExecution({ execution }: { execution: ToolExecutionType }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const [outputExpanded, setOutputExpanded] = useState(false);
   const argsSummary = summarizeArgs(execution.toolName, execution.input);
-
-  // Truncate very long tool outputs (e.g. build logs) to avoid rendering
-  // megabytes of text. The full output is still stored in execution.output;
-  // clicking "Show full output" renders the complete text.
-  const outputTruncated =
-    !outputExpanded &&
-    typeof execution.output === "string" &&
-    execution.output.length > OUTPUT_TRUNCATE_LENGTH;
 
   const status = execution.isRunning
     ? "running"
     : execution.isError
       ? "error"
       : "done";
+  // cordis_ 前缀的扩展工具走品牌色（对齐 DSH 的 state-business 语义）。
+  const isCordis = execution.toolName.startsWith("cordis_");
+  const statusText = execution.isRunning
+    ? t("chat.statusRunning")
+    : execution.isError
+      ? t("chat.statusError")
+      : t("chat.statusDone");
+  const ToolIcon = toolIcon(execution.toolName);
 
   return (
     <div className={styles.toolExecution} data-status={status}>
@@ -91,7 +104,12 @@ function ToolExecution({ execution }: { execution: ToolExecutionType }) {
         <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}>
           <ChevronRight size={14} />
         </span>
-        <span className={`${styles.label} ${execution.isRunning ? styles.labelRunning : ""}`}>
+        <ToolIcon size={15} className={`${styles.toolIcon} ${isCordis ? styles.toolIconBrand : ""}`} />
+        <span
+          className={`${styles.label} ${isCordis ? styles.labelBrand : ""} ${
+            execution.isRunning ? styles.labelRunning : ""
+          }`}
+        >
           {execution.toolName}
         </span>
         {argsSummary && (
@@ -100,13 +118,8 @@ function ToolExecution({ execution }: { execution: ToolExecutionType }) {
           </span>
         )}
         <span className={styles.status}>
-          {execution.isRunning ? (
-            <Loader2 size={12} className={styles.spinner} />
-          ) : execution.isError ? (
-            <AlertTriangle size={12} className={styles.statusIconError} />
-          ) : (
-            <Check size={12} className={styles.statusIconDone} />
-          )}
+          <span className={styles.statusDot} data-state={status} aria-hidden="true" />
+          <span className={styles.srOnly}>{statusText}</span>
         </span>
       </button>
       {/* 平滑高度动画：grid-rows 0fr↔1fr，配合 collapseInner 的 overflow:hidden。
@@ -114,35 +127,7 @@ function ToolExecution({ execution }: { execution: ToolExecutionType }) {
       <div className={`${styles.collapsePanel} ${expanded ? styles.collapseOpen : ""}`}>
         <div className={styles.collapseInner}>
           <div className={styles.body}>
-            <div className={styles.section}>
-              <div className={styles.sectionLabel}>{t("chat.toolRequest")}</div>
-              <div className={styles.code}>
-                {JSON.stringify(execution.input, null, 2)}
-              </div>
-            </div>
-            {execution.output && (
-              <div className={styles.section}>
-                <div className={styles.sectionLabel}>{t("chat.toolResult")}</div>
-                <div className={styles.code}>
-                  {outputTruncated
-                    ? execution.output!.slice(0, OUTPUT_TRUNCATE_LENGTH)
-                    : execution.output}
-                  {outputTruncated && (
-                    <button
-                      className={styles.expandOutput}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOutputExpanded(true);
-                      }}
-                    >
-                      {t("chat.showFullOutput", {
-                        size: (execution.output!.length / 1024).toFixed(0),
-                      })}
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
+            <ToolCard execution={execution} />
           </div>
         </div>
       </div>

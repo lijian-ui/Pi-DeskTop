@@ -31,55 +31,6 @@ function parseCommand(text: string): { name: string; args: string } | null {
   return { name: m[1], args: (m[2] ?? "").trim() };
 }
 
-/** Which args field carries the human-relevant payload per tool name. */
-const TOOL_ARG_KEY: Record<string, string> = {
-  read_file: "path",
-  write_file: "path",
-  edit_file: "path",
-  list_files: "path",
-  delete_file: "path",
-  bash: "command",
-  command: "command",
-  run_command: "command",
-  run_shell: "command",
-  grep: "pattern",
-  search: "pattern",
-  glob: "pattern",
-  find: "pattern",
-  web_fetch: "url",
-  web_search: "query",
-};
-
-/**
- * Human-readable tool call for the card progress line, e.g.
- * `read_file E:/Project/pi-desktop/README.md` or `bash npm run build`.
- * Falls back to the first non-object arg, then the bare tool name.
- */
-function formatToolCall(toolName: string, args: unknown): string {
-  let argObj: Record<string, unknown> = {};
-  if (args && typeof args === "object" && !Array.isArray(args)) {
-    argObj = args as Record<string, unknown>;
-  } else if (typeof args === "string") {
-    try {
-      const parsed = JSON.parse(args);
-      if (parsed && typeof parsed === "object") argObj = parsed;
-    } catch {
-      /* keep empty */
-    }
-  }
-  const key = TOOL_ARG_KEY[toolName];
-  const raw = key ? argObj[key] : undefined;
-  if (raw !== undefined && raw !== null && typeof raw !== "object") {
-    return `${toolName} ${String(raw)}`;
-  }
-  for (const v of Object.values(argObj)) {
-    if (v !== undefined && v !== null && typeof v !== "object") {
-      return `${toolName} ${String(v)}`;
-    }
-  }
-  return toolName;
-}
-
 /** /help reply — the command list shown in the IM channel. */
 const HELP_TEXT = [
   "🤖 可用命令：",
@@ -977,16 +928,6 @@ export class ImGateway {
           }
         }
       }
-    } else if (event?.type === "tool_execution_start") {
-      // Show the current tool call ON the streaming card (overwrite) — it
-      // stays visible only until the next text_delta arrives, which replaces
-      // it with the real reply (smooth full-accumulated growth, no stacking,
-      // no scrolling window). Exactly the "show tool, then reply" feel.
-      const pending = this.pending.get(sessionPath);
-      if (pending && !pending.voiceOnly && pending.adapter.streamText && event?.toolName) {
-        const label = formatToolCall(event.toolName, event?.args);
-        pending.adapter.streamText(pending.target, `🔧 正在调用工具：${label}`).catch(() => {});
-      }
     } else if (event?.type === "agent_end") {
       // Reply cycle finished (all turns done, including tool calls). Finalize
       // the card with the last assistant message's full text — or with a
@@ -1056,6 +997,44 @@ export class ImGateway {
     await Promise.all(this.adapters.map((a) => a.stop().catch(() => {})));
     this.adapters = [];
     this.statusMap = {};
+  }
+
+  /**
+   * Explicit outbound file delivery — the `send_file` tool path. Given a Pi
+   * session path, locate the IM conversation that owns it and hand the local
+   * file to its peer via the adapter's direct sendFile primitive.
+   *
+   * Desktop (non-IM) sessions or sessions with no browser adapter are ignored:
+   * the agent is told the file could not be sent here, so it doesn't loop.
+   */
+  async sendFileToSession(
+    sessionPath: string,
+    filePath: string,
+  ): Promise<{ ok: boolean; message: string }> {
+    const sessionKey = this.sessionMap.keyForSessionPath(sessionPath);
+    if (!sessionKey) {
+      return { ok: false, message: "当前不是 IM 会话，文件未发送（桌面环境请直接查看工作目录）" };
+    }
+    const { instanceId, peer } = parseSessionKey(sessionKey);
+    if (!instanceId || !peer) {
+      return { ok: false, message: "无法确定 IM 会话的接收方，文件未发送" };
+    }
+    const adapter = this.adapterFor(instanceId);
+    if (!adapter || !adapter.sendFile) {
+      return { ok: false, message: "当前 IM 渠道不支持显式发送文件" };
+    }
+    try {
+      const ok = await adapter.sendFile(peer, filePath);
+      return ok
+        ? { ok: true, message: "文件已发送" }
+        : { ok: false, message: "文件发送失败（请确认文件存在且未超出大小限制）" };
+    } catch (err) {
+      console.warn("[im] sendFileToSession failed:", err);
+      return {
+        ok: false,
+        message: `文件发送失败：${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
 
   /**

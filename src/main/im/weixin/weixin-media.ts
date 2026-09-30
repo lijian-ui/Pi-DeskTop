@@ -105,8 +105,11 @@ function parseAesKey(aesKeyBase64: string, label: string): Buffer {
 
 // ── Inbound: download + decrypt ──
 
+/** Guard against a hung/ossified CDN: abort the fetch after this long. */
+const CDN_FETCH_TIMEOUT_MS = 30_000;
+
 async function fetchCdnBytes(url: string, label: string): Promise<Buffer> {
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(CDN_FETCH_TIMEOUT_MS) });
   if (!res.ok) {
     throw new Error(`${label}: CDN download ${res.status} ${res.statusText}`);
   }

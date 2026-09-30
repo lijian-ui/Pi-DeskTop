@@ -63,10 +63,9 @@ export function resolveProjectSkillDiscovery(
   const detected = detectProjectSkills(projectsMemoryDir, cwd);
   skillStore.setProjectContext(detected.name, detected.skillsDir);
 
-  // Pi auto-discovers its own `~/.pi/agent/skills/`, but this extension keeps
-  // its generated skills in a directory of its own so users can audit, wipe, or
-  // ignore them without touching skills they installed themselves (#126). Both
-  // of ours must therefore be contributed here.
+  // This extension writes its generated skills directly into Pi's own global
+  // skills root (~/.pi/agent/skills/), so Pi discovers them on load without any
+  // extra bridging. We still contribute the path here for explicit discovery.
   const skillPaths = [skillStore.getGlobalSkillsDir()];
   if (detected.skillsDir) skillPaths.push(detected.skillsDir);
   return { skillPaths };
@@ -157,12 +156,12 @@ export default function (pi: ExtensionAPI) {
   // and from tool execute ctx.cwd.
   let projectName = "";
   const skillStore = new SkillStore({
-    globalSkillsDir: path.join(globalDir, "skills"),
+    globalSkillsDir: path.join(agentRoot, "skills"), // 全局技能固定落 agent 根 skills（原跟随 memoryDir 默认会落到 pi-hermes-memory/skills）
     piGlobalSkillsDir: path.join(agentRoot, "skills"),
     projectSkillsDir: null,
     projectName: null,
     legacySkillsDir: path.join(legacyGlobalDir, "skills"),
-    migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
+    migrationSentinelPath: path.join(agentRoot, ".skills-migrated-to-extension-storage"),
   });
   const dbManager = new DatabaseManager(globalDir);
   dbManager.setQuickCheckOnOpen(config.quickCheckOnOpen ?? true);

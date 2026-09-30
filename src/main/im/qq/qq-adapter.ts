@@ -14,11 +14,10 @@
  * Outbound: `bot.sendText({ scope, targetId }, text)`. QQ renders markdown
  * natively when the bot has markdown permission, so no filtering is needed.
  */
-import { statSync, writeFileSync, unlinkSync } from "node:fs";
+import { writeFileSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import type {
-  MediaFileType,
   QQBot,
   QQBotInboundMessage,
   StreamSession,
@@ -29,40 +28,11 @@ import { audioFileToSilkBase64 } from "@tencent-connect/qqbot-nodejs/protocol";
 import type { ImChannelAdapter, ImImage, ImInboundMessage, ImStatus } from "../types";
 import type { ImChannelInstance } from "../im-config";
 import { getActiveTtsConfig, synthesizeSpeech } from "../../tts/tts-service";
+import { parseDingtalkFile } from "../dingtalk/dingtalk-media";
+import { extractMediaRefs, isImageFile, MAX_MEDIA_BYTES, MEDIA_FETCH_TIMEOUT_MS } from "../media-shared";
 
 const BASE_BACKOFF_DELAY = 2_000;
 const MAX_BACKOFF_DELAY = 30_000;
-
-/** True when a path points at a local file (drive letter, /, ~, file://). */
-function isLocalPath(raw: string): boolean {
-  return (
-    raw.startsWith("file://") ||
-    /^[A-Za-z]:[\\/]/.test(raw) ||
-    raw.startsWith("/") ||
-    raw.startsWith("~")
-  );
-}
-
-/** True when the path exists AND is a regular file (directories are skipped
- *  so a `pwd`-style output never gets uploaded as media). */
-function isRegularFile(p: string): boolean {
-  try {
-    return statSync(p).isFile();
-  } catch {
-    return false;
-  }
-}
-
-/** Strip file:// / URL-encoding to get the on-disk absolute path. */
-function toLocalPath(raw: string): string {
-  let p = raw.startsWith("file://") ? raw.slice("file://".length) : raw;
-  try {
-    p = decodeURIComponent(p);
-  } catch {
-    /* keep as-is */
-  }
-  return p;
-}
 
 /** Guess a MIME type from a download URL (QQ attachments expose content_type). */
 function mimeFromContentType(ct: string | undefined): string {
@@ -256,23 +226,58 @@ export class QqAdapter implements ImChannelAdapter {
       .find((t): t is string => Boolean(t));
     if (voiceText) text = text ? `${text}\n[语音转文字: ${voiceText}]` : `[语音转文字: ${voiceText}]`;
 
-    // Download inbound images (attachments carry a plain URL) → base64.
+    // Download images → base64; download other files → best-effort text
+    // extraction (mirrors openclaw-qqbot attachment handling).
     const images: ImImage[] = [];
+    const fileNotes: string[] = [];
     for (const att of msg.attachments ?? []) {
       if (!att.url) continue;
-      if (!att.content_type?.startsWith("image/")) continue;
+      if (att.content_type?.startsWith("image/")) {
+        try {
+          const res = await fetch(att.url, {
+            signal: AbortSignal.timeout(MEDIA_FETCH_TIMEOUT_MS),
+          });
+          if (!res.ok) continue;
+          const buf = Buffer.from(await res.arrayBuffer());
+          if (buf.length > MAX_MEDIA_BYTES) {
+            console.warn("[im:qq] image download skipped: exceeds size cap");
+            continue;
+          }
+          images.push({
+            type: "image",
+            data: buf.toString("base64"),
+            mimeType: mimeFromContentType(att.content_type),
+          });
+        } catch (err) {
+          console.warn("[im:qq] image download failed:", err);
+        }
+        continue;
+      }
+      // Non-image attachment (general file).
       try {
-        const res = await fetch(att.url);
+        const res = await fetch(att.url, {
+          signal: AbortSignal.timeout(MEDIA_FETCH_TIMEOUT_MS),
+        });
         if (!res.ok) continue;
         const buf = Buffer.from(await res.arrayBuffer());
-        images.push({
-          type: "image",
-          data: buf.toString("base64"),
-          mimeType: mimeFromContentType(att.content_type),
-        });
+        if (buf.length > MAX_MEDIA_BYTES) {
+          console.warn("[im:qq] file download skipped: exceeds size cap");
+          continue;
+        }
+        const name = att.filename ?? "file";
+        const extracted = await parseDingtalkFile(buf, name);
+        fileNotes.push(
+          extracted
+            ? `[文件: ${name}]\n${extracted}`
+            : `[文件: ${name} (${(buf.length / 1024) | 0}KB)]`,
+        );
       } catch (err) {
-        console.warn("[im:qq] image download failed:", err);
+        console.warn("[im:qq] file download failed:", err);
       }
+    }
+
+    if (fileNotes.length) {
+      text = text ? `${text}\n${fileNotes.join("\n\n")}` : fileNotes.join("\n\n");
     }
 
     if (!text && images.length === 0) return;
@@ -355,7 +360,7 @@ export class QqAdapter implements ImChannelAdapter {
         console.warn("[im:qq] sendVoice: no active TTS config");
         return false;
       }
-      const { audioBase64, format } = await synthesizeSpeech(ttsConfig, text);
+      const { audioBase64 } = await synthesizeSpeech(ttsConfig, text);
       const wavPath = join(tmpdir(), `tts-${Date.now()}.wav`);
       writeFileSync(wavPath, Buffer.from(audioBase64, "base64"));
       try {
@@ -428,27 +433,20 @@ export class QqAdapter implements ImChannelAdapter {
     const bot = this.bot;
     if (!bot) return text;
     let result = text;
-    // 1. markdown image syntax: ![alt](<local path>)
-    for (const m of text.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)) {
-      const [full, alt, p] = m;
-      if (!isLocalPath(p)) continue;
-      const filePath = toLocalPath(p);
-      console.warn(`[im:qq] md-image ref → ${filePath} file=${isRegularFile(filePath)}`);
-      if (!isRegularFile(filePath)) continue;
-      await this.sendLocalMedia(rt, filePath);
-      result = result.replace(full, alt ? `[${alt}]` : "[图片]");
-    }
-    // 2. bare absolute paths that exist on disk.
-    const bareFile =
-      /(?:file:\/\/)?[A-Za-z]:[\\/][^\s"'()<>]+|(?:\/(?:Users|home|tmp|var|private|root)\/[^\s"'()<>]+)/g;
-    for (const m of result.matchAll(bareFile)) {
-      const filePath = toLocalPath(m[0]);
-      if (!isRegularFile(filePath)) continue;
-      console.warn(`[im:qq] bare path ref → ${filePath}`);
-      const ok = await this.sendLocalMedia(rt, filePath);
-      if (ok) {
-        const isImg = /\.(png|jpe?g|gif|bmp|webp)$/i.test(filePath);
-        result = result.replace(m[0], isImg ? "[图片]" : `[文件已发送：${basename(filePath)}]`);
+    // Shared scan: md-image + bare on-disk paths (image vs file classified).
+    for (const ref of extractMediaRefs(text)) {
+      if (ref.kind === "image") {
+        // Markdown image reference — deliver the image, replace the syntax.
+        const ok = await this.sendLocalMedia(rt, ref.path);
+        result = result.replace(ref.full, ok ? "[图片]" : "⚠️ 图片上传失败");
+      } else {
+        const ok = await this.sendLocalMedia(rt, ref.path);
+        if (ok) {
+          result = result.replace(
+            ref.full,
+            `[文件已发送：${basename(ref.path)}]`,
+          );
+        }
       }
     }
     return result;
@@ -462,7 +460,7 @@ export class QqAdapter implements ImChannelAdapter {
     const bot = this.bot;
     if (!bot) return false;
     try {
-      const isImage = /\.(png|jpe?g|gif|bmp|webp)$/i.test(filePath);
+      const isImage = isImageFile(filePath);
       console.warn(`[im:qq] sending media ${filePath} (image=${isImage})`);
       if (isImage) {
         await bot.sendImage(rt, { localPath: filePath });
@@ -481,6 +479,14 @@ export class QqAdapter implements ImChannelAdapter {
       console.warn(`[im:qq] media send failed (${filePath}):`, String(err));
       return false;
     }
+  }
+
+  /** Explicit `send_file` tool path — deliver a local file directly (no text
+   *  scanning). */
+  async sendFile(target: string, filePath: string): Promise<boolean> {
+    const rt = this.parseTarget(target);
+    if (!rt) return false;
+    return await this.sendLocalMedia(rt, filePath);
   }
 
   // ── Streaming (C2C only — QQ stream_messages API is c2c-scoped) ──

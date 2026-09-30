@@ -59,6 +59,13 @@ export interface ImChannelAdapter {
    * back to sendText).
    */
   sendVoice?(target: string, text: string): Promise<boolean>;
+  /**
+   * Optional EXPLICIT file send — the `send_file` tool path. Unlike sendText,
+   * this uploads + delivers the given local file DIRECTLY with no reply-text
+   * path scanning. Called by the gateway when the agent explicitly asks to
+   * hand a file to the user. Returns true on success.
+   */
+  sendFile?(target: string, filePath: string): Promise<boolean>;
   /** Optional "typing…" indicator. */
   sendTyping?(target: string): Promise<void>;
   /**

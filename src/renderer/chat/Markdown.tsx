@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Options as MarkdownOptions } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 import rehypeHighlight from "rehype-highlight";
 import mermaid from "mermaid";
 import { Copy, Check } from "lucide-react";
@@ -75,6 +76,14 @@ function Mermaid({ chart }: { chart: string }) {
  * streamed token (the #1 rendering cost in long conversations).
  */
 const REMARK_PLUGINS: MarkdownOptions["remarkPlugins"] = [remarkGfm];
+/**
+ * User-message variant: treat single `\n` as hard line breaks (`<br>`),
+ * matching the composer's plain-text multi-line editing experience.
+ * Assistant replies don't use this — they're written in proper Markdown with
+ * paragraph-separating blank lines, and single `\n` in prose is usually meant
+ * to collapse with surrounding text.
+ */
+const REMARK_PLUGINS_BREAKS: MarkdownOptions["remarkPlugins"] = [remarkGfm, remarkBreaks];
 const REHYPE_PLUGINS: MarkdownOptions["rehypePlugins"] = [
   [rehypeHighlight, { ignoreMissing: true }],
 ];
@@ -148,6 +157,7 @@ function FilePathLink({ path }: { path?: string }) {
 function Markdown({
   content,
   linkifyPaths = false,
+  breaks = false,
 }: {
   content: string;
   /**
@@ -156,11 +166,17 @@ function Markdown({
    * which would fire a stat() per candidate path per token.
    */
   linkifyPaths?: boolean;
+  /**
+   * Treat single `\n` as hard line breaks (`<br>`). Default off — assistant
+   * replies use proper Markdown paragraph breaks (`\n\n`). User messages
+   * should turn this on so multi-line composer input displays as typed.
+   */
+  breaks?: boolean;
 }) {
   return (
     <div className={styles.markdown}>
       <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
+        remarkPlugins={breaks ? REMARK_PLUGINS_BREAKS : REMARK_PLUGINS}
         rehypePlugins={linkifyPaths ? REHYPE_PLUGINS_PATHS : REHYPE_PLUGINS}
         components={linkifyPaths ? MD_COMPONENTS_PATHS : MD_COMPONENTS}
       >

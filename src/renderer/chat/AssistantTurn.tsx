@@ -73,6 +73,12 @@ function AssistantTurn({ messages, highlight }: Props) {
     i === finalIdx && m.content?.trim() ? { ...m, content: "" } : m
   );
 
+  // 过程区（思考/工具/中间回复）是否会有内容渲染 —— 与 ThinkingTools 内部
+  // 的渲染条件保持一致，用于决定「过程区 ↔ 最终正文」之间是否显示浅分割线。
+  const hasPanelContent = panelMessages.some(
+    (m) => !!m.thinking?.trim() || (m.toolExecutions?.length ?? 0) > 0 || !!m.content?.trim()
+  );
+
   const isStreaming = messages.some((m) => m.isStreaming);
   const hasTemporalContent = messages.some(
     (m) => !!m.thinking?.trim() || m.toolExecutions?.length
@@ -215,6 +221,11 @@ function AssistantTurn({ messages, highlight }: Props) {
         {/* 思考 / 工具 / 中间回复：聚合折叠面板（默认始终折叠，
             流式时也不自动展开；想看过程可手动点开） */}
         <ThinkingTools messages={panelMessages} />
+        {/* 过程区与最终正文之间的浅分割线：仅在两者同时存在时出现，
+            不展开过程区、也没有正文时不渲染，避免出现悬空的分割线 */}
+        {hasPanelContent && finalContent.trim() && (
+          <div className={styles.divider} aria-hidden="true" />
+        )}
         {/* 最终回复正文：始终独立展示 */}
         {finalContent.trim() && (
           <div id={`msg-${finalMsg.id}`} className={styles.content}>

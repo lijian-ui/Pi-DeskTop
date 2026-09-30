@@ -2,7 +2,9 @@
   display: flex;
   flex-direction: column;
   width: 460px;
-  flex-shrink: 0;
+  /* 允许被 flex 收缩：聊天区有 min-width 兜底，空间不够时由本面板收缩吸收，
+     而不是把聊天区压没（拖到一定程度就"拖不动"）。 */
+  flex-shrink: 1;
   height: 100%;
   border-left: 1px solid var(--border-neutral-l1);
   background: var(--bg-base-default);
