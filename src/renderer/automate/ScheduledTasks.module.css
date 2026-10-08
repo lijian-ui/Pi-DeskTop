@@ -347,7 +347,9 @@
 }
 
 .textarea {
-  resize: vertical;
+  /* 高度由内容自动撑开（超上限内部滚动），所以不需要手动拖拽调整 */
+  resize: none;
+  overflow-y: auto;
   line-height: 1.5;
 }
 

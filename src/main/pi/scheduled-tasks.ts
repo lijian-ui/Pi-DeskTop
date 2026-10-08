@@ -2,6 +2,7 @@ import { readFile, writeFile, rename, mkdir, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { parseJsonText } from "../json-file";
 import {
   emptyState,
   sameSchedule,
@@ -31,10 +32,10 @@ export interface ScheduledTask {
   schedule: TaskSchedule;
   createdAt: string;
   /**
-   * Path to this task's single, accumulating session. Every execution appends
-   * to the same file (see session-manager.runScheduledTask), so the sidebar can
-   * open one conversation that holds the full run history. Null until the task
-   * has run at least once.
+   * Legacy single accumulating session (one file shared by every execution in
+   * older builds). New runs each create their own session and record it on the
+   * run row instead; this field is kept only so pre-existing history stays
+   * reachable and can be cleaned up when the task is deleted.
    */
   sessionPath?: string | null;
   /**
@@ -60,10 +61,10 @@ export interface ScheduledTask {
 export type RunStatus = "success" | "error" | "running";
 
 export interface ScheduledTaskRun {
-  /** Unique per run. Required because one session accumulates MANY runs that
-   *  share the same sessionPath — sessionPath alone cannot identify a run. */
+  /** Unique per run; also the identity of the run in the sidebar. */
   id: string;
   taskId: string;
+  /** Conversation file this execution wrote (one fresh file per run). */
   sessionPath: string;
   startedAt: string;
   finishedAt?: string;
@@ -131,7 +132,7 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
 async function readJson<T>(path: string, fallback: T): Promise<T> {
   try {
     const raw = await readFile(path, "utf8");
-    return JSON.parse(raw) as T;
+    return parseJsonText<T>(raw);
   } catch {
     return fallback;
   }
@@ -239,40 +240,28 @@ export async function saveScheduledTask(task: ScheduledTask): Promise<void> {
   });
 }
 
-/**
- * Stamp the path of a task's single accumulating session onto the task, so the
- * sidebar can open it. Separated from `saveScheduledTask` so first-run wiring
- * never trips the schedule-change / re-enable nextRunAt invalidation.
- */
-export async function setTaskSessionPath(
-  taskId: string,
-  sessionPath: string,
-): Promise<void> {
-  return withLock(async () => {
-    const tasks = await readTasks();
-    const idx = tasks.findIndex((t) => t.id === taskId);
-    if (idx < 0) return;
-    if (tasks[idx].sessionPath === sessionPath) return;
-    tasks[idx] = { ...tasks[idx], sessionPath };
-    await writeTasks(tasks);
-  });
-}
-
 export async function deleteScheduledTask(taskId: string): Promise<void> {
   return withLock(async () => {
     const tasks = await readTasks();
     const task = tasks.find((t) => t.id === taskId);
-    // Best-effort removal of the task's single run session so it doesn't linger
-    // orphaned in the dedicated scheduled-sessions directory.
-    if (task?.sessionPath && existsSync(task.sessionPath)) {
+    const runs = await readRuns();
+    // Best-effort removal of every conversation this task produced — one file
+    // per run, plus the legacy single accumulating session (if the task
+    // predates per-run sessions) — so nothing lingers orphaned in sessions/.
+    const targets = new Set<string>();
+    if (task?.sessionPath) targets.add(task.sessionPath);
+    for (const r of runs) {
+      if (r.taskId === taskId && r.sessionPath) targets.add(r.sessionPath);
+    }
+    for (const path of targets) {
+      if (!existsSync(path)) continue;
       try {
-        await unlink(task.sessionPath);
+        await unlink(path);
       } catch {
         /* non-fatal: the task is already gone from the index */
       }
     }
     await writeTasks(tasks.filter((t) => t.id !== taskId));
-    const runs = await readRuns();
     await writeRuns(runs.filter((r) => r.taskId !== taskId));
     const states = await readStates();
     if (states[taskId]) {

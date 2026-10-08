@@ -14,6 +14,19 @@
   min-width: 0;
 }
 
+/* ToolCard 所有内部 <code> 都不是 inline code chip —— 去掉 global.css
+   给裸 <code> 加的灰底/圆角/padding，让 ToolCard 自己的 class 控制视觉。
+   注意：global.css 的 `code:not(pre code):not(.hljs)` 权重为 (0,1,3)，
+   普通 `.card code` 只有 (0,1,1) 会被压过，故这里按元素 class 精确提权。 */
+.card code.command,
+.card code.lineText,
+.card code.diffText,
+.card code.searchText {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
 /* ── 终端 / bash ─────────────────────────────────────── */
 .terminalHeader {
   display: flex;
@@ -103,6 +116,7 @@
   font-family: var(--font-family-mono);
   font-size: var(--code-terminal-font-size);
   line-height: var(--code-terminal-line-height);
+  background: transparent;
 }
 
 .lineNo {
@@ -118,6 +132,7 @@
   padding: 0 var(--spacer-8);
   white-space: pre;
   color: var(--text-default);
+  background: transparent;
 }
 
 /* ── write/edit：差异 ─────────────────────────────────── */

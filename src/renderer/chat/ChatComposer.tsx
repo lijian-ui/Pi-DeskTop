@@ -32,6 +32,7 @@ import { useTranslation } from "react-i18next";
 import type { SkillInfo } from "../../preload/api";
 import { useBashGuardStore, type BashMode } from "../store/bashGuard-store";
 import BashApprovalModal from "./BashApprovalModal";
+import McpApprovalModal from "./McpApprovalModal";
 import AskUserPanel from "./AskUserPanel";
 import ToolModePicker from "./ToolModePicker";
 import AtFilePicker, { toRelative } from "./AtFilePicker";
@@ -1024,6 +1025,7 @@ export default function ChatComposer() {
   return (
     <div className={styles.composer}>
       <BashApprovalModal />
+      <McpApprovalModal />
       <AskUserPanel />
       {(isCompacting || showCompactDone) && (
         <div className={styles.statusBars}>

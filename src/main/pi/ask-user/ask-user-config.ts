@@ -8,10 +8,10 @@
  * extension re-reads it synchronously on every execute so a change applies
  * without a reload.
  */
-import { readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { readJsonFile, readJsonFileSync } from "../../json-file";
 
 export interface AskUserConfig {
   enabled: boolean;
@@ -31,7 +31,7 @@ function normalize(raw: unknown): AskUserConfig {
 
 export async function readAskUserConfig(): Promise<AskUserConfig> {
   try {
-    return normalize(JSON.parse(await readFile(configPath(), "utf-8")));
+    return normalize(await readJsonFile(configPath()));
   } catch {
     return defaultConfig();
   }
@@ -40,7 +40,7 @@ export async function readAskUserConfig(): Promise<AskUserConfig> {
 /** Synchronous read for the extension factory / execute path. */
 export function readAskUserConfigSync(): AskUserConfig {
   try {
-    return normalize(JSON.parse(readFileSync(configPath(), "utf-8")));
+    return normalize(readJsonFileSync(configPath()));
   } catch {
     return defaultConfig();
   }

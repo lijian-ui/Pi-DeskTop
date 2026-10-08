@@ -181,8 +181,10 @@
   user-select: none;
   color: var(--text-tertiary);
   border-right: 1px solid var(--border-neutral-l1);
-  position: sticky;
-  left: 0;
+  /* 刻意不做 position: sticky —— 每行一个 sticky 会让滚动容器带上 N 个
+     sticky 元素（一个 750 行的文件就是 750 个），Blink 每帧都要为它们
+     重算 pin 约束，滚动直接卡成幻灯片。而且 .lineNo 是透明底，
+     横向滚动时代码文字会从行号底下透出来，本来就是花的。 */
   line-height: 1.6;
 }
 

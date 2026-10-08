@@ -209,6 +209,29 @@ function asText(result: unknown): AgentToolResult<unknown> {
 
 // 托管桥概念已移除（CDP 直连）；window 状态分支直接取 getManagedCdp(cfg)。
 
+/**
+ * 快照是否显示「页面毫无变化」——delta 优先，其次旧的粗粒度 diff。
+ * 命中即认为模型刚做的动作没有生效，用于死循环判定。
+ */
+function snapshotUnchanged(snapshot: BrowserSnapshot): boolean {
+  const delta = snapshot?.delta;
+  if (delta && !delta.firstSnapshot && !delta.incomparable) return delta.substantive === false;
+  const diff = snapshot?.diff;
+  if (diff && !diff.firstSnapshot) return diff.changed === false;
+  return false;
+}
+
+/** 连续「无变化快照」达此数量 → 追加警告式停止指令。 */
+const SNAPSHOT_STALL_WARN = 3;
+/** 连续「无变化快照」达此数量 → 标记为错误结果并强制结束本轮（死循环）。 */
+const SNAPSHOT_STALL_STOP = 5;
+
+/**
+ * 只读动作集合：不改页面、无副作用，无人值守下可由 `allowUnattendedRead` 单独放行。
+ * 刻意**不含** get_cookie（导出登录凭据）与 evaluate（可在页面跑任意 JS）。
+ */
+const READ_ONLY_ACTIONS = new Set<string>(["tab.list", "page.snapshot", "page.screenshot"]);
+
 export function createBrowserTool(options: BrowserToolOptions = {}): InlineExtension {
   const unattended = options.unattended === true;
 
@@ -226,6 +249,26 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
         })
         .catch((error) => console.warn("[browser] 托管 Chrome 预热失败：", (error as Error).message));
 
+      // 连续「无变化快照」计数（本会话内）。任何**会改变页面**的动作都会把它清零，
+      // 因此只有「模型反复 snapshot 而页面纹丝不动」才会累积 → 判定死循环。
+      let stalledSnapshots = 0;
+      // 死循环被强制终止后待补发的可见说明（terminate 之后模型已无法再发言）。
+      let loopNotice: number | undefined;
+      pi.on("agent_end", () => {
+        if (loopNotice === undefined) return;
+        const count = loopNotice;
+        loopNotice = undefined;
+        // 与宿主层兜底用同一个 customType，渲染层无需区分来源。
+        pi.sendMessage({
+          customType: "loop-guard",
+          display: true,
+          content:
+            "⛔ 模型遇到问题，任务已被终止。\n\n" +
+            `原因：连续 ${count} 次快照页面**毫无变化**，说明它在重复一个无效动作（死循环），系统已强制结束本轮。\n\n` +
+            "建议：把目标拆得更具体，或直接告诉它你期望的下一步，然后重新发起。",
+        });
+      });
+
       /**
        * send() 的「检查 + 派发」主体。审计由外层 send() 包办（成功/失败各记一条）。
        *
@@ -241,7 +284,7 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
         signal: AbortSignal | undefined,
         cfg: BrowserConfig,
       ): Promise<unknown> => {
-        assertBrowserAuthorized(unattended, cfg); // 授权闸门（未授权/无人值守越界即抛）
+        assertBrowserAuthorized(unattended, cfg, { readOnly: READ_ONLY_ACTIONS.has(action) }); // 授权闸门（未授权/无人值守越界即抛）
         // 动作级门禁：upload / evaluate / 组合键默认拒绝（详见 browser-guard.ts）。
         assertActionGuarded(action, params, cfg);
         // 后台策略：
@@ -274,6 +317,9 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
           foreground: !background,
         });
         rememberFromResult(result); // 供 browser window show 自动恢复页面
+        // 非快照动作会改变页面（或至少代表换了策略）→ 清零停滞计数；
+        // 只有连续 snapshot 才允许累积，避免把「边操作边观察」误判成死循环。
+        if (action !== "page.snapshot") stalledSnapshots = 0;
         return result;
       };
 
@@ -328,6 +374,7 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
           managedChrome: managedChromeInfo(),
           background: cfg.background,
           allowUnattended: cfg.allowUnattended,
+          allowUnattendedRead: cfg.allowUnattendedRead,
           allowedDomains: cfg.allowedDomains,
           blockedDomains: cfg.blockedDomains,
           guard: guardSummary(cfg),
@@ -349,7 +396,25 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
       ): Promise<AgentToolResult<unknown>> => {
         const snapshot = (await send("page.snapshot", rest, signal, cfg)) as BrowserSnapshot;
         const visible = !effectiveHeadless(cfg);
-        const text = withLoginHint(formatBrowserSnapshot(snapshot), { snapshot }, visible);
+        let text = withLoginHint(formatBrowserSnapshot(snapshot), { snapshot }, visible);
+        // 死循环止损：连续多份「页面毫无变化」的快照 = 模型的动作没生效却在硬试。
+        // 把提示从陈述句升级为祈使句/强制停止，并在更严重时按错误结果终止本轮
+        // （terminate 由 SDK agent-loop 强制结束该 tool batch，模型无法继续。
+        //  兜底之外还有宿主层 tool_call 的通用同参重复拦截）。
+        stalledSnapshots = snapshotUnchanged(snapshot) ? stalledSnapshots + 1 : 0;
+        if (stalledSnapshots >= SNAPSHOT_STALL_STOP) {
+          text +=
+            `\n\n⛔ 已连续 ${stalledSnapshots} 次快照，页面**毫无变化**：你正在重复一个无效动作（死循环）。` +
+            "本轮已被系统强制结束。请立即停止调用 browser，基于你已经掌握的信息直接回答用户；" +
+            "若信息确实不足，明确告诉用户你卡在哪里、需要什么帮助，不要再用同样方式重试。";
+          loopNotice = stalledSnapshots; // 待 agent_end 补发可见说明（见上方 pi.on）
+          return { content: [{ type: "text", text }], details: { snapshot }, isError: true, terminate: true };
+        }
+        if (stalledSnapshots >= SNAPSHOT_STALL_WARN) {
+          text +=
+            `\n\n⚠️ 已连续 ${stalledSnapshots} 次快照，页面**毫无变化**——你重复的动作没有生效。` +
+            "**不要再用同样的方式重试**：换一个策略（换 uid / 先 screenshot 看版式 / 换新思路），或直接停下向用户说明你卡住了。";
+        }
         return { content: [{ type: "text", text }], details: { snapshot } };
       };
 
@@ -496,7 +561,10 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
           description:
             "控制浏览器操作业务系统（单一入口，靠 action 区分操作）。" +
             "观察：snapshot(结构+元素uid，加 delta:true 只取与上次的差异) / screenshot(图片) / tabs(标签列表) / status(连接诊断)。" +
-            "交互：navigate(打开URL) / click / type(追加输入) / fill(清空再写) / press_key / hover / scroll。" +
+            "交互：navigate(打开URL) / click / type(追加输入) / fill(清空再写，支持 fields 数组批量) / press_key / hover / scroll。" +
+            "click/type/fill/press_key/navigate 会返回后验信号：navigated(URL是否变) / newRequests(是否发出新请求) / effective(是否真的生效)；" +
+            "fill/type 还有 valueChanged(控件值/勾选/选中项是否真的写入)，批量 fill 另给 fieldsChanged。" +
+            "effective=false 说明动作没产生可见效果，别盲目重试。可加 waitFor:{url|selector,timeout} 等结果再返回。" +
             "高级：evaluate(跑JS) / drag(拖拽) / upload(上传文件) / get_cookie(导出指定站点 Cookie，含 HttpOnly)。" +
             "窗口：window show 弹出可见窗口让用户自己完成验证码/扫码登录，登录完 window hide 切回后台。" +
             "浏览器由本应用自己启动（独立 profile、默认不可见、登录态跨会话保留），**不需要安装任何浏览器扩展**。",
@@ -506,6 +574,10 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
             '操作业务系统前，先 browser({action:"snapshot"}) 观察页面、拿元素 uid，或 browser({action:"tabs"}) 找目标标签页 id；后续定位一律用 uid / targetId。',
             '用户给网址让你干活时，先 browser({action:"navigate", url}) 打开，再 snapshot 看内容。',
             '点击/输入用 uid（来自最近一次 snapshot）；uid 失效就重新 snapshot，不要盲目重试。',
+            'click/type/fill/press_key/navigate 的返回里 effective=false 表示 URL 未变、无新请求、控件值未变、元素仍在原位——即这一步没生效；应重新 snapshot 核对，而不是原样重试。fill/type 会明确给 valueChanged：为 true 就说明值确实写进去了，即使 effective 里其它项都为 false 也算成功，不要再重试。要等结果可在动作里带 waitFor:{url:"..."} 或 {selector:"..."}（默认等 5s）。',
+            '填多字段表单（登录等）用 browser({action:"fill", fields:[{uid,text},…], submit:true}) 一次写完，省往返调用。',
+            '报错「存在 N 个非空白标签页」时：先 browser({action:"tabs"}) 看列表，再在动作里带 targetId 指定目标标签页；不要假设自动落在你要的那个 tab。',
+            'snapshot 被大量被遮挡的浮层/隐藏表单淹没时，加 excludeOccluded:true 直接略去被遮挡节点（结果里会给 occludedSkipped 计数）。',
             'browser({action:"type"}) 是**追加**输入；输入框已有值时应改用 browser({action:"fill"})（先清空再写）；fill 的 submit:true 只在确实要提交表单时使用，避免误提交业务单据。',
             "页面结构变化（跳转/弹窗/提交）后要重新 snapshot 取新 uid，旧 uid 可能已失效。",
             '动作之后只想确认「有没有反应」时，用 browser({action:"snapshot", delta:true})：页面没实质变化会返回精简结果并明确告诉你「没反应」，省上下文；有变化会先列出差异、再给全量清单。需要重新核对完整元素清单时才用不带 delta 的 snapshot。',
@@ -556,10 +628,36 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
               selector: Type.Optional(Type.String({ description: "CSS 选择器（无 uid 时）。" })),
               // 文本输入
               text: Type.Optional(Type.String({ maxLength: 4000, description: "type / fill 的输入文本。" })),
+              fields: Type.Optional(
+                Type.Array(
+                  Type.Object({
+                    uid: Type.Optional(Type.String()),
+                    selector: Type.Optional(Type.String()),
+                    text: Type.String(),
+                  }),
+                  {
+                    description:
+                      "仅 action=fill：批量填多个字段，一次调用写完整张表单（登录等）。每项 {uid|selector, text}；配 submit:true 可一并提交。",
+                  },
+                ),
+              ),
               perCharacter: Type.Optional(Type.Boolean({ description: "逐字符输入（较慢但更接近真人）。" })),
               pressEnter: Type.Optional(Type.Boolean({ description: "type 后回车。" })),
               submit: Type.Optional(Type.Boolean({ description: "fill 后提交所在表单。" })),
               includeSnapshot: Type.Optional(Type.Boolean({ description: "click 后附带一份新快照。" })),
+              waitFor: Type.Optional(
+                Type.Object(
+                  {
+                    url: Type.Optional(Type.String({ description: "URL 正则，命中即结束等待。" })),
+                    selector: Type.Optional(Type.String({ description: "CSS 选择器，出现即结束等待。" })),
+                    timeout: Type.Optional(Type.Number({ description: "最长等待毫秒数（默认 5000）。" })),
+                  },
+                  {
+                    description:
+                      '可选：动作后等待条件成立再返回（click/type/fill/press_key/navigate 适用），把「动作→等结果」收敛成一次调用。例：{url:"/home"}。',
+                  },
+                ),
+              ),
               // 按键
               key: Type.Optional(Type.String({ description: "press_key 的键名，如 Enter/Tab/Escape/ArrowDown/a。" })),
               ctrlKey: Type.Optional(Type.Boolean()),
@@ -586,6 +684,13 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
                   description:
                     "仅 action=snapshot：返回与上次快照的结构化差异（元素增删改 / 表单值变 / 文本变 / 焦点 / 跳转）；" +
                     "页面无实质变化时输出精简形态（省略元素清单，省上下文）。适合「操作一下再看有没有反应」的轮询场景。默认 false。",
+                }),
+              ),
+              excludeOccluded: Type.Optional(
+                Type.Boolean({
+                  description:
+                    "仅 action=snapshot：略去中心被浮层遮挡的节点（occluded-by-*），只在结果里回 occludedSkipped 计数。" +
+                    "用于挡掉被遮罩盖住的隐藏表单/重复控件。默认 false（保留并标记 [occluded-by-…]）。",
                 }),
               ),
               // 截图选项

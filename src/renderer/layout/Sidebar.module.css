@@ -301,6 +301,25 @@
   padding-left: calc(var(--spacer-4) + 16px + var(--spacer-4));
 }
 
+/* Execution rows inside a 定时任务 group: same hierarchy indent as a 空间
+ * folder's sessions, so the two-level nesting reads consistently. */
+.spaceSessions .scheduledItem {
+  padding-left: calc(var(--spacer-4) + 16px + var(--spacer-4));
+}
+
+/* 定时任务组内列表限高（约 5 行）并内部滚动：执行次数再多也只占这么高，
+ * 更早的执行往下滚即可看到，侧边栏不会被无限撑长。 */
+.scheduledScrollList {
+  max-height: 150px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 限高的 flex 列里子项默认会被压扁（而不是溢出滚动），显式禁止收缩。 */
+.scheduledScrollList > * {
+  flex-shrink: 0;
+}
+
 .sessionItem {
   position: relative;
   display: flex;

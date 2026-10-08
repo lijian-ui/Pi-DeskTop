@@ -14,6 +14,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { parseJsonText } from "../json-file";
 
 /** Channel protocol type. Add new channels here (qq / feishu / …). */
 export type ImChannelType = "dingtalk" | "weixin" | "qq" | "feishu";
@@ -57,7 +58,7 @@ const IM_CONFIG_FILE = "im-config.json";
 export async function readImConfig(): Promise<ImConfig> {
   try {
     const raw = await readFile(join(getAgentDir(), IM_CONFIG_FILE), "utf-8");
-    const parsed = JSON.parse(raw) as any;
+    const parsed = parseJsonText(raw) as any;
     return migrateImConfig(parsed);
   } catch {
     return { channels: [] }; // default: no channels

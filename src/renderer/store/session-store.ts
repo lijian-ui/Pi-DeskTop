@@ -504,12 +504,15 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     // cwd and throw, turning the click into a silent no-op.
     const cwd =
       session?.cwd || useWorkspaceStore.getState().cwd || get().chatOnlyCwd;
-    // Scheduled-task sessions are written externally (each run appends from an
+    // Scheduled-task sessions are written externally (each run streams from an
     // isolated SDK session), so their unit copy can go stale. Always re-open
-    // them from disk instead of letting switchSession short-circuit.
-    const isScheduled = get().scheduledRuns.tasks.some(
-      (t) => t.sessionPath === path,
-    );
+    // them from disk instead of letting switchSession short-circuit. A task now
+    // owns one session per run — those are listed on run rows — plus the legacy
+    // single accumulating session stamped directly on the task.
+    const sched = get().scheduledRuns;
+    const isScheduled =
+      sched.runs.some((r) => r.sessionPath === path) ||
+      sched.tasks.some((t) => t.sessionPath === path);
     await window.piDesk.switchSession(cwd, path, isScheduled);
     // Switching away abandons any unsent draft task (it never had a file, so
     // nothing is lost — the sidebar simply stays clean).

@@ -5,10 +5,10 @@
  * are held in plaintext by design (the user edits this file by hand); they are
  * never written to logs.
  */
-import { readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { readJsonFile, readJsonFileSync } from "../json-file";
 
 import {
   SEARCH_PROVIDER_ORDER,
@@ -104,8 +104,7 @@ function normalize(raw: any): WebSearchConfig {
 
 export async function readWebSearchConfig(): Promise<WebSearchConfig> {
   try {
-    const raw = await readFile(configPath(), "utf-8");
-    return normalize(JSON.parse(raw));
+    return normalize(await readJsonFile(configPath()));
   } catch {
     return defaultConfig();
   }
@@ -117,7 +116,7 @@ export async function readWebSearchConfig(): Promise<WebSearchConfig> {
  */
 export function readWebSearchConfigSync(): WebSearchConfig {
   try {
-    return normalize(JSON.parse(readFileSync(configPath(), "utf-8")));
+    return normalize(readJsonFileSync(configPath()));
   } catch {
     return defaultConfig();
   }

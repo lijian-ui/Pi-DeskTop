@@ -43,18 +43,26 @@ import { computeCacheWaste, CACHE_TTL_MS } from "./cache-stats";
 import { readRules, writeRules, deleteRulesFile } from "./rules";
 import { rulesExtension } from "./rules-extension";
 import { loadConfig } from "./memory/config";
+import { readJsonFileSync } from "../json-file";
 import { scanMemoryContent } from "./memory/guard";
 import { webSearchExtension } from "./web-search-extension";
 import { todoExtension } from "./todo/todo-extension";
 import { browserTool, browserToolUnattended } from "./browser/browser-tool";
 import { createAskUserExtension } from "./ask-user/ask-user-extension";
 import { createSendFileExtension } from "./send-file/send-file-extension";
+import { createScheduleExtension } from "./schedule/schedule-extension";
+import { createMcpMount } from "./mcp/mcp-extension";
+import { mcpServerNameForTool, readMcpFeatureConfigSync } from "./mcp/mcp-config";
 import {
   BUILTIN_TOOL_NAMES,
-  disabledExtensionToolNames,
+  isExtensionToolDisabled,
+  isMcpResourceTool,
+  isMcpToolName,
+  mcpInfraAllowed,
   modeAllowsTool,
 } from "./tool-catalog";
 import type { ToolMode } from "../../shared/tool-catalog-types";
+import { SCHEDULED_TRIGGER_MESSAGE } from "../../shared/schedule";
 // Pure helper (mirrors the SDK's cwd → sessions-dir encoding). im-session-map
 // only imports this module as a *type*, so there is no runtime import cycle.
 import { sessionDirFor } from "../im/im-session-map";
@@ -67,7 +75,6 @@ import {
   readScheduledTasks,
   saveScheduledTask as writeScheduledTask,
   deleteScheduledTask as deleteScheduledTaskFile,
-  setTaskSessionPath,
   appendRun,
   updateRun,
   deleteRun,
@@ -416,12 +423,164 @@ const MAX_CONTEXT_USAGE_ENTRIES = 500;
  *  crashes, or the user simply walks away from the modal. */
 const BASH_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
+/** Same auto-deny safety net for the MCP server-approval dialog. */
+const MCP_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+/** MCP 服务器名比较：`-` 与 `_` 视为等价（SDK 会把工具名里的 `-` 归一成 `_`）。 */
+function normalizeMcpServerName(name: string): string {
+  return name.trim().toLowerCase().replace(/-/g, "_");
+}
+
+function matchesServerName(list: readonly string[], server: string): boolean {
+  const target = normalizeMcpServerName(server);
+  return list.some((n) => normalizeMcpServerName(n) === target);
+}
+
+/**
+ * 从工具名解析出服务器名（展示与授权白名单比较用）。
+ * 优先按 mcp.json 里的已知服务器做最长前缀匹配；`codemode` / `tool_search` /
+ * 资源工具这类固定名返回工具名自身；无法解析的 `mcp__*` 退化为第一段。
+ */
+function mcpServerForToolName(toolName: string): string {
+  const known = mcpServerNameForTool(toolName);
+  if (known) return known;
+  if (!toolName.startsWith("mcp__")) return toolName;
+  return toolName.slice("mcp__".length).split("__")[0] || toolName;
+}
+
 /** Cap on per-unit denied-command tracking entries. The denialCounts Map
  *  grows on every rejected bash command and is never fully drained (only
  *  allowed commands are deleted), so without a cap a long session with many
  *  distinct denied commands would leak memory. When the cap is hit we clear
  *  the oldest entries (FIFO — Map preserves insertion order). */
 const MAX_DENIAL_COUNTS = 500;
+
+/**
+ * 死循环兜底：模型反复用**完全相同的参数**调用**同一个工具**、且拿到**完全相同
+ * 的结果**，每轮请求都是 200 OK，SDK 的重试机制完全不会介入（重试只覆盖传输层
+ * 错误）。这里做通用止损——不针对某个工具，覆盖普通会话与定时任务两条路径
+ * （浏览器等工具自身还有更聪明的「页面无变化」判断，这里是兜底网）。
+ *
+ * 计数由 `tool_result` 观察者维护：只有**连续**「同工具 + 同参数 + 同结果」才累加。
+ * 因此「换工具/换参数」或「结果在变化」（如轮询构建日志、等待页面更新）都会清零，
+ * 不会把正常的重试/轮询误判成死循环。达阈值后 `tool_call` 拦截，并逐次升级到
+ * 强制结束本轮（SDK 的 terminate）。
+ */
+const LOOP_REPEAT_WARN = 3;
+/** 拦截后仍不收敛、累计到这一次 → 强制结束本轮。 */
+const LOOP_REPEAT_STOP = 5;
+
+interface RepeatGuardState {
+  /** 上一次调用的「工具 + 参数」指纹。 */
+  key: string | null;
+  /** 上一次调用的结果指纹（内容 + 错误位）。 */
+  digest: string | null;
+  /** 连续「同工具 + 同参数 + 同结果」的次数。 */
+  count: number;
+}
+
+function createRepeatGuard(): RepeatGuardState {
+  return { key: null, digest: null, count: 0 };
+}
+
+/** 稳定序列化参数（键排序），避免模型每次参数键序不同导致漏判重复。 */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  return `{${Object.keys(obj)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+    .join(",")}}`;
+}
+
+/** 工具结果指纹：文本直接用，图片只取 mime + 长度（避免存整段 base64）。 */
+function resultDigest(content: unknown, isError: boolean): string {
+  const parts: string[] = [isError ? "E" : "O"];
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      const b = block as { type?: string; text?: string; mimeType?: string; data?: string };
+      if (b?.type === "text") parts.push(`t:${b.text ?? ""}`);
+      else if (b?.type === "image") parts.push(`i:${b.mimeType ?? ""}:${(b.data ?? "").length}`);
+      else parts.push("?");
+    }
+  } else {
+    parts.push(String(content));
+  }
+  return parts.join("\u0001");
+}
+
+/** `tool_result` 观察者：维护连续「同工具 + 同参数 + 同结果」计数。 */
+function observeRepeatResult(
+  state: RepeatGuardState,
+  toolName: string,
+  input: unknown,
+  content: unknown,
+  isError: boolean,
+): void {
+  const key = `${toolName}\u0000${stableStringify(input ?? {})}`;
+  const digest = resultDigest(content, isError);
+  if (key === state.key && digest === state.digest) {
+    state.count += 1;
+  } else {
+    state.key = key;
+    state.digest = digest;
+    state.count = 1;
+  }
+}
+
+/** 死循环终止提示的文案（会渲染在聊天「最终回复区」，模型此刻已无法再发言）。 */
+function loopTerminationText(toolName: string, count: number): string {
+  return (
+    "⛔ 模型遇到问题，任务已被终止。\n\n" +
+    `原因：连续 ${count} 次用**完全相同的参数**调用「${toolName}」并得到**完全相同的结果**，` +
+    "陷入重复调用（死循环），系统已强制结束本轮。\n\n" +
+    "建议：把目标拆得更具体，或直接告诉它你期望的下一步，然后重新发起。"
+  );
+}
+
+/** 往会话补一条**用户可见**的说明消息（display 仅用于展示，不进入 LLM 上下文）。 */
+function sendLoopTerminationNotice(
+  session: AgentSession | undefined,
+  toolName: string,
+  count: number,
+): void {
+  try {
+    (session as any)?.sendCustomMessage?.({
+      customType: "loop-guard",
+      display: true,
+      content: loopTerminationText(toolName, count),
+    });
+  } catch {
+    /* 展示失败不影响拦截本身 */
+  }
+}
+
+/**
+ * `tool_call` 前置闸：已累计到阈值的连续重复调用 → 拦截（并逐次升级到终止）。
+ */
+function checkRepeatGuard(
+  state: RepeatGuardState,
+  toolName: string,
+  input: unknown,
+): { block: true; reason: string; terminate?: boolean } | undefined {
+  if (`${toolName}\u0000${stableStringify(input ?? {})}` !== state.key) return undefined;
+  if (state.count < LOOP_REPEAT_WARN) return undefined;
+  // 被拦截也算一次（被拦截的调用不会再触发 tool_result 观察者），用于升级到终止。
+  state.count += 1;
+  const stop = state.count >= LOOP_REPEAT_STOP;
+  const head =
+    `⛔ 检测到你已连续 ${state.count - 1} 次用**完全相同的参数**调用「${toolName}」` +
+    "并拿到**完全相同的结果**，这不会带来任何新信息，属于死循环。";
+  return {
+    block: true,
+    reason: stop
+      ? `${head}本轮已被系统强制结束。请立即停止重复，直接基于已有信息回答用户；若信息不足，明确说明卡在哪里。`
+      : `${head}请立即停止重复，改用不同参数/不同工具/不同思路；若确实走不通，直接告诉用户你卡住了、需要什么帮助，而不是继续重试。`,
+    ...(stop ? { terminate: true } : {}),
+  };
+}
+
 
 interface ContextUsageEntry {
   tokens: number;
@@ -658,7 +817,7 @@ const DEFAULT_CONTEXT_FILES_CONFIG: ContextFilesConfig = {
  */
 function readContextFilesConfigSync(): ContextFilesConfig {
   try {
-    const settings = JSON.parse(readFileSync(settingsJsonPath(), "utf-8"));
+    const settings = readJsonFileSync<{ contextFiles?: { agents?: boolean; claude?: boolean } }>(settingsJsonPath());
     const c = settings.contextFiles ?? {};
     return {
       agents: c.agents === true,
@@ -820,6 +979,20 @@ interface RuntimeUnit {
    */
   toolMode: ToolMode;
   denialCounts: Map<string, number>;
+  /** 通用死循环兜底的连续同参调用计数（每个 unit 独立，见 checkRepeatGuard）。 */
+  repeatGuard: RepeatGuardState;
+  /** 死循环被强制终止后待补发的可见说明（在 agent_end 时发送，见 makeAgentEndHandler）。 */
+  loopNotice?: { toolName: string; count: number };
+  /**
+   * MCP 服务器名：本会话已被用户批准使用的（`mcp__<server>__<tool>` 的服务器级
+   * 粒度）。「允许本会话」写这里，per-unit 且只在内存里，重启即失效。
+   */
+  approvedMcpServers: Set<string>;
+  /** 本 unit 上正在等待用户确认的 MCP 服务器授权请求。 */
+  pendingMcpRequests: Map<
+    number,
+    { resolve: (d: "allow" | "deny") => void; server: string; timer: NodeJS.Timeout }
+  >;
   /** Pending retry timer for installToolGuardOn (cleared on dispose so a
    *  destroyed unit is never re-touched by a stale callback). */
   toolGuardTimer: NodeJS.Timeout | null;
@@ -953,6 +1126,24 @@ export class PiDeskSessionManager {
     * racing and running the expensive build twice.
     */
    private servicesByCwd: Map<string, Promise<any>> = new Map();
+  /**
+   * ResourceLoaders that have already handed their ExtensionRuntime to a
+   * session. A cached services bundle shares ONE resourceLoader → ONE runtime
+   * across every session built from it, but a runtime is permanently poisoned
+   * once a session is disposed (AgentSession.dispose() → ExtensionRuntime
+   * .invalidate()). So only the FIRST session off a bundle may reuse the
+   * runtime createAgentSessionServices() just built; every later session must
+   * reload() the loader to get a fresh runtime (see the runtime factory in
+   * ensureUnit). WeakSet so a dropped loader/unit can still be collected.
+   */
+  private consumedResourceLoaders = new WeakSet<object>();
+  /**
+   * Per-servicesKey promise chain serialising "reload shared loader + build
+   * session". Without it, two concurrent builds sharing one loader could both
+   * read getExtensions() and end up with the SAME runtime again — the very bug
+   * this guards against. Keyed by servicesKey (one loader per key).
+   */
+  private sessionBuildLocks = new Map<string, Promise<void>>();
   /** In-process scheduler for user-defined scheduled tasks. */
   private scheduler?: TaskScheduler;
   /**
@@ -1013,6 +1204,9 @@ export class PiDeskSessionManager {
    * the prompt, so a decision in one workspace never answers another's.
    */
   private pendingBashIndex = new Map<number, RuntimeUnit>();
+  /** MCP 授权弹窗的 requestId 计数器 + requestId → 所属 unit 的路由表。 */
+  private mcpReqId: number = 0;
+  private pendingMcpIndex = new Map<number, RuntimeUnit>();
   // In-flight bind operations keyed by source session path (single-flight).
   private bindingPaths = new Set<string>();
   /**
@@ -1067,6 +1261,21 @@ export class PiDeskSessionManager {
     const prev = this.authWriteLock;
     this.authWriteLock = next;
     return prev.then(fn).finally(() => release!());
+  }
+
+  /**
+   * Serialise per-servicesKey so concurrent session builds that share one
+   * resourceLoader can't interleave reload() with getExtensions(): otherwise
+   * two builds could read the same runtime and end up sharing an
+   * ExtensionRuntime again, reintroducing the stale-ctx bug.
+   */
+  private withSessionBuildLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.sessionBuildLocks.get(key) ?? Promise.resolve();
+    const run = prev.then(fn);
+    // Store a settled, never-rejecting tail so one failed build doesn't break
+    // the chain for later builds.
+    this.sessionBuildLocks.set(key, run.then(() => undefined, () => undefined));
+    return run;
   }
 
   async initialize(cwd?: string): Promise<void> {
@@ -1158,7 +1367,7 @@ export class PiDeskSessionManager {
         cwd: servicesKey,
         modelRuntime: this.modelRuntime!,
         resourceLoaderOptions: {
-          extensionFactories: [soulExtension, rulesExtension, webSearchExtension, browserTool, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), createSendFileExtension(), hermesMemoryExtension],
+          extensionFactories: [soulExtension, rulesExtension, webSearchExtension, browserTool, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), createSendFileExtension(), createScheduleExtension({ runNow: (taskId) => this.runScheduledTaskNow(taskId) }), hermesMemoryExtension, createMcpMount()],
           agentsFilesOverride: createContextFilesOverride(),
         },
       });
@@ -1207,16 +1416,37 @@ export class PiDeskSessionManager {
       async ({ sessionManager: sm, sessionStartEvent }) => {
         const model = firstModel;
         firstModel = undefined;
-        return {
-          ...(await createAgentSessionFromServices({
+        // Each AgentSession must own a DISTINCT ExtensionRuntime, but a cached
+        // services bundle shares ONE resourceLoader → ONE runtime across every
+        // session built from it. Session replacement (newSession / switchSession
+        // / fork / import) tears the old session down FIRST — dispose() →
+        // ExtensionRuntime.invalidate(), which is IRREVERSIBLE — and then
+        // rebuilds from the same loader. Without the reload below the new session
+        // (and any sibling still sharing the loader) would pick up that poisoned
+        // runtime, and any tool_call handler touching the captured `pi` (MCP's
+        // getAllTools, codemode, tool-search) throws on EVERY tool — including
+        // read/bash — so the whole task fails with "This extension ctx is stale
+        // after session replacement or reload." reload() swaps in a fresh runtime
+        // WITHOUT invalidating the old one, so live sessions keep working. The
+        // first session reuses the runtime createAgentSessionServices() just
+        // built; every later session reloads.
+        return this.withSessionBuildLock(servicesKey, async () => {
+          if (this.consumedResourceLoaders.has(effectiveServices.resourceLoader)) {
+            await effectiveServices.resourceLoader.reload();
+          } else {
+            this.consumedResourceLoaders.add(effectiveServices.resourceLoader);
+          }
+          return {
+            ...(await createAgentSessionFromServices({
+              services: effectiveServices,
+              sessionManager: sm,
+              sessionStartEvent,
+              model,
+            })),
             services: effectiveServices,
-            sessionManager: sm,
-            sessionStartEvent,
-            model,
-          })),
-          services: effectiveServices,
-          diagnostics: effectiveServices.diagnostics,
-        };
+            diagnostics: effectiveServices.diagnostics,
+          };
+        });
       },
       { cwd, agentDir: getAgentDir(), sessionManager }
     );
@@ -1260,6 +1490,9 @@ export class PiDeskSessionManager {
       allowAllSession: false,
       pendingBashRequests: new Map(),
       denialCounts: new Map(),
+      repeatGuard: createRepeatGuard(),
+      approvedMcpServers: new Set(),
+      pendingMcpRequests: new Map(),
       defaultModel: null,
       // Restore this workspace's mode across restarts (standard = full set).
       toolMode: await readPersistedToolMode(cwd),
@@ -1947,7 +2180,13 @@ export class PiDeskSessionManager {
       if (!runner.extensions.some((e: any) => e?.path === "bash-guard-internal")) {
         runner.extensions.push({
           path: "bash-guard-internal",
-          handlers: new Map<string, any>([["tool_call", [this.makeToolCallHandler(unit)]]]),
+          handlers: new Map<string, any>([
+            ["tool_call", [this.makeToolCallHandler(unit)]],
+            // 死循环兜底的结果观察者：维护连续「同工具+同参数+同结果」计数。
+            ["tool_result", [this.makeToolResultHandler(unit)]],
+            // 死循环被强制终止后，模型已无法再发言 → 在 agent_end 补一条可见说明。
+            ["agent_end", [this.makeAgentEndHandler(unit)]],
+          ]),
           tools: new Map(),
           commands: new Map(),
           flags: new Map(),
@@ -1997,6 +2236,9 @@ export class PiDeskSessionManager {
     }
     const blacklistRx = this.bashBlacklistRx;
     const whitelistRx = this.bashWhitelistRx;
+    // 通用死循环兜底的状态：定时任务没有 RuntimeUnit，故在此按「本次运行」独立持有。
+    const repeatGuard = createRepeatGuard();
+    let loopNotice: { toolName: string; count: number } | undefined;
     target.extensions.push({
       path: "bash-guard-scheduled",
       handlers: new Map<string, any>([
@@ -2004,7 +2246,39 @@ export class PiDeskSessionManager {
           "tool_call",
           [
             async (event: any) => {
-              if (!event || event.toolName !== "bash") return undefined;
+              if (!event) return undefined;
+              // 通用死循环兜底（与普通会话同逻辑，见 checkRepeatGuard）。
+              const repeated = checkRepeatGuard(repeatGuard, event.toolName, event.input);
+              if (repeated) {
+                if (repeated.terminate) {
+                  loopNotice = { toolName: String(event.toolName ?? "unknown"), count: repeatGuard.count };
+                }
+                return repeated;
+              }
+              // 无人值守会话的 MCP 白名单（没有 unit、没有人能点弹窗，所以
+              // 不弹窗、只按 mcp-config.json 的 unattendedServers 硬判）：
+              //  - codemode / tool_search 是间接调用通道，放行 —— 它们脚本内
+              //    发起的实际工具调用会再次经过本闸，按服务器逐一判定，不构成绕过；
+              //  - 资源工具能读取**任意**已连接服务器的资源，白名单无法表达
+              //    「哪个服务器」，因此一律拒绝；
+              //  - 其余 `mcp__<server>__<tool>` 仅当服务器在白名单内才放行。
+              if (isMcpToolName(event.toolName)) {
+                const name = event.toolName;
+                if (name === "codemode" || name === "tool_search") return undefined;
+                const cfg = readMcpFeatureConfigSync();
+                const allowed =
+                  cfg.enabled &&
+                  name.startsWith("mcp__") &&
+                  !isMcpResourceTool(name) &&
+                  matchesServerName(cfg.unattendedServers, mcpServerForToolName(name));
+                if (allowed) return undefined;
+                return {
+                  block: true,
+                  reason:
+                    "⛔ 无人值守（定时任务）会话只能调用 mcp-config.json 中 unattendedServers 白名单内的 MCP 服务器工具（资源类工具一律不允许）。本次调用已被拒绝，请勿重试。",
+                };
+              }
+              if (event.toolName !== "bash") return undefined;
               const command =
                 typeof event.input?.command === "string"
                   ? event.input.command
@@ -2030,6 +2304,30 @@ export class PiDeskSessionManager {
                 reason:
                   "⛔ 该定时任务的执行权限为「询问」模式，无人值守时会话不允许执行非白名单 bash 命令。如需执行，请将该任务的执行权限设为 YOLO。",
               };
+            },
+          ],
+        ],
+        [
+          "tool_result",
+          [
+            (event: any) => {
+              if (!event) return undefined;
+              // 死循环兜底的结果观察者（与普通会话同逻辑，见 observeRepeatResult）。
+              observeRepeatResult(repeatGuard, event.toolName, event.input, event.content, event.isError);
+              return undefined;
+            },
+          ],
+        ],
+        [
+          "agent_end",
+          [
+            () => {
+              // 死循环被强制终止后补一条可见说明（与普通会话同逻辑，见 makeAgentEndHandler）。
+              if (!loopNotice) return undefined;
+              const notice = loopNotice;
+              loopNotice = undefined;
+              sendLoopTerminationNotice(session, notice.toolName, notice.count);
+              return undefined;
             },
           ],
         ],
@@ -2075,9 +2373,64 @@ export class PiDeskSessionManager {
     });
   }
 
+  /**
+   * `agent_end`：一轮 agent 运行结束时（含被死循环兜底 terminate 的情况）。终止后
+   * 模型已无法再发言，这里补一条用户可见的说明，渲染在聊天的「最终回复区」。
+   *
+   * ⚠️ 必须在 agent_end（工具批次之后）补发，不能在 tool_call 里直接补发：SDK 在
+   * 调用 beforeToolCall **之前**就发出了 tool_execution_start，此刻插入消息会让
+   * 渲染层把工具卡片挂到「最后一条 assistant 消息」上失败（卡片卡在 running）。
+   */
+  private makeAgentEndHandler(unit: RuntimeUnit) {
+    return () => {
+      const notice = unit.loopNotice;
+      if (!notice) return undefined;
+      unit.loopNotice = undefined;
+      sendLoopTerminationNotice(unit.runtime?.session, notice.toolName, notice.count);
+      return undefined;
+    };
+  }
+
+  /**
+   * `tool_result` 观察者：把每次真实执行的结果喂给通用死循环计数器。
+   * 被拦截的调用不会触发本钩子（SDK 在 beforeToolCall 拦截后直接返回），
+   * 因此拦截计数由 checkRepeatGuard 自行推进。
+   */
+  private makeToolResultHandler(unit: RuntimeUnit) {
+    return (event: any) => {
+      if (!event) return undefined;
+      observeRepeatResult(unit.repeatGuard, event.toolName, event.input, event.content, event.isError);
+      return undefined;
+    };
+  }
+
   private makeToolCallHandler(unit: RuntimeUnit) {
     return async (event: any) => {
-      if (!event || event.toolName !== "bash") return undefined;
+      if (!event) return undefined;
+      // 通用死循环兜底：连续「同工具 + 同参数 + 同结果」达阈值即拦截（覆盖所有
+      // 工具，包括 MCP / 浏览器 / 内置工具）。放在最前面——即使某个工具已有专属
+      // 护栏，这里也能在模型「换个工具但依旧原样重试」时止损。
+      const repeated = checkRepeatGuard(unit.repeatGuard, event.toolName, event.input);
+      if (repeated) {
+        // 升级到强制终止：记下待补发的可见说明（在 agent_end 发送，见 makeAgentEndHandler）。
+        if (repeated.terminate) {
+          unit.loopNotice = { toolName: String(event.toolName ?? "unknown"), count: unit.repeatGuard.count };
+        }
+        return repeated;
+      }
+      // MCP 工具走服务器级权限闸（见 evaluateMcp）。放在 bash 分支之前，因为
+      // MCP 工具名永远不会是 "bash"，顺序只为可读性。codemode 脚本里的嵌套调用
+      // 同样会经过这里（SDK 文档：nested 调用与 direct 调用共用 tool_call 钩子）。
+      if (isMcpToolName(event.toolName)) {
+        const decision = await this.evaluateMcp(event.toolName, unit);
+        if (decision === "allow") return undefined;
+        return {
+          block: true,
+          reason:
+            "⛔ 该 MCP 工具调用未获授权，已被拒绝。请勿重试；如确需使用，请让用户在设置中允许该服务器。",
+        };
+      }
+      if (event.toolName !== "bash") return undefined;
       const command = typeof event.input?.command === "string" ? event.input.command : "";
       const decision = await this.evaluateBash(command, unit);
       if (decision === "allow") {
@@ -2248,6 +2601,78 @@ export class PiDeskSessionManager {
         sessionPath: unit.activePath,
       });
     });
+  }
+
+  /**
+   * MCP 工具调用的授权闸（粒度＝服务器）。
+   *
+   * 决策链（对齐 evaluateBash 的风格）：
+   *  1. 总开关关闭 → 拒绝（配置刚被热改过、扩展尚未卸载的窗口期）；
+   *  2. 本会话已批准该服务器 → 允许；
+   *  3. mcp-config.json 的 autoApproveServers（常驻授权）→ 允许，不弹窗；
+   *  4. 否则弹桌面确认弹窗，用户选「允许本会话」则写入 unit.approvedMcpServers。
+   *
+   * 无人值守（定时任务）不走这里 —— 那条路径没有 unit，改由
+   * installScheduledToolGuard 按 unattendedServers 白名单硬判。
+   */
+  private async evaluateMcp(toolName: string, unit: RuntimeUnit): Promise<"allow" | "deny"> {
+    const cfg = readMcpFeatureConfigSync();
+    if (!cfg.enabled) return "deny";
+    const server = mcpServerForToolName(toolName);
+    if (unit.approvedMcpServers.has(server)) return "allow";
+    if (matchesServerName(cfg.autoApproveServers, server)) return "allow";
+    return this.requestMcpApproval(server, unit);
+  }
+
+  /** 弹桌面确认弹窗，等渲染进程回应；无人响应则超时拒绝。 */
+  private requestMcpApproval(server: string, unit: RuntimeUnit): Promise<"allow" | "deny"> {
+    const requestId = ++this.mcpReqId;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (unit.pendingMcpRequests.has(requestId)) {
+          unit.pendingMcpRequests.delete(requestId);
+          this.pendingMcpIndex.delete(requestId);
+          console.warn(`MCP approval ${requestId} timed out — auto-denying`);
+          resolve("deny");
+        }
+      }, MCP_APPROVAL_TIMEOUT_MS);
+      unit.pendingMcpRequests.set(requestId, { resolve, server, timer });
+      this.pendingMcpIndex.set(requestId, unit);
+      this.webContents?.send("pi:mcpApprovalRequest", {
+        requestId,
+        server,
+        cwd: unit.cwd,
+        sessionPath: unit.activePath,
+      });
+    });
+  }
+
+  /**
+   * 渲染进程对 MCP 授权弹窗的回应。「允许本会话」把服务器记入该 unit 的
+   * approvedMcpServers；永久授权由设置页写 mcp-config.json 的
+   * autoApproveServers，不经这里。返回 true 表示找到了对应的挂起请求。
+   */
+  handleMcpApprovalResponse({
+    requestId,
+    decision,
+  }: {
+    requestId: number;
+    decision: "allow" | "deny" | "allow-session";
+  }): boolean {
+    const unit = this.pendingMcpIndex.get(requestId);
+    if (!unit) return false;
+    const entry = unit.pendingMcpRequests.get(requestId);
+    this.pendingMcpIndex.delete(requestId);
+    if (!entry) return false;
+    unit.pendingMcpRequests.delete(requestId);
+    clearTimeout(entry.timer);
+    if (decision === "allow-session") {
+      unit.approvedMcpServers.add(entry.server);
+      entry.resolve("allow");
+    } else {
+      entry.resolve(decision === "deny" ? "deny" : "allow");
+    }
+    return true;
   }
 
   async setModel(provider: string, modelId: string, cwd?: string): Promise<void> {
@@ -2490,7 +2915,6 @@ export class PiDeskSessionManager {
     if (!session) return;
     const allNames =
       (session as any).getAllTools?.()?.map((t: any) => t.name) ?? [];
-    const disabled = disabledExtensionToolNames();
     // A mode is a SESSION-LEVEL lens over the global config: built-ins must be
     // both globally enabled AND admitted by the mode; extension tools must
     // survive the global config gate AND belong to a feature the mode allows.
@@ -2500,8 +2924,13 @@ export class PiDeskSessionManager {
     const extNames = allNames.filter(
       (n: string) =>
         !BUILTIN_TOOL_NAMES.includes(n) &&
-        !disabled.has(n) &&
-        modeAllowsTool(mode, n),
+        !isExtensionToolDisabled(n) &&
+        modeAllowsTool(mode, n) &&
+        // MCP 的固定名基础工具（codemode / tool_search / 资源工具）由扩展
+        // 无条件注册，只有存在对应 exposure 的服务器时才该进入活跃集 ——
+        // 否则没配任何服务器也会凭空多出一个 codemode。`mcp__*` 则天然只在
+        // 服务器连上并注册后才出现，无需这层判断。
+        (!isMcpToolName(n) || n.startsWith("mcp__") || mcpInfraAllowed(n)),
     );
     session.setActiveToolsByName([...builtins, ...extNames]);
   }
@@ -2549,6 +2978,20 @@ export class PiDeskSessionManager {
    * ones leave the active set on the next turn.
    */
   async reapplyToolSetToAllUnits(): Promise<void> {
+    await this.applyToolSetToAllUnits();
+  }
+
+  /**
+   * MCP 服务器清单 / 总开关变更后的热更新：失效 services 缓存（`createMcpMount`
+   * 只在扩展工厂重建时才重新读取总开关），并让每个活动会话 reload —— 这会再发
+   * 一次 `session_start`，MCP 扩展据此断开/重连到新的服务器集合；最后重刷活跃
+   * 工具集，让「总开关关闭」立即把 `mcp__*` 工具移出活跃集。
+   */
+  async applyMcpChanges(): Promise<void> {
+    this.servicesByCwd.clear();
+    for (const unit of this.units.values()) {
+      Promise.resolve(unit.runtime?.session?.reload?.()).catch(() => {});
+    }
     await this.applyToolSetToAllUnits();
   }
 
@@ -2915,22 +3358,15 @@ export class PiDeskSessionManager {
   // ── Scheduled tasks ──────────────────────────────────────────────────────
 
   /**
-   * Dedicated directory for scheduled-task sessions. Kept OUTSIDE the default
-   * `sessions/` scan so `PiSessionManager.listAll()` (which feeds the main
-   * chat/space sidebar) never surfaces a scheduled run as an ordinary
-   * conversation — the 定时任务 group owns those sessions exclusively.
-   */
-  // Scheduled-task sessions live under ~/.pi/agent/sessions/scheduled-sessions/
-  // so they sit beside the normal session store. They must NEVER surface in the
-  // normal session list: listAll() scans one level into sessions/ and loads any
-  // .jsonl it finds directly. So each task gets its OWN subdir
-  // (scheduled-sessions/<taskId>/...jsonl) — then scheduled-sessions/ holds only
-  // task-id directories (not .jsonl files), and listAll() skips it.
-  /**
    * Run a scheduled task to completion in a fully isolated SDK session. The
    * task session carries NO <personality> (soulExtension is deliberately NOT
    * registered) and its system prompt ends with a <scheduled_task> block.
    * Runs in the background — callers should not await it for long.
+   *
+   * Each execution creates a brand-new session file under
+   * `~/.pi/agent/sessions/<encoded-cwd>/`, which listAll() scans, so the
+   * sidebar can open it as a normal conversation. Nothing is shared between
+   * runs — the 定时任务 group folds them back together by task id.
    */
   async runScheduledTask(task: ScheduledTask): Promise<void> {
     if (!this.modelRuntime) throw new Error("Model runtime not ready");
@@ -2957,32 +3393,20 @@ export class PiDeskSessionManager {
       cwd,
       modelRuntime: this.modelRuntime,
       resourceLoaderOptions: {
-        extensionFactories: [createScheduledTaskExtension(task), rulesExtension, webSearchExtension, browserToolUnattended, createSubagentExtension(() => this.webContents, () => this.modelRuntime)],
+        extensionFactories: [createScheduledTaskExtension(task), rulesExtension, webSearchExtension, browserToolUnattended, createSubagentExtension(() => this.webContents, () => this.modelRuntime), createMcpMount({ unattended: true })],
         agentsFilesOverride: createContextFilesOverride(),
       },
     });
 
-    // One session per task: every execution appends to the SAME file, so the
-    // sidebar opens a single conversation holding the full run history. We
-    // reuse the persisted path only when it already lives in a discoverable
-    // (sessions/) location; stale paths under the old hidden dir are dropped
-    // so the session is recreated where listAll() can find it.
-    const existing =
-      task.sessionPath &&
-      existsSync(task.sessionPath) &&
-      !task.sessionPath.includes(join("sessions", "scheduled-sessions"))
-        ? task.sessionPath
-        : null;
-    const sm = existing
-      ? PiSessionManager.open(existing)
-      : PiSessionManager.create(cwd);
+    // One fresh session per execution: every run writes its OWN conversation
+    // file, so history never piles up inside one ever-growing session. The SDK
+    // assigns each create() a unique <timestamp>_<id>.jsonl under the cwd's
+    // session dir — a location listAll() scans, so the sidebar opens it as a
+    // normal conversation. The run row below records this run's path.
+    const sm = PiSessionManager.create(cwd);
     const sessionPath = sm.getSessionFile();
     if (!sessionPath) {
       throw new Error("Failed to resolve scheduled-task session file");
-    }
-    if (!existing) {
-      // Persist so subsequent runs and the sidebar resolve the same file.
-      await setTaskSessionPath(task.id, sessionPath);
     }
 
     const taskModel = task.model
@@ -2993,6 +3417,16 @@ export class PiDeskSessionManager {
       sessionManager: sm,
       ...(taskModel ? { model: taskModel } : {}),
     });
+
+    // `session_start` is emitted ONLY from bindExtensions(), and that is what
+    // makes the MCP extension open its background connections. The interactive
+    // path already binds; this unattended path did not, which would leave MCP
+    // servers unconnected for scheduled runs. Best-effort like the main path.
+    try {
+      await session.bindExtensions({ uiContext: this.buildExtensionUIContext() });
+    } catch (err) {
+      console.warn("Failed to bind extensions to scheduled-task session:", err);
+    }
 
     // Per-task bash guard. It is independent of the global bashMode (set via
     // setBashGuardMode) so a scheduled task can never leak its setting into the
@@ -3029,8 +3463,7 @@ export class PiDeskSessionManager {
     const unsubscribeEvents = session.subscribe(forwardEvents);
 
     // Register the run BEFORE sending, so the sidebar can show it immediately.
-    // Each run gets a unique id: the same session accumulates every execution,
-    // so sessionPath is shared and cannot identify a run.
+    // The run id keys this record; sessionPath is this execution's own file.
     const runId = randomUUID();
     await appendRun({
       id: runId,
@@ -3044,7 +3477,7 @@ export class PiDeskSessionManager {
     try {
       // The trigger message is just a trigger — the real task lives in the
       // system prompt's <scheduled_task> block.
-      await session.prompt("请开始执行本次定时任务。");
+      await session.prompt(SCHEDULED_TRIGGER_MESSAGE);
       // Optional IM completion push (task.imPushInstanceId configured).
       if (task.imPushInstanceId && this.onImPushRequest) {
         const finishedAt = new Date().toLocaleString("zh-CN");
@@ -3854,6 +4287,11 @@ export class PiDeskSessionManager {
         resolve("deny");
       }
       u.pendingBashRequests.clear();
+      for (const { resolve, timer } of u.pendingMcpRequests.values()) {
+        clearTimeout(timer);
+        resolve("deny");
+      }
+      u.pendingMcpRequests.clear();
     }
     for (const u of this.units.values()) {
       u.unsubscribe?.();
@@ -3865,6 +4303,7 @@ export class PiDeskSessionManager {
     }
     this.units.clear();
     this.pendingBashIndex.clear();
+    this.pendingMcpIndex.clear();
     for (const watchers of this.contextFileWatchers.values()) {
       for (const w of watchers) {
         try { w.close(); } catch { /* ignore */ }

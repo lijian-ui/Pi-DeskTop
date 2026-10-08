@@ -16,6 +16,13 @@
 import { readTodoConfigSync, writeTodoConfig } from "./todo/todo-config";
 import { readAskUserConfigSync, writeAskUserConfig } from "./ask-user/ask-user-config";
 import { readBrowserConfigSync, writeBrowserConfig } from "./browser/browser-config";
+import { readScheduleConfigSync, writeScheduleConfig } from "./schedule/schedule-config";
+import {
+  mcpServerCapabilities,
+  readMcpFeatureConfig,
+  readMcpFeatureConfigSync,
+  writeMcpFeatureConfig,
+} from "./mcp/mcp-config";
 import {
   readWebSearchConfig,
   readWebSearchConfigSync,
@@ -48,15 +55,77 @@ export const TOOL_MODES: Record<ToolMode, { builtins: readonly string[]; feature
   // listed too).
   standard: {
     builtins: BUILTIN_TOOL_NAMES,
-    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file"],
+    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file", "schedule", "mcp"],
   },
   // Standard + the planned office-operation feature set (registered later as
   // FEATURES key "office"; harmless while the feature does not exist yet).
   office: {
     builtins: BUILTIN_TOOL_NAMES,
-    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file"],
+    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file", "schedule", "mcp"],
   },
 };
+
+/** 扩展特性定义：在 UI 载荷字段之外，额外支持动态工具名的前缀匹配。 */
+interface FeatureDef extends Omit<ExtensionToolFeature, "enabled"> {
+  /**
+   * 无法穷举名字的工具前缀（MCP 的 `mcp__<server>__<tool>` 由服务器在运行时
+   * 决定），命中的名字归到本特性。
+   */
+  prefixes?: string[];
+}
+
+/**
+ * MCP 扩展带进来的固定名工具（非 `mcp__` 前缀那批）：
+ *  - `codemode` / `tool_search`：SDK 的间接调用通道，注册时是 inactive，
+ *    由 MCP 扩展在「有服务器用该 exposure 连上」时自动激活；
+ *  - 三个资源工具：有服务器提供 resources 时被注册。
+ */
+const MCP_INFRA_TOOL_NAMES = [
+  "codemode",
+  "tool_search",
+  "list_mcp_resources",
+  "list_mcp_resource_templates",
+  "read_mcp_resource",
+];
+
+/** 三个 MCP 资源工具（它们的可用性取决于「是否至少有一个 enabled 服务器」）。 */
+const MCP_RESOURCE_TOOL_NAMES = [
+  "list_mcp_resources",
+  "list_mcp_resource_templates",
+  "read_mcp_resource",
+];
+
+/** 是否为 MCP 相关工具名（含 `mcp__` 前缀与固定名的基础工具）。 */
+export function isMcpToolName(name: string): boolean {
+  return name.startsWith("mcp__") || MCP_INFRA_TOOL_NAMES.includes(name);
+}
+
+/**
+ * 是否为「服务器无关」的 MCP 资源工具。它们能读取任意已连接服务器的资源，
+ * 因此无人值守白名单光拦 `mcp__*` 不够 —— 还得把这三个一并挡掉。
+ */
+export function isMcpResourceTool(name: string): boolean {
+  return MCP_RESOURCE_TOOL_NAMES.includes(name);
+}
+
+/**
+ * 固定名的 MCP 基础工具是否需要放行。
+ *
+ * `mcp__*` 不需要这层判断：它们只有在服务器真的连上并注册后才会出现在
+ * getAllTools() 里。但 codemode / tool_search / 资源工具是扩展**无条件注册**的，
+ * 若只凭「mcp 特性开启」就放行，没配任何服务器时也会凭空多出一个 codemode 工具。
+ * 所以这里回读 mcp.json：只有当存在对应 exposure 的 enabled 服务器时才放行。
+ */
+export function mcpInfraAllowed(name: string): boolean {
+  if (!readMcpFeatureConfigSync().enabled) return false;
+  const caps = mcpServerCapabilities();
+  // autoEnableCodemode 为 false 时，SDK 不会激活 codemode —— 宿主重跑显式工具集
+  // 时也必须尊重它，否则等于绕过用户的显式选择。
+  if (name === "codemode") return caps.hasCodemode && caps.autoEnableCodemode;
+  if (name === "tool_search") return caps.hasDeferred;
+  if (MCP_RESOURCE_TOOL_NAMES.includes(name)) return caps.hasEnabled;
+  return false;
+}
 
 /** Map a registered tool name back to its extension feature key (undefined
  * for built-in tools). Used to decide whether a mode's feature allowlist
@@ -64,6 +133,7 @@ export const TOOL_MODES: Record<ToolMode, { builtins: readonly string[]; feature
 export function featureKeyForToolName(name: string): string | undefined {
   for (const f of FEATURES) {
     if (f.toolNames.includes(name)) return f.key;
+    if (f.prefixes?.some((p) => name.startsWith(p))) return f.key;
   }
   return undefined;
 }
@@ -77,7 +147,7 @@ export function modeAllowsTool(mode: ToolMode, name: string): boolean {
 }
 
 /** Static description of every first-party extension tool feature. */
-const FEATURES: ReadonlyArray<Omit<ExtensionToolFeature, "enabled">> = [
+const FEATURES: ReadonlyArray<FeatureDef> = [
   {
     key: "todo",
     toolNames: ["todo"],
@@ -119,6 +189,14 @@ const FEATURES: ReadonlyArray<Omit<ExtensionToolFeature, "enabled">> = [
     configFile: "sendfile-config.json",
   },
   {
+    // Scheduled tasks: create/manage the same tasks the 自动化 page edits.
+    // Mounted in normal/workspace sessions only (never inside a scheduled run).
+    key: "schedule",
+    toolNames: ["schedule"],
+    switchable: true,
+    configFile: "schedule-config.json",
+  },
+  {
     // Persistent memory layer (src/main/pi/memory, ported from
     // pi-hermes-memory). Always on like subagent — no separate config today.
     key: "memory",
@@ -133,6 +211,17 @@ const FEATURES: ReadonlyArray<Omit<ExtensionToolFeature, "enabled">> = [
     switchable: false,
     configFile: "",
   },
+  {
+    // MCP（Model Context Protocol）服务器：由 SDK 的 createMcpExtension 提供，
+    // 服务器定义在 ~/.pi/agent/mcp.json（与 CLI / Claude Desktop / Cursor 共享）。
+    // 工具名是运行期才知道的 `mcp__<server>__<tool>`，所以靠 prefixes 归类；
+    // 另有 codemode / tool_search / 资源工具这几个固定名，见 MCP_INFRA_TOOL_NAMES。
+    key: "mcp",
+    toolNames: MCP_INFRA_TOOL_NAMES,
+    prefixes: ["mcp__"],
+    switchable: true,
+    configFile: "mcp-config.json",
+  },
 ];
 
 function readFeatureEnabled(key: string): boolean {
@@ -145,6 +234,10 @@ function readFeatureEnabled(key: string): boolean {
       return readWebSearchConfigSync().enabled;
     case "office":
       return readBrowserConfigSync().enabled;
+    case "schedule":
+      return readScheduleConfigSync().enabled;
+    case "mcp":
+      return readMcpFeatureConfigSync().enabled;
     default:
       return true; // subagent (or unknown) → always on
   }
@@ -152,23 +245,31 @@ function readFeatureEnabled(key: string): boolean {
 
 /** Full feature list with live enabled states, for the settings UI. */
 export function readExtensionToolFeaturesSync(): ExtensionToolFeature[] {
-  return FEATURES.map((f) => ({ ...f, enabled: readFeatureEnabled(f.key) }));
+  return FEATURES.map((f) => ({
+    key: f.key,
+    toolNames: f.toolNames,
+    switchable: f.switchable,
+    configFile: f.configFile,
+    enabled: readFeatureEnabled(f.key),
+  }));
 }
 
 /**
- * Names of extension tools that are currently SWITCHED OFF. Used when
- * re-applying the active-tool set on live sessions: these must be dropped
- * even though they are still registered (config only gates future
+ * Whether one extension tool name belongs to a feature that is SWITCHED OFF.
+ * Used when re-applying the active-tool set on live sessions: these must be
+ * dropped even though they are still registered (config only gates future
  * registration; already-running units keep the tools in their registry).
+ *
+ * Works by name (not by a prebuilt Set) because the MCP feature owns runtime
+ * tool names that cannot be enumerated up front.
  */
-export function disabledExtensionToolNames(): Set<string> {
-  const disabled = new Set<string>();
+export function isExtensionToolDisabled(name: string): boolean {
   for (const f of FEATURES) {
-    if (f.switchable && !readFeatureEnabled(f.key)) {
-      for (const n of f.toolNames) disabled.add(n);
-    }
+    if (!f.switchable) continue;
+    const hit = f.toolNames.includes(name) || f.prefixes?.some((p) => name.startsWith(p));
+    if (hit) return !readFeatureEnabled(f.key);
   }
-  return disabled;
+  return false;
 }
 
 /** Persist a feature's enabled flag to its config file. */
@@ -194,6 +295,16 @@ export async function setExtensionToolFeatureEnabled(
     case "office": {
       // 读-改-写整对象，保留 allowedDomains / screenshot 等字段。
       await writeBrowserConfig({ enabled });
+      return;
+    }
+    case "schedule":
+      await writeScheduleConfig({ enabled });
+      return;
+    case "mcp": {
+      // 读-改-写整对象，保留 autoApproveServers / unattendedServers 白名单。
+      const cfg = await readMcpFeatureConfig();
+      cfg.enabled = enabled;
+      await writeMcpFeatureConfig(cfg);
       return;
     }
     default:

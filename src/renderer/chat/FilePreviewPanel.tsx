@@ -366,9 +366,10 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
   };
 
   // After a file loads, initialize the virtual window once the rows are in the
-  // DOM (clientHeight is only measurable post-commit).
+  // DOM (clientHeight is only measurable post-commit). Only virtualized files
+  // have a window to compute.
   useEffect(() => {
-    if (!textContent) return;
+    if (!textContent || lines.length <= VIRT_THRESHOLD) return;
     const raf = requestAnimationFrame(updateViewWindow);
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -378,22 +379,24 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
   // hljs can emit spans that cross line boundaries when split naively, so we
   // highlight the whole text and render it as ONE <code> block, with a
   // separate gutter column that shares the same line-height/font metrics.
-  const highlighted = useMemo(() => {
-    if (!textContent) return { html: "", lines: 0 };
-    const lines = textContent.split("\n").length;
-    if (textContent.length > HIGHLIGHT_MAX) {
-      return { html: "", lines };
-    }
+  // The split ALSO lives inside the memo: doing it in render() re-split the
+  // whole highlighted string on every render (tens of KB → GC churn).
+  const htmlLines = useMemo(() => {
+    if (!textContent || textContent.length > HIGHLIGHT_MAX) return null;
     const lang = EXT_LANG[ext];
     try {
       if (lang && hljs.getLanguage(lang)) {
-        return { html: hljs.highlight(textContent, { language: lang }).value, lines };
+        return hljs.highlight(textContent, { language: lang }).value.split("\n");
       }
     } catch {
       /* fall through to plain text */
     }
-    return { html: "", lines };
+    return null;
   }, [textContent, ext]);
+
+  // Only long files are virtualized. Short ones render every row up-front, so
+  // `viewWin` is never read for them — see the scroll handler below.
+  const isVirtualFile = lines.length > VIRT_THRESHOLD;
 
   const renderBody = () => {
     if (loading) {
@@ -467,10 +470,7 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
         // alignment structural — they live in the same flex item, so they
         // cannot drift. The whole-text hljs run is split on '\n' so spans that
         // cross line boundaries keep the opening/closing tags on each half.
-        const htmlLines = highlighted.html ? highlighted.html.split("\n") : null;
-        const isVirtual = lines.length > VIRT_THRESHOLD;
-
-        if (isVirtual) {
+        if (isVirtualFile) {
           // Large file: render only the visible window (absolute-positioned
           // inside a full-height spacer) so the DOM stays at ~100 rows instead
           // of thousands. Rows keep their REAL line number in data-line, so
@@ -593,6 +593,12 @@ export default function FilePreviewPanel({ filePath }: { filePath: string }) {
         ref={bodyRef}
         onScroll={() => {
           setFloatBtn(null);
+          // Only virtualized files need the window recomputed. For a short file
+          // (every row already rendered) `updateViewWindow` would still write a
+          // NEW {start,end} on every frame, and even though nothing reads it,
+          // the state change re-rendered the ENTIRE line list each frame —
+          // hundreds of rows reconciled per scroll tick. Bail out instead.
+          if (!isVirtualFile) return;
           // rAF-throttled: scroll fires faster than frames; the window only
           // needs recomputing once per frame.
           if (scrollRafRef.current == null) {

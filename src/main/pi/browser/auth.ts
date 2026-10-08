@@ -17,23 +17,35 @@ import type { BrowserConfig } from "./browser-config";
  *
  * @param unattended 该扩展实例是否服务无人值守（定时任务）会话
  * @param cfg        当前 browser-config.json
+ * @param opts.readOnly 本次动作是否**只读**（tabs / snapshot / screenshot）。
+ *   只读动作不改页面、无副作用，无人值守下可由 `allowUnattendedRead` 单独放行，
+ *   让「只看不点」的巡检类定时任务不必授予写权限。
  */
-export function assertBrowserAuthorized(unattended: boolean, cfg: BrowserConfig): void {
+export function assertBrowserAuthorized(
+  unattended: boolean,
+  cfg: BrowserConfig,
+  opts: { readOnly?: boolean } = {},
+): void {
   if (!cfg.enabled) {
     throw new Error(
       "浏览器控制未授权。请先在「设置 → 可用工具」开启「浏览器操作（office）」，或在 browser-config.json 设 enabled=true。",
     );
   }
   if (!unattended) return;
+  if (cfg.allowUnattended) return;
 
-  if (!cfg.allowUnattended) {
-    throw new Error("无人值守浏览器操作未开启。请在 browser-config.json 设 allowUnattended=true。");
-  }
+  if (opts.readOnly && cfg.allowUnattendedRead) return;
+
+  throw new Error(
+    "无人值守浏览器操作未开启。请在 browser-config.json 设 allowUnattended=true（放开全部动作）；" +
+      "若只允许只读动作（tabs / snapshot / screenshot），则设 allowUnattendedRead=true。",
+  );
 }
 
 /** 一行授权状态摘要（设置页/日志用）。 */
 export function authSummary(cfg: BrowserConfig): string {
   if (!cfg.enabled) return "未授权（enabled=false）";
   if (cfg.allowUnattended) return "已授权（含无人值守）";
+  if (cfg.allowUnattendedRead) return "已授权（仅交互会话 + 无人值守只读）";
   return "已授权（仅交互会话）";
 }

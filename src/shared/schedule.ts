@@ -23,6 +23,14 @@ export type ScheduleType =
 export const LAST_DAY_OF_MONTH = -1;
 
 /**
+ * The synthetic user message the scheduler sends to start a run. The task's real
+ * prompt lives in the system prompt's `<scheduled_task>` block, so this text is
+ * just a fixed marker — the main process sends it, and the renderer matches it
+ * to attach the "task details" panel below the bubble.
+ */
+export const SCHEDULED_TRIGGER_MESSAGE = "请开始执行本次定时任务。";
+
+/**
  * What to do when a fire window was missed because the app was closed or the
  * machine was asleep.
  *  - "skip": drop the missed window, jump to the next future one (default)

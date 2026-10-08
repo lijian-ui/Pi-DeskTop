@@ -10,6 +10,12 @@ import type {
   ExtensionToolFeatureUpdate,
   ToolMode,
 } from "../shared/tool-catalog-types";
+import type {
+  McpConfigView,
+  McpFeaturePatch,
+  McpServerPatch,
+  McpServerUpsert,
+} from "../shared/mcp-types";
 
 // Pi-ready signaling: the main process sends "pi:ready" once the (slow,
 // synchronous) SDK initialization completes. Buffer it so a late subscriber
@@ -282,6 +288,33 @@ const piAPI = {
     ipcRenderer.invoke("pi:getSessionToolMode", cwd),
   setSessionToolMode: (cwd: string, mode: ToolMode): Promise<void> =>
     ipcRenderer.invoke("pi:setSessionToolMode", cwd, mode),
+
+  // MCP servers (设置 → MCP)
+  getMcpConfig: (): Promise<McpConfigView> => ipcRenderer.invoke("pi:getMcpConfig"),
+  saveMcpFeature: (patch: McpFeaturePatch) =>
+    ipcRenderer.invoke("pi:saveMcpFeature", patch),
+  upsertMcpServer: (payload: McpServerUpsert) =>
+    ipcRenderer.invoke("pi:upsertMcpServer", payload),
+  updateMcpServer: (name: string, patch: McpServerPatch) =>
+    ipcRenderer.invoke("pi:updateMcpServer", { name, patch }),
+  deleteMcpServer: (name: string) =>
+    ipcRenderer.invoke("pi:deleteMcpServer", name),
+  onMcpApprovalRequest: (
+    callback: (data: {
+      requestId: number;
+      server: string;
+      cwd?: string;
+      sessionPath?: string | null;
+    }) => void,
+  ) => {
+    const listener = (_: any, data: any) => callback(data);
+    ipcRenderer.on("pi:mcpApprovalRequest", listener);
+    return () => ipcRenderer.removeListener("pi:mcpApprovalRequest", listener);
+  },
+  respondMcpApproval: (payload: {
+    requestId: number;
+    decision: "allow" | "deny" | "allow-session";
+  }) => ipcRenderer.invoke("pi:mcpApprovalResponse", payload),
 
   // Context-file import toggles (规则与记忆 → 导入设置)
   getContextFilesConfig: () => ipcRenderer.invoke("pi:getContextFilesConfig"),

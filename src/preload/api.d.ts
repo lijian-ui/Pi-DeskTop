@@ -165,6 +165,25 @@ export interface PiDeskAPI {
   getSessionToolMode(cwd: string): Promise<ToolMode>;
   setSessionToolMode(cwd: string, mode: ToolMode): Promise<void>;
 
+  // MCP servers (设置 → MCP)
+  getMcpConfig(): Promise<McpConfigView>;
+  saveMcpFeature(patch: McpFeaturePatch): Promise<void>;
+  upsertMcpServer(payload: McpServerUpsert): Promise<void>;
+  updateMcpServer(name: string, patch: McpServerPatch): Promise<void>;
+  deleteMcpServer(name: string): Promise<void>;
+  onMcpApprovalRequest(
+    callback: (data: {
+      requestId: number;
+      server: string;
+      cwd?: string;
+      sessionPath?: string | null;
+    }) => void
+  ): () => void;
+  respondMcpApproval(payload: {
+    requestId: number;
+    decision: "allow" | "deny" | "allow-session";
+  }): Promise<void>;
+
   // Context-file import toggles (规则与记忆 → 导入设置)
   getContextFilesConfig(): Promise<ContextFilesConfig>;
   setContextFilesConfig(cfg: ContextFilesConfig): Promise<void>;
@@ -339,6 +358,17 @@ export type {
   ToolMode,
 } from "../shared/tool-catalog-types";
 
+// MCP server shapes (设置 → MCP).
+export type {
+  McpConfigView,
+  McpExposure,
+  McpFeaturePatch,
+  McpServerDef,
+  McpServerPatch,
+  McpServerUpsert,
+  McpServerView,
+} from "../shared/mcp-types";
+
 import type { TodoSnapshot } from "../shared/todo-types";
 import type { TaskSchedule, TaskStateMap } from "../shared/schedule";
 import type {
@@ -351,6 +381,12 @@ import type {
   ExtensionToolFeatureUpdate,
   ToolMode,
 } from "../shared/tool-catalog-types";
+import type {
+  McpConfigView,
+  McpFeaturePatch,
+  McpServerPatch,
+  McpServerUpsert,
+} from "../shared/mcp-types";
 
 export interface ScheduledTask {
   id: string;
@@ -361,7 +397,7 @@ export interface ScheduledTask {
   rules: string;
   schedule: TaskSchedule;
   createdAt: string;
-  /** Path to the task's single accumulating session; null until it has run. */
+  /** Legacy accumulating session (older builds); new runs record their own path. */
   sessionPath?: string | null;
   /** Model the task runs with; null ⇒ follow the global default model. */
   model?: { provider: string; modelId: string } | null;
@@ -480,9 +516,10 @@ export interface QqLoginStatus {
 
 
 export interface ScheduledTaskRun {
-  /** Unique per run — one session accumulates many runs sharing sessionPath. */
+  /** Unique per run; also the identity of the run in the sidebar. */
   id: string;
   taskId: string;
+  /** Conversation file this execution wrote (one fresh file per run). */
   sessionPath: string;
   startedAt: string;
   finishedAt?: string;

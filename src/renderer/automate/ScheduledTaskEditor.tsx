@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type {
@@ -31,6 +31,15 @@ const TIME_BASED: ScheduleType[] = ["daily", "weekly", "monthly", "yearly"];
 /** Largest possible day count per month — February allows 29 so a leap-day
  *  schedule stays selectable (it simply fires only in leap years). */
 const MONTH_MAX_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** 文本域随内容自动撑高（先归零再取 scrollHeight），超过上限后内部滚动。 */
+const TEXTAREA_MAX_HEIGHT = 260;
+
+function autoGrow(el: HTMLTextAreaElement | null): void {
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = `${Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT)}px`;
+}
 
 /** Shape of a model as returned by window.piDesk.getAvailableModels(). */
 interface ModelItem {
@@ -72,6 +81,11 @@ export default function ScheduledTaskEditor({
   const [cwd, setCwd] = useState(task.cwd);
   const [prompt, setPrompt] = useState(task.prompt);
   const [rules, setRules] = useState(task.rules);
+  // 提示词 / 附加规则两个文本域随内容自动撑高（切换任务时也会重新按内容定高）。
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const rulesRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => autoGrow(promptRef.current), [prompt]);
+  useEffect(() => autoGrow(rulesRef.current), [rules]);
   const [type, setType] = useState<ScheduleType>(task.schedule.type);
   const [time, setTime] = useState(task.schedule.time ?? "09:00");
   const [everyMinutes, setEveryMinutes] = useState(
@@ -283,6 +297,7 @@ export default function ScheduledTaskEditor({
               {errors.prompt && <em className={styles.err}>{errors.prompt}</em>}
             </span>
             <textarea
+              ref={promptRef}
               className={styles.textarea}
               rows={3}
               value={prompt}
@@ -348,6 +363,7 @@ export default function ScheduledTaskEditor({
           <label className={styles.field}>
             <span className={styles.label}>{t("scheduled.rules")}</span>
             <textarea
+              ref={rulesRef}
               className={styles.textarea}
               rows={3}
               value={rules}

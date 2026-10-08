@@ -19,9 +19,9 @@ import {
   DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
   DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
   DEFAULT_SESSION_RETENTION_DAYS,
-  GUARD_RULES_FILENAME,
 } from "./constants";
 import { AGENT_ROOT, normalizeConfiguredMemoryDir, normalizeProjectsMemoryDir } from "./paths";
+import { parseJsonText, readJsonFileSync } from "../../json-file";
 
 // ─── Ranking / anchors / guard defaults ───
 const DEFAULT_RANKING_CONFIG: RankingConfig = {
@@ -153,7 +153,7 @@ export function saveConfig(
   let raw: Record<string, unknown> = {};
   if (fs.existsSync(configPath)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      const parsed = readJsonFileSync(configPath);
       if (parsed && typeof parsed === "object") raw = parsed as Record<string, unknown>;
     } catch {
       // Corrupt file — start from an empty object and rebuild.
@@ -228,7 +228,7 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
   try {
     if (fs.existsSync(configPath)) {
       const raw = fs.readFileSync(configPath, "utf-8");
-      const parsed = JSON.parse(raw);
+      const parsed = parseJsonText(raw);
       // Merge: override defaults with user config
       const config: MemoryConfig = { ...DEFAULT_CONFIG };
       const isNonNegativeNumber = (value: unknown): value is number => (

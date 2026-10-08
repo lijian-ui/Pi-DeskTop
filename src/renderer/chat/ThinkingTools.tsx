@@ -1,9 +1,10 @@
 import { memo, useState, useEffect, useRef } from "react";
 import { ChevronRight, Brain } from "lucide-react";
-import type { Message } from "../store/agent-store";
+import type { Message, ToolExecution as ToolExecutionData } from "../store/agent-store";
 import { useTranslation } from "react-i18next";
 import Markdown from "./Markdown";
 import ToolExecution from "./ToolExecution";
+import { summarizeArgs } from "./tool-args";
 import styles from "./ThinkingTools.module.css";
 
 interface Props {
@@ -41,6 +42,56 @@ function ThinkingRow({ text }: { text: string }) {
       <span className={styles.thinkingText}>{text}</span>
     </button>
   );
+}
+
+/**
+ * 折叠标题行的「实时尾巴」：单行展示此刻正在发生的事，随流式滚动。
+ *
+ * 取值优先级（与面板内的过程时间线同源，只是只取"最新一条"）：
+ *  1. 有工具正在执行 → `工具名 · 参数摘要`
+ *  2. 某条消息正在写思考（流式中且还没进正文）→ 该段思考的**最后一行**
+ *     （最新写出来的部分，而不是开头——开头早就划过去了，滚动感来自尾部）
+ *  3. 最近一个**已跑完**的工具 → 同 1 的格式。这一档是必须的：工具执行往往
+ *     只有几百毫秒，若只在 isRunning 时显示，工具行会一闪而过、基本看不见。
+ *     粘住它，直到被下一段思考或下一个工具顶掉，整行才是连续滚动的。
+ *  4. 都没有 → 空串（回合已结束、或模型正在写正文且本轮还没跑过工具）
+ *
+ * 注意：这是"折叠态专属"的即时摘要，不是过程记录——回合结束即清空。
+ */
+function toolLine(tool: ToolExecutionData): string {
+  const args = summarizeArgs(tool.toolName, tool.input);
+  return args ? `${tool.toolName} · ${args}` : tool.toolName;
+}
+
+/** 思考文本的"最新一行"——流式时新内容总在尾部。 */
+function tailLine(thinking: string | undefined): string {
+  const text = thinking?.trim();
+  if (!text) return "";
+  const lines = text.split("\n").filter((l) => l.trim());
+  return lines[lines.length - 1]?.trim() ?? "";
+}
+
+function liveStageText(messages: Message[], settled: boolean): string {
+  if (settled) return "";
+  const tools = messages.flatMap((m) => m.toolExecutions ?? []);
+
+  // 1. 正在执行的工具
+  for (let i = tools.length - 1; i >= 0; i--) {
+    if (tools[i].isRunning) return toolLine(tools[i]);
+  }
+
+  // 2. 正在写的思考（消息还在流式、且尚未进入正文阶段）。否则已写完的思考
+  //    会滞留在这里，正文流式时标题行会挂着一段旧内容。
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg.isStreaming || msg.content?.trim()) continue;
+    const tail = tailLine(msg.thinking);
+    if (tail) return tail;
+  }
+
+  // 3. 最近一个已跑完的工具
+  const lastTool = tools[tools.length - 1];
+  return lastTool ? toolLine(lastTool) : "";
 }
 
 /**
@@ -90,6 +141,9 @@ function ThinkingTools({ messages }: Props) {
   // 没有任何过程性内容 → 不渲染面板。
   if (!hasThinking && !hasTools && !hasIntermediate) return null;
 
+  // 折叠态的实时尾巴：只在运行中显示，回合结束自动清空（回到干净标题行）。
+  const liveText = liveStageText(messages, turnSettled);
+
   const anyError = tools.some((tool) => tool.isError);
   const overallStatus = streamingOrRunning ? "running" : anyError ? "error" : "done";
 
@@ -115,6 +169,13 @@ function ThinkingTools({ messages }: Props) {
             {tools.length} {t("chat.toolsCount")}
           </span>
         )}
+        {/* 折叠态的实时尾巴：展开时由正文时间线承担表达，故隐藏，避免重复。
+            单行 + 省略号截断，不换行、不撑高标题行。 */}
+        {!expanded && liveText && (
+          <span className={styles.liveText} title={liveText}>
+            {liveText}
+          </span>
+        )}
         <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}>
           <ChevronRight size={12} />
         </span>
@@ -128,8 +189,11 @@ function ThinkingTools({ messages }: Props) {
             const content = msg.content?.trim();
             const msgTools = msg.toolExecutions ?? [];
             if (!thinking && !content && msgTools.length === 0) return null;
+            // id 加 panel- 前缀：同一 msg.id 在回合级已由 AssistantTurn
+            // 渲染成 msg-<id>，若这里也用 msg-<id> 会造成重复 id，
+            // 搜索定位/高亮会命中面板内这个（文档顺序靠前）而非正文。
             return (
-              <div key={msg.id} id={`msg-${msg.id}`} className={styles.step}>
+              <div key={msg.id} id={`panel-msg-${msg.id}`} className={styles.step}>
                 {!!thinking && <ThinkingRow text={thinking} />}
                 {!!content && (
                   <div className={styles.intermediateSection}>

@@ -12,6 +12,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { readJsonFileSync } from '../../../json-file';
 
 export const DICT_EXTRA_FILENAME = 'dict-extra.json';
 
@@ -78,7 +79,7 @@ function build(words: Iterable<string>): MemoryDictionary {
 function readExtraWords(filePath: string): string[] {
   try {
     if (!fs.existsSync(filePath)) return [];
-    const parsed: unknown = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const parsed: unknown = readJsonFileSync(filePath);
     if (Array.isArray(parsed)) return parsed.filter((w): w is string => typeof w === 'string');
     if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { words?: unknown }).words)) {
       return ((parsed as { words: unknown[] }).words).filter((w): w is string => typeof w === 'string');

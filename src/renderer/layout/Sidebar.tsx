@@ -7,7 +7,7 @@ import {
   Filter,
   Settings,
   Folder,
-  Wrench,
+  Clock,
   Sparkles,
   Download,
   Trash2,
@@ -25,7 +25,7 @@ import { useTranslation } from "react-i18next";
 import { useSessionStore, type SessionInfo } from "../store/session-store";
 import FileManagerPanel from "./FileManagerPanel";
 import ConfirmDialog from "../sidebar/ConfirmDialog";
-import { latestRunFor } from "../utils/scheduled";
+import type { ScheduledTaskRun } from "../../preload/api";
 import styles from "./Sidebar.module.css";
 
 type NavKey = "chat" | "agents" | "projects" | "skills" | "automate" | "im" | "settings";
@@ -38,7 +38,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { key: "skills", icon: Sparkles, labelKey: "nav.skills" },
-  { key: "automate", icon: Wrench, labelKey: "nav.automate" },
+  { key: "automate", icon: Clock, labelKey: "nav.automate" },
   { key: "im", icon: MessageSquare, labelKey: "nav.im" },
   { key: "settings", icon: Settings, labelKey: "nav.settings" },
 ];
@@ -53,6 +53,25 @@ function formatTime(value: string | Date | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/**
+ * Compact "3 分钟前" style stamp for scheduled-run rows, falling back to an
+ * absolute date once it is older than a week. `Intl.RelativeTimeFormat` keeps
+ * it locale-aware without shipping translation keys.
+ */
+function relativeTime(value: string | undefined): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return "";
+  const diff = d.getTime() - Date.now();
+  const abs = Math.abs(diff);
+  if (abs >= 7 * 86_400_000) return formatTime(value);
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (abs < 60_000) return rtf.format(Math.round(diff / 1000), "second");
+  if (abs < 3_600_000) return rtf.format(Math.round(diff / 60_000), "minute");
+  if (abs < 86_400_000) return rtf.format(Math.round(diff / 3_600_000), "hour");
+  return rtf.format(Math.round(diff / 86_400_000), "day");
 }
 
 function sessionTitle(s: SessionInfo): string {
@@ -227,7 +246,6 @@ function SessionsSection({
   const chatOnlyCwd = useSessionStore((s) => s.chatOnlyCwd);
   const currentPath = useSessionStore((s) => s.currentPath);
   const runningPaths = useSessionStore((s) => s.runningPaths);
-  const loading = useSessionStore((s) => s.loading);
   const selectSession = useSessionStore((s) => s.selectSession);
   const createNew = useSessionStore((s) => s.createNew);
   const removeSession = useSessionStore((s) => s.removeSession);
@@ -254,21 +272,25 @@ function SessionsSection({
     },
     [normalizedChatOnlyCwd],
   );
-  // A session is "scheduled" when it is the accumulated run log of a scheduled
-  // task (its path is stamped on the task config). Grouped separately, and
-  // excluded from both 任务 and 空间 — this works for ANY bound workspace cwd.
-  const scheduledPaths = useMemo(
-    () =>
-      new Set(
-        scheduled.tasks
-          .map((t) => t.sessionPath)
-          .filter((p): p is string => !!p),
-      ),
-    [scheduled.tasks],
-  );
+  // Sessions owned by scheduled tasks, mapped to the task that produced them.
+  // Every run now writes its OWN session file, so ownership is collected from
+  // run records; a task's legacy single accumulating session (stamped on the
+  // task config) is included too, so old history stays reachable. Grouped
+  // separately and excluded from both 任务 and 空间 — this works for ANY bound
+  // workspace cwd.
+  const scheduledOwners = useMemo(() => {
+    const owners = new Map<string, string>();
+    for (const t of scheduled.tasks) {
+      if (t.sessionPath) owners.set(t.sessionPath, t.id);
+    }
+    for (const r of scheduled.runs) {
+      if (r.sessionPath) owners.set(r.sessionPath, r.taskId);
+    }
+    return owners;
+  }, [scheduled]);
   const isScheduled = useCallback(
-    (s: SessionInfo): boolean => scheduledPaths.has(s.path),
-    [scheduledPaths],
+    (s: SessionInfo): boolean => scheduledOwners.has(s.path),
+    [scheduledOwners],
   );
   // 任务 = isTask AND NOT scheduled — a scheduled session whose cwd happens to
   // be empty/chat-only (e.g. legacy tasks created with the chat default) must
@@ -290,9 +312,46 @@ function SessionsSection({
     [spaceSessions, t],
   );
 
+  // Per-session run bookkeeping: the newest run's timestamp (for the relative
+  // time on each row) and whether anything is still running there. Computed
+  // once so the row renderer never rescans the whole run list.
+  const scheduledRunInfo = useMemo(() => {
+    const latest = new Map<string, ScheduledTaskRun>();
+    const running = new Set<string>();
+    for (const r of scheduled.runs) {
+      if (!r.sessionPath) continue;
+      const prev = latest.get(r.sessionPath);
+      if (!prev || r.startedAt > prev.startedAt) latest.set(r.sessionPath, r);
+      if (r.status === "running") running.add(r.sessionPath);
+    }
+    return { latest, running };
+  }, [scheduled]);
+
+  // 定时任务 group: one collapsible group per task, one row per execution
+  // session inside it (newest first — the session list is already modified-desc).
+  const scheduledGroups = useMemo(() => {
+    const byTask = new Map<string, SessionInfo[]>();
+    for (const s of scheduledSessions) {
+      const taskId = scheduledOwners.get(s.path) ?? "";
+      const list = byTask.get(taskId);
+      if (list) list.push(s);
+      else byTask.set(taskId, [s]);
+    }
+    return [...byTask.entries()].map(([taskId, list]) => ({
+      taskId,
+      label:
+        scheduled.tasks.find((t) => t.id === taskId)?.name ||
+        t("scheduled.untitled"),
+      sessions: list,
+    }));
+  }, [scheduledSessions, scheduledOwners, scheduled, t]);
+
   // Folder-tree state: which cwd groups are collapsed (default: all expanded),
   // and whether the「任务」/「空间」sections are collapsed.
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [collapsedScheduled, setCollapsedScheduled] = useState<Set<string>>(
     () => new Set(),
   );
   const [taskCollapsed, setTaskCollapsed] = useState(false);
@@ -327,6 +386,15 @@ function SessionsSection({
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleScheduledGroup = (taskId: string) => {
+    setCollapsedScheduled((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
       return next;
     });
   };
@@ -484,9 +552,117 @@ function SessionsSection({
     );
   };
 
+  // Render one execution row inside a 定时任务 group. Each row is the run's own
+  // session file; the label prefers a user rename, then the task name.
+  const renderScheduledRow = (s: SessionInfo, taskLabel: string) => {
+    const isActive = currentPath === s.path;
+    const isEditing = editingPath === s.path;
+    const isMenuOpen = menuOpenPath === s.path;
+    const isRunning = scheduledRunInfo.running.has(s.path);
+    const displayName = s.name || taskLabel || s.path;
+    return (
+      <div
+        key={s.path}
+        className={`${styles.scheduledItem} ${
+          isActive ? styles.scheduledItemActive : ""
+        }`}
+        role="button"
+        tabIndex={0}
+        onClick={() => {
+          selectSession(s.path);
+          onReturnToChat();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            selectSession(s.path);
+            onReturnToChat();
+          }
+        }}
+        title={displayName}
+      >
+        {isEditing ? (
+          <RenameInput
+            initialValue={s.name ?? ""}
+            onSave={(val) => submitRename(s.path, val)}
+            onCancel={() => setEditingPath(null)}
+          />
+        ) : (
+          <span
+            className={styles.sessionTitle}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              startRename(s.path);
+            }}
+          >
+            {displayName}
+          </span>
+        )}
+        <span className={styles.sessionTime}>
+          {relativeTime(scheduledRunInfo.latest.get(s.path)?.startedAt)}
+        </span>
+        {isRunning && (
+          <Loader2 size={13} className={styles.sessionSpinner} />
+        )}
+        <button
+          className={`${styles.sessionMenuBtn} ${
+            isMenuOpen ? styles.sessionMenuBtnOpen : ""
+          }`}
+          title={t("sessions.more")}
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenuOpenPath(isMenuOpen ? null : s.path);
+          }}
+        >
+          <MoreVertical size={14} />
+        </button>
+        {isMenuOpen && (
+          <>
+            <div
+              className={styles.menuOverlay}
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpenPath(null);
+              }}
+            />
+            <div
+              className={styles.sessionMenu}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                className={styles.sessionMenuItem}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  startRename(s.path);
+                }}
+              >
+                <Pencil size={13} />
+                <span>{t("sessions.rename")}</span>
+              </button>
+              <button
+                className={styles.sessionMenuItem}
+                onClick={(e) => handleExport(e, s.path)}
+              >
+                <Download size={13} />
+                <span>{t("sessions.export")}</span>
+              </button>
+              <button
+                className={`${styles.sessionMenuItem} ${styles.sessionMenuItemDanger}`}
+                onClick={(e) => handleDelete(e, s.path)}
+              >
+                <Trash2 size={13} />
+                <span>{t("sessions.delete")}</span>
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className={styles.spacesSection}>
-      {/* 定时任务 — 运行历史监控：每个已运行的任务显示一项，点击打开其累计会话。
+      {/* 定时任务 — 两级折叠：一级是任务名，二级是每次执行产生的会话。
           列在最上方，作为用户查看定时任务产出的第一入口。 */}
       <div className={styles.spacesHeader}>
         <button
@@ -507,112 +683,30 @@ function SessionsSection({
 
       {!schedCollapsed && (
         <div className={styles.spacesList}>
-          {scheduledSessions.map((s) => {
-            const task = scheduled.tasks.find((t) => t.sessionPath === s.path);
-            const last = task
-              ? latestRunFor(scheduled.runs, task.id)
-              : undefined;
-            const isRunning = scheduled.runs.some(
-              (r) => r.sessionPath === s.path && r.status === "running",
-            );
-            const isActive = currentPath === s.path;
-            const isEditing = editingPath === s.path;
-            const isMenuOpen = menuOpenPath === s.path;
-            // A custom rename wins; otherwise fall back to the task's name.
-            const displayName = s.name || task?.name || s.path;
+          {scheduledGroups.map((g) => {
+            const isCollapsed = collapsedScheduled.has(g.taskId);
             return (
-              <div
-                key={s.path}
-                className={`${styles.scheduledItem} ${
-                  isActive ? styles.scheduledItemActive : ""
-                }`}
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  selectSession(s.path);
-                  onReturnToChat();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    selectSession(s.path);
-                    onReturnToChat();
-                  }
-                }}
-                title={displayName}
-              >
-                {isEditing ? (
-                  <RenameInput
-                    initialValue={s.name ?? ""}
-                    onSave={(val) => submitRename(s.path, val)}
-                    onCancel={() => setEditingPath(null)}
-                  />
-                ) : (
-                  <div className={styles.scheduledMeta}>
-                    <span className={styles.scheduledName}>
-                      {displayName}
-                    </span>
-                    {last?.startedAt && (
-                      <span className={styles.scheduledSub}>
-                        {t("scheduled.lastRun")} {formatTime(last.startedAt)}
-                      </span>
-                    )}
-                  </div>
-                )}
-                {isRunning && (
-                  <Loader2 size={13} className={styles.sessionSpinner} />
-                )}
+              <div key={g.taskId} className={styles.spaceItem}>
                 <button
-                  className={`${styles.sessionMenuBtn} ${
-                    isMenuOpen ? styles.sessionMenuBtnOpen : ""
-                  }`}
-                  title={t("sessions.more")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setMenuOpenPath(isMenuOpen ? null : s.path);
-                  }}
+                  className={styles.spaceHeader}
+                  onClick={() => toggleScheduledGroup(g.taskId)}
+                  title={g.label}
                 >
-                  <MoreVertical size={14} />
+                  <Clock size={16} className={styles.spaceFolderIcon} />
+                  <span className={styles.spaceName}>{g.label}</span>
+                  {isCollapsed ? (
+                    <ChevronRight size={16} className={styles.spaceChevron} />
+                  ) : (
+                    <ChevronDown size={16} className={styles.spaceChevron} />
+                  )}
+                  <span className={styles.spaceCount}>{g.sessions.length}</span>
                 </button>
-                {isMenuOpen && (
-                  <>
-                    <div
-                      className={styles.menuOverlay}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setMenuOpenPath(null);
-                      }}
-                    />
-                    <div
-                      className={styles.sessionMenu}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <button
-                        className={styles.sessionMenuItem}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          startRename(s.path);
-                        }}
-                      >
-                        <Pencil size={13} />
-                        <span>{t("sessions.rename")}</span>
-                      </button>
-                      <button
-                        className={styles.sessionMenuItem}
-                        onClick={(e) => handleExport(e, s.path)}
-                      >
-                        <Download size={13} />
-                        <span>{t("sessions.export")}</span>
-                      </button>
-                      <button
-                        className={`${styles.sessionMenuItem} ${styles.sessionMenuItemDanger}`}
-                        onClick={(e) => handleDelete(e, s.path)}
-                      >
-                        <Trash2 size={13} />
-                        <span>{t("sessions.delete")}</span>
-                      </button>
-                    </div>
-                  </>
+                {!isCollapsed && (
+                  <div
+                    className={`${styles.spaceSessions} ${styles.scheduledScrollList}`}
+                  >
+                    {g.sessions.map((s) => renderScheduledRow(s, g.label))}
+                  </div>
                 )}
               </div>
             );

@@ -87,6 +87,22 @@
   flex-shrink: 0;
 }
 
+/* ── 折叠态标题行的实时尾巴 ───────────────────────────────
+   折叠时把「此刻正在输出的事」同步到标题行：正在跑工具显示
+   `工具名 · 参数`，正在写思考显示该段思考的最新一行。单行 +
+   省略号截断 —— 无论内容多长都不换行、不撑高标题行，避免流式
+   期间整个气泡上下跳动。回合结束由组件清空，回到干净标题行。 */
+.liveText {
+  flex: 1;
+  min-width: 0;
+  margin-left: var(--spacer-4);
+  color: var(--text-tertiary);
+  font-weight: var(--font-weight-default);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* chevron：统一为 ChevronRight，展开时旋转 90° */
 .chevron {
   margin-left: auto;
@@ -99,9 +115,24 @@
   transform: rotate(90deg);
 }
 
-/* ── 展开正文区：无自带底色，与聊天区一致 ─────────────── */
+/* ── 展开正文区：无自带底色，与聊天区一致 ───────────────
+   高度封顶：一个回合可能调几十次工具，展开后若不设上限会把整条聊天流
+   撑到几千 px，外层滚动区变大、重排范围失控，滚动就卡。这里让正文在
+   固定高度内自己滚，标题行留在外面始终可见。
+   注意是 max-height（内容少时按实际高度），不是写死的 height。
+   overscroll-behavior 阻止滚到底后把滚动继续甩给外层聊天列表。 */
 .body {
   padding: var(--spacer-12) 0;
+  max-height: min(40vh, 320px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* 让本滚动容器成为内部绝对定位后代的包含块。
+     面板子树里有若干 `position: absolute` 的 .srOnly（无 top/left，走 static
+     位置），若包含块落到面板外的 .assistantTurn（它是 position: relative），
+     这些元素就不受本容器 overflow 裁剪、会把自己的 static 位置算进回合的
+     scrollHeight —— 表现为最终回复下方多出一段约等于"限高前原始高度"的空白
+     （实测 turn.scrollHeight 2828 而非 421）。加 relative 后它们被收回容器内。 */
+  position: relative;
 }
 
 /* step 之间靠留白区分 */

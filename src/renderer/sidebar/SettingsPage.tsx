@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   X, Settings as SystemIcon, Palette, Brain, Cpu,
   Bot as AssistantIcon, Database, Keyboard, Shield, Languages,
-  Layers, Wrench, HelpCircle, Headphones, Globe,
+  Layers, Wrench, HelpCircle, Headphones, Globe, Server,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useUIStore } from "../store/ui-store";
@@ -16,6 +16,7 @@ import ToolsSettings from "./ToolsSettings";
 import SystemSettings from "./SystemSettings";
 import TtsPage from "./TtsPage";
 import WebSearchSettings from "./WebSearchSettings";
+import McpSettings from "./McpSettings";
 import HelpIntro from "../help/sections/HelpIntro";
 import HelpFaq from "../help/sections/HelpFaq";
 import HelpFeedback from "../help/sections/HelpFeedback";
@@ -36,6 +37,7 @@ type SettingsSection =
   | "context"
   | "tts"
   | "websearch"
+  | "mcp"
   | "language"
   | "help";
 
@@ -55,6 +57,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: "context", icon: Layers, labelKey: "settings.context" },
   { key: "tts", icon: Headphones, labelKey: "settings.tts" },
   { key: "websearch", icon: Globe, labelKey: "settings.websearch" },
+  { key: "mcp", icon: Server, labelKey: "settings.mcp" },
   { key: "language", icon: Languages, labelKey: "lang.switch" },
   { key: "personalization", icon: Palette, labelKey: "settings.personalization" },
   { key: "shortcuts", icon: Keyboard, labelKey: "settings.shortcuts" },
@@ -114,6 +117,8 @@ export default function SettingsPage() {
             <TtsPage />
           ) : activeSection === "websearch" ? (
             <WebSearchSettings />
+          ) : activeSection === "mcp" ? (
+            <McpSettings />
           ) : activeSection === "memory" ? (
             <MemoryPage />
           ) : activeSection === "assistant" ? (

@@ -179,3 +179,92 @@
 .refCardChevronOpen {
   transform: rotate(90deg);
 }
+
+/* ── 定时任务消息的「任务详情」展开卡（气泡下方） ── */
+.taskCard {
+  display: flex;
+  flex-direction: column;
+  /* 触发消息本身很短，靠这张卡把气泡列撑到可读宽度 */
+  width: 360px;
+  max-width: 100%;
+  margin-top: var(--spacer-6);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  overflow: hidden;
+  background: var(--bg-base-secondary);
+}
+
+.taskCardHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  padding: var(--spacer-6) var(--spacer-10);
+  background: var(--bg-base-tertiary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.taskCardHeader:hover {
+  background: var(--bg-base-hover, var(--bg-base-tertiary));
+}
+
+.taskCardIcon {
+  flex-shrink: 0;
+  color: var(--bg-brand);
+}
+
+.taskCardTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--body-xs-font-size);
+  color: var(--text-default);
+}
+
+.taskCardChevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+  transform: rotate(0deg);
+}
+
+.taskCardChevronOpen {
+  transform: rotate(90deg);
+}
+
+.taskCardBody {
+  position: relative;
+  max-height: 260px;
+  overflow: auto;
+  padding: var(--spacer-8) var(--spacer-10) var(--spacer-10);
+  border-top: 1px solid var(--border-neutral-l2);
+  font-size: var(--body-xs-font-size);
+  color: var(--text-default);
+  text-align: left;
+}
+
+.taskCardEmpty {
+  color: var(--text-tertiary);
+}
+
+.taskCardCopy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  margin-top: var(--spacer-6);
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-4);
+  font-size: var(--body-xs-font-size);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.taskCardCopy:hover {
+  background: var(--bg-overlay-l2);
+  color: var(--text-default);
+}

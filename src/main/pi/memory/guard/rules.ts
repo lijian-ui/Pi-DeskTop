@@ -13,6 +13,7 @@
 import * as fs from 'node:fs';
 import type { GuardRule } from './types';
 import { DEFAULT_GUARD_RULES } from './defaults';
+import { readJsonFileSync } from '../../../json-file';
 
 interface UserRuleShape {
   id?: unknown;
@@ -31,7 +32,7 @@ function readUserRules(rulesPath?: string): UserRuleShape[] {
   if (!rulesPath) return [];
   try {
     if (!fs.existsSync(rulesPath)) return [];
-    const parsed: unknown = JSON.parse(fs.readFileSync(rulesPath, 'utf-8'));
+    const parsed: unknown = readJsonFileSync(rulesPath);
     if (Array.isArray(parsed)) return parsed as UserRuleShape[];
     if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { rules?: unknown }).rules)) {
       return (parsed as { rules: unknown[] }).rules as UserRuleShape[];

@@ -69,8 +69,19 @@ export interface BrowserConfig {
   managed: BrowserManagedConfig;
   /** 后台静默：不主动抢焦点/激活标签。默认 **true**。 */
   background: boolean;
-  /** 定时任务（无人值守）下是否允许浏览器操作，默认 **false**；allowedDomains 为可选额外收窄。 */
+  /**
+   * 定时任务（无人值守）下是否允许浏览器操作，默认 **true**；allowedDomains 为可选额外收窄。
+   * 默认放开是为了「定时任务开箱即用」：总开关 `enabled` 仍默认 false（用户须在设置里显式授权），
+   * 三类高危动作（upload / evaluate / 组合键）也仍是 fail-closed，故该默认值不构成静默越权。
+   * 需要收紧时在配置里显式写 false。
+   */
   allowUnattended: boolean;
+  /**
+   * 无人值守下是否单独放行**只读**动作（tabs / snapshot / screenshot），默认 **true**。
+   * 与 allowUnattended 分层：读操作不改页面、无副作用 —— 当 allowUnattended 被显式收紧为 false 时，
+   * 仍可单独保留只读能力（巡检类定时任务「只看不点」）。写操作仍由 allowUnattended 管辖。
+   */
+  allowUnattendedRead: boolean;
   /** 业务系统域名白名单。空数组 = 不限制（生产强烈建议填）。 */
   allowedDomains: string[];
   /** 黑名单（优先于白名单）。 */
@@ -87,7 +98,8 @@ function defaultConfig(): BrowserConfig {
     enabled: false,
     managed: { headless: true, executablePath: "", extraArgs: [], cdpPort: 17319 },
     background: true,
-    allowUnattended: false,
+    allowUnattended: true,
+    allowUnattendedRead: true,
     allowedDomains: [],
     blockedDomains: [],
     screenshot: { enabled: true, format: "png", quality: 80 },
@@ -116,7 +128,10 @@ function normalize(raw: unknown): BrowserConfig {
       cdpPort: typeof managed.cdpPort === "number" && managed.cdpPort > 0 ? managed.cdpPort : 17319,
     },
     background: r.background !== false,
-    allowUnattended: r.allowUnattended === true,
+    // 默认放开：缺字段 = true（`!== false`），只有显式写 false 才收紧。
+    // （与 guard 三项的「严格 === true 才放开」相反：那三项是高危动作，必须 fail-closed。）
+    allowUnattended: r.allowUnattended !== false,
+    allowUnattendedRead: r.allowUnattendedRead !== false,
     allowedDomains: asStringArray(r.allowedDomains),
     blockedDomains: asStringArray(r.blockedDomains),
     screenshot: {
@@ -135,7 +150,10 @@ function normalize(raw: unknown): BrowserConfig {
 
 export function readBrowserConfigSync(): BrowserConfig {
   try {
-    return normalize(JSON.parse(readFileSync(configPath(), "utf-8")));
+    // 先剥掉 UTF-8 BOM：Windows 记事本「另存为 UTF-8」会写入 BOM，而 JSON.parse 对 BOM
+    // 直接抛错 → 被下面 catch 吞掉 → 静默回退默认值（enabled 变回 false，浏览器工具整个消失）。
+    const text = readFileSync(configPath(), "utf-8").replace(/^\uFEFF/, "");
+    return normalize(JSON.parse(text));
   } catch {
     return defaultConfig();
   }

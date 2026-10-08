@@ -119,10 +119,12 @@ function scan(entries: SessionEntry[], models: ModelPriceSource) {
   let prev: PreviousRequest | undefined;
   const totals: CacheWasteTotals = { missedTokens: 0, missedCost: 0, missCount: 0 };
   for (const entry of entries) {
-    if (entry.type === "compaction" || entry.type === "branch_summary") {
-      // The context legitimately changed; the next turn's prompt is new content,
-      // not re-billed content. Model switches are NOT exempt: they re-bill the
-      // full prompt and should be counted.
+    if (entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "context_edit") {
+      // The context legitimately changed (compaction/branch summary replace it;
+      // a context_edit omits or rewrites an earlier entry, e.g. on retry
+      // recovery), so the next turn's prompt is new content, not re-billed
+      // content. Model switches are NOT exempt: they re-bill the full prompt and
+      // should be counted.
       prev = undefined;
       continue;
     }

@@ -77,6 +77,17 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
       // undefined). Before the fix, every message_start was wrongly treated as
       // "assistant", so user messages were never rendered during streaming.
       const role = ev.message?.role ?? ev.role ?? (ev.userMessageEvent ? "user" : "assistant");
+      // Only user / assistant / custom messages are renderable (see the Message
+      // type). The SDK also emits `system` messages — it unshifts a system-prompt
+      // section diff AHEAD of the user message on the first prompt (and whenever
+      // the loadout changes) — plus `toolResult` messages. Buffering a `system`
+      // one is what made the just-sent message render twice: it lands BETWEEN the
+      // composer's optimistic user bubble and the SDK's real user message_start,
+      // so the "last message is the user" dedup below no longer matches and the
+      // user message is appended a second time (the empty system entry itself is
+      // then dropped by isGhost, leaving two visible user bubbles). Drop any role
+      // we can't render.
+      if (role !== "user" && role !== "assistant" && role !== "custom") return msgs;
       // Dedup: the Pi SDK may fire multiple message_start events for the same
       // assistant turn (thinking init + content). If the last message is an
       // empty streaming assistant, reuse it instead of creating a duplicate.
@@ -94,16 +105,20 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
       }
       // Extract content: for user messages the full content is in the event;
       // for assistant messages it streams in via text_delta so start empty.
+      // "custom"（扩展注入的可见消息，如死循环终止说明）一次性带全正文。
       let content = "";
       let images: Message["images"];
-      if (role === "user" && ev.message?.content) {
+      if ((role === "user" || role === "custom") && ev.message?.content) {
         content = extractText(ev.message.content);
-        const imgs = extractImages(ev.message.content, ev.messageId ?? `m${msgCounter}`);
-        if (imgs.length) images = imgs;
+        if (role === "user") {
+          const imgs = extractImages(ev.message.content, ev.messageId ?? `m${msgCounter}`);
+          if (imgs.length) images = imgs;
+        }
       }
       const newMsg = {
         id: ev.messageId ?? `msg-${++msgCounter}`,
         role,
+        customType: role === "custom" ? ev.message?.customType : undefined,
         content,
         images,
         isStreaming: role === "assistant",
@@ -123,7 +138,6 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
         return msgs;
       }
       if (subType === "text_delta") {
-        const last = msgs[msgs.length - 1];
         return msgs.map((m, i) =>
           i === msgs.length - 1 && m.role === "assistant"
             ? { ...m, content: m.content + delta }
@@ -141,7 +155,6 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
 
     case "message_end": {
       const msg = ev.message;
-      const last = msgs[msgs.length - 1];
       return msgs.map((m, i) =>
         i === msgs.length - 1 && m.role === "assistant" && m.isStreaming
           ? {
@@ -180,12 +193,28 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
         const toolExecutions = (m.toolExecutions ?? []).map((t: any) => {
           if (t.id !== ev.toolCallId) return t;
           addedPath = t.filePath ?? null;
+          // SDK 工具返回 AgentToolResult：{ content: ContentBlock[], details, usage }
+          // 从 content blocks 里抽取所有 type="text" 的 text 拼成 output，
+          // 这样 ToolCard.read 分支才能拿到真正的文件内容（不是 JSON 包装）。
+          let output: string;
+          if (typeof ev.result === "string") {
+            output = ev.result;
+          } else if (
+            ev.result &&
+            typeof ev.result === "object" &&
+            Array.isArray((ev.result as any).content)
+          ) {
+            output = (ev.result as any).content
+              .filter((b: any) => b && b.type === "text" && typeof b.text === "string")
+              .map((b: any) => b.text)
+              .join("\n");
+            if (!output) output = JSON.stringify(ev.result, null, 2);
+          } else {
+            output = JSON.stringify(ev.result, null, 2);
+          }
           return {
             ...t,
-            output:
-              typeof ev.result === "string"
-                ? ev.result
-                : JSON.stringify(ev.result, null, 2),
+            output,
             isError: ev.isError ?? false,
             isRunning: false,
           };

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
 import { useAgentStore, type Message } from "../store/agent-store";
 import { useUIStore } from "../store/ui-store";
+import { useSessionStore } from "../store/session-store";
+import { SCHEDULED_TRIGGER_MESSAGE } from "../../shared/schedule";
 import { useTranslation } from "react-i18next";
 import UserMessage from "./UserMessage";
 import AssistantTurn from "./AssistantTurn";
@@ -69,6 +71,21 @@ const TOP_THRESHOLD = 80;
 /** How many messages to reveal per auto-load batch. */
 const BATCH_SIZE = 50;
 
+/**
+ * Locate the DOM node for a message id. The turn-level node is `msg-<id>`;
+ * the same message also appears *inside* the collapsible「思考与工具」panel as
+ * `panel-msg-<id>` (its thinking / intermediate content). They must carry
+ * distinct ids (duplicate ids break getElementById), so search falls back to
+ * the panel copy when the turn-level node isn't rendered (e.g. the message is
+ * collapsed into the panel and has no standalone bubble).
+ */
+function findMessageEl(id: string): HTMLElement | null {
+  return (
+    document.getElementById(`msg-${id}`) ??
+    document.getElementById(`panel-msg-${id}`)
+  );
+}
+
 export default function MessageList() {
   const messages = useAgentStore((s) => s.messages);
   const isStreaming = useAgentStore((s) => s.isStreaming);
@@ -82,6 +99,20 @@ export default function MessageList() {
   const searchIndex = useUIStore((s) => s.searchIndex);
   const setMatchIds = useUIStore((s) => s.setMatchIds);
   const setSearchIndex = useUIStore((s) => s.setSearchIndex);
+  // 定时任务触发消息的「任务详情」：靠 sessionPath 找到该会话对应的执行记录，再取它
+  // 所属任务的提示词（真正的任务内容在系统提示词里，聊天只看得到固定那句触发语）。
+  const currentPath = useSessionStore((s) => s.currentPath);
+  const scheduledTasks = useSessionStore((s) => s.scheduledRuns.tasks);
+  const scheduledRuns = useSessionStore((s) => s.scheduledRuns.runs);
+  const taskPromptOf = useCallback(
+    (msg: Message): string | undefined => {
+      if (msg.role !== "user" || msg.content.trim() !== SCHEDULED_TRIGGER_MESSAGE) return undefined;
+      const run = scheduledRuns.find((r) => r.sessionPath === currentPath);
+      if (!run) return undefined;
+      return scheduledTasks.find((tk) => tk.id === run.taskId)?.prompt;
+    },
+    [scheduledRuns, scheduledTasks, currentPath],
+  );
   const listRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
   const prevLen = useRef(messages.length);
@@ -261,7 +292,7 @@ export default function MessageList() {
     const id = searchMatchIds[searchIndex];
     if (!id) return;
     const raf = requestAnimationFrame(() => {
-      const el = document.getElementById(`msg-${id}`);
+      const el = findMessageEl(id);
       if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
     });
     return () => cancelAnimationFrame(raf);
@@ -296,7 +327,7 @@ export default function MessageList() {
     const activeId = searchMatchIds[searchIndex];
 
     for (const id of searchMatchIds) {
-      const el = document.getElementById(`msg-${id}`);
+      const el = findMessageEl(id);
       if (!el) continue;
       // Skip elements that are not in the visible viewport to avoid
       // expensive TreeWalker scans on off-screen (lazily hidden) messages.
@@ -374,7 +405,12 @@ export default function MessageList() {
             if (item.type === "user") {
               const msg = item.message;
               return (
-                <UserMessage key={msg.id} message={msg} highlight={msg.id === activeId} />
+                <UserMessage
+                  key={msg.id}
+                  message={msg}
+                  highlight={msg.id === activeId}
+                  taskPrompt={taskPromptOf(msg)}
+                />
               );
             }
             return (

@@ -2,7 +2,7 @@
  * Pi Desktop Browser — 页面快照脚本（静态 MAIN-world 脚本）。
  *
  * 由主进程读取源码文本，通过 CDP 作为 init script 注入到每个页面。
- * 安装 globalThis.__piBrowserSnapshotPage(maxElements, containingText, roleFilter, mode, query, delta)。
+ * 安装 globalThis.__piBrowserSnapshotPage(maxElements, containingText, roleFilter, mode, query, delta, excludeOccluded)。
  *
  * 2026-09-22：本文件原在 `resources/chrome-extension/` 下（那时还靠浏览器扩展注入），
  * 现在随扩展一起退出 —— 它是**唯一**从那个目录保留下来的东西，改名为 snapshot-page.js
@@ -20,6 +20,8 @@
  *    （如百度把内部 CSS 容器做成隐藏 `<textarea>`）。
  *  - **软标记**（保留但降序）：`occluded`（中心点被别的元素盖住）——元素可能只是滚动到视口外，
  *    仍可用（点击时会先 scrollIntoView），故不剔除，只排到后面。
+ *    调用方可传 `excludeOccluded: true` 把**被别的元素盖住**的节点（`occluded-by-*`）直接剔除，
+ *    只在结果里报 `occludedSkipped` 计数——用于挡掉「被浮层遮住的隐藏表单/重复控件」这类噪声。
  *  - 另带 `id` / `name`：无 placeholder/aria-label 的输入框（如 `#kw`）靠它才能被辨认。
  *
  * 增量（delta）：
@@ -320,6 +322,7 @@
     mode,
     query,
     delta,
+    excludeOccluded,
   ) {
     const limit = maxElements || 80;
     const needle = containingText ? String(containingText).toLowerCase() : null;
@@ -339,6 +342,10 @@
 
     // —— 可交互元素 ——
     const elements = [];
+    // 被别的元素盖住（occluded-by-*）而被 excludeOccluded 剔除的节点数。
+    // 「offscreen」不算——那只是滚动到视口外，元素仍然可用。
+    let occludedSkipped = 0;
+    const isCovered = (marker) => Boolean(marker) && marker.indexOf("occluded-by-") === 0;
     for (const element of document.querySelectorAll(INTERACTIVE_SELECTOR)) {
       if (isHidden(element)) continue;
       const role = element.getAttribute("role") || element.tagName.toLowerCase();
@@ -346,6 +353,10 @@
       const label = accessibleLabel(element);
       if (needle && !label.toLowerCase().includes(needle)) continue;
       const occluded = occlusionOf(element);
+      if (excludeOccluded && isCovered(occluded)) {
+        occludedSkipped++;
+        continue;
+      }
       elements.push({
         uid: remember(element),
         role,
@@ -368,6 +379,10 @@
     const fields = [];
     for (const element of document.querySelectorAll("input,textarea,select")) {
       if (isHidden(element)) continue;
+      if (excludeOccluded && isCovered(occlusionOf(element))) {
+        occludedSkipped++;
+        continue;
+      }
       const sensitive = isSensitiveField(element);
       fields.push({
         uid: remember(element),
@@ -393,6 +408,9 @@
       if (snippets.length >= 40) break;
     }
     out.textSnippets = snippets;
+
+    // 被 excludeOccluded 剔除的噪声节点数（元素 + 字段合计），让调用方知道"少看了多少"。
+    if (excludeOccluded) out.occludedSkipped = occludedSkipped;
 
     // —— 焦点 ——
     out.summary = { focused: null };
@@ -420,6 +438,7 @@
       needle: needle,
       role: roleNeedle,
       mode: out.mode,
+      excludeOccluded: Boolean(excludeOccluded),
     };
     if (delta) {
       out.delta = diffSummaries(s.lastSummary, summarize(out, filters));

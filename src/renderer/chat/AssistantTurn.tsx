@@ -201,7 +201,14 @@ function AssistantTurn({ messages, highlight }: Props) {
 
   return (
     <div
-      id={`msg-${messages[0]?.id}`}
+      // 回合根 id 用于搜索定位。单条消息的回合里 messages[0] 与 finalMsg
+      // 是同一条消息，若两处都挂 msg-<id> 就会产生重复 id（getElementById
+      // 只能命中其中一个），故仅在两者不同时才给回合根挂 id。
+      id={
+        messages[0] && messages[0].id !== finalMsg?.id
+          ? `msg-${messages[0].id}`
+          : undefined
+      }
       className={`${styles.assistantTurn} ${highlight ? styles.highlight : ""}`}
     >
       <div className={styles.avatarRow}>

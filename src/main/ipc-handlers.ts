@@ -35,6 +35,14 @@ import {
   readExtensionToolFeaturesSync,
 } from "./pi/tool-catalog";
 import type { ExtensionToolFeatureUpdate } from "../shared/tool-catalog-types";
+import {
+  dropMcpServer,
+  getMcpConfigView,
+  patchMcpServer,
+  upsertMcpServer,
+  writeMcpFeatureConfig,
+} from "./pi/mcp/mcp-config";
+import type { McpFeaturePatch, McpServerPatch, McpServerUpsert } from "../shared/mcp-types";
 import { tryAnswerAskUser } from "./pi/ask-user/ask-user-registry";
 import type { AskUserAnswerPayload } from "../shared/ask-user-types";
 import {
@@ -215,6 +223,42 @@ export function registerIpcHandlers(
       await pmgr.reapplyToolSetToAllUnits();
     },
   );
+
+  // ── MCP servers (设置 → MCP) ──
+  // 服务器定义读写 ~/.pi/agent/mcp.json，总开关/白名单读写 mcp-config.json。
+  // 每次写盘后都调 applyMcpChanges() 做热更新（失效 services 缓存 + reload 活动
+  // 会话），这样新增/删除服务器无需重启应用。
+  ipcMain.handle("pi:getMcpConfig", async () => {
+    return getMcpConfigView();
+  });
+
+  ipcMain.handle("pi:saveMcpFeature", async (_, patch: McpFeaturePatch) => {
+    await writeMcpFeatureConfig(patch);
+    await pmgr?.applyMcpChanges();
+  });
+
+  ipcMain.handle("pi:upsertMcpServer", async (_, { name, config }: McpServerUpsert) => {
+    upsertMcpServer(name, config);
+    await pmgr?.applyMcpChanges();
+  });
+
+  ipcMain.handle(
+    "pi:updateMcpServer",
+    async (_, { name, patch }: { name: string; patch: McpServerPatch }) => {
+      patchMcpServer(name, patch);
+      await pmgr?.applyMcpChanges();
+    },
+  );
+
+  ipcMain.handle("pi:deleteMcpServer", async (_, name: string) => {
+    dropMcpServer(name);
+    await pmgr?.applyMcpChanges();
+  });
+
+  // 渲染进程对 MCP 服务器授权弹窗的回应（主进程在 evaluateMcp 里发起）。
+  ipcMain.handle("pi:mcpApprovalResponse", async (_, { requestId, decision }) => {
+    pmgr?.handleMcpApprovalResponse({ requestId, decision });
+  });
 
   // Chat-composer tool mode (极简/标准/办公) — session-scoped per cwd.
   ipcMain.handle("pi:getSessionToolMode", async (_, cwd: string) => {

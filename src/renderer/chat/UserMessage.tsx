@@ -3,7 +3,7 @@ import type { Message } from "../store/agent-store";
 import type { CodeAttachment } from "../store/ui-store";
 import SkillInvocation from "./SkillInvocation";
 import Markdown from "./Markdown";
-import { Code2, SquareTerminal, ChevronRight, Copy, Check } from "lucide-react";
+import { Code2, SquareTerminal, ChevronRight, Copy, Check, ListChecks } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toDataUrl } from "../utils/image";
 import styles from "./UserMessage.module.css";
@@ -67,6 +67,65 @@ function RefCard({ att }: { att: CodeAttachment }) {
   );
 }
 
+/**
+ * 「任务详情」展开卡：定时任务的触发消息只是扣扳机，真正的任务提示词在系统
+ * 提示词里、聊天看不到。这里把该任务的 prompt 折叠在气泡下方，按需展开。
+ */
+function TaskDetailsCard({ prompt }: { prompt: string }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const body = prompt.trim();
+  const copy = () => {
+    navigator.clipboard
+      ?.writeText(prompt)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {});
+  };
+  return (
+    <div className={styles.taskCard}>
+      <div
+        className={styles.taskCardHeader}
+        onClick={() => setExpanded((v) => !v)}
+        role="button"
+        aria-expanded={expanded}
+      >
+        <ListChecks size={13} className={styles.taskCardIcon} />
+        <span className={styles.taskCardTitle}>{t("chat.taskDetails")}</span>
+        <ChevronRight
+          size={13}
+          className={`${styles.taskCardChevron} ${expanded ? styles.taskCardChevronOpen : ""}`}
+        />
+      </div>
+      {expanded && (
+        <div className={styles.taskCardBody}>
+          {body ? (
+            <Markdown content={prompt} linkifyPaths breaks />
+          ) : (
+            <span className={styles.taskCardEmpty}>{t("chat.taskDetailsEmpty")}</span>
+          )}
+          {body && (
+            <button
+              type="button"
+              className={styles.taskCardCopy}
+              onClick={copy}
+              title={t("chat.copy")}
+            >
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+              <span className={styles.copyLabel}>
+                {copied ? t("chat.copied") : t("chat.copy")}
+              </span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ParsedSkill {
   name: string;
   location: string;
@@ -96,9 +155,14 @@ function parseSkillBlock(text: string): ParsedSkill | null {
 interface Props {
   message: Message;
   highlight?: boolean;
+  /**
+   * 定时任务触发消息的「任务详情」提示词。由 MessageList 解析出对应任务后传入；
+   * 普通消息不传 → 不渲染展开卡。
+   */
+  taskPrompt?: string;
 }
 
-function UserMessage({ message, highlight }: Props) {
+function UserMessage({ message, highlight, taskPrompt }: Props) {
   const { t } = useTranslation();
   const parsed = parseSkillBlock(message.content);
   const attachments = message.attachments;
@@ -174,6 +238,8 @@ function UserMessage({ message, highlight }: Props) {
             </>
           )}
         </div>
+        {/* 定时任务触发消息：气泡下方挂一个可展开的「任务详情」（真正的任务提示词） */}
+        {taskPrompt !== undefined && <TaskDetailsCard prompt={taskPrompt} />}
         {/* 发送时间 + 一键复制（气泡右下方） */}
         <div className={styles.meta}>
           <span className={styles.time}>{time}</span>
@@ -214,7 +280,8 @@ function areEqual(prev: Props, next: Props): boolean {
     a.attachments === b.attachments &&
     a.images === b.images &&
     a.timestamp === b.timestamp &&
-    prev.highlight === next.highlight
+    prev.highlight === next.highlight &&
+    prev.taskPrompt === next.taskPrompt
   );
 }
 

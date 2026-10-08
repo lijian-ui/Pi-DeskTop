@@ -22,7 +22,10 @@ export interface Artifact {
 
 export interface Message {
   id: string;
-  role: "user" | "assistant";
+  /** "custom" = 扩展注入的可见消息（如死循环终止说明），不参与 LLM 上下文。 */
+  role: "user" | "assistant" | "custom";
+  /** 仅 role === "custom" 时存在：扩展声明的类型（如 "loop-guard"）。 */
+  customType?: string;
   content: string;
   /** Code references attached from the file-preview panel (rendered as cards). */
   attachments?: CodeAttachment[];

@@ -9,6 +9,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import axios from "axios";
+import { parseJsonText } from "../json-file";
 import { MIMO_VOICES } from "../../shared/tts-voices";
 
 export { MIMO_VOICES };
@@ -50,7 +51,7 @@ function configPath(): string {
 export async function readTtsConfig(): Promise<TtsConfig> {
   try {
     const raw = await readFile(configPath(), "utf-8");
-    const parsed = JSON.parse(raw) as Partial<TtsConfig>;
+    const parsed = parseJsonText<Partial<TtsConfig>>(raw);
     return { ...DEFAULT_CONFIG, ...parsed };
   } catch {
     return { ...DEFAULT_CONFIG };

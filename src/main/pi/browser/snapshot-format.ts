@@ -95,6 +95,8 @@ export interface BrowserSnapshot {
   diff?: { firstSnapshot?: boolean; changed?: boolean };
   /** 结构化差异（仅 `delta:true` 时存在）。 */
   delta?: SnapDelta;
+  /** `excludeOccluded:true` 时被略去的「被浮层遮挡」节点数。 */
+  occludedSkipped?: number;
   tab?: SnapTab;
 }
 
@@ -251,6 +253,10 @@ export function formatBrowserSnapshot(snapshot: BrowserSnapshot): string {
       lines.push(`- … 另有 ${elements.length - MAX_ELEMENTS_SHOWN} 个；用 maxElements 或 containingText 收窄`);
     }
   }
+  if (snapshot.occludedSkipped) {
+    // excludeOccluded 生效时告知"少看了多少"，避免模型以为清单是全集。
+    lines.push(`- （excludeOccluded：已略去 ${snapshot.occludedSkipped} 个被浮层遮挡的节点）`);
+  }
 
   const fields = snapshot.forms?.fields ?? [];
   if (fields.length) {
@@ -280,6 +286,7 @@ export function formatBrowserSnapshot(snapshot: BrowserSnapshot): string {
   lines.push(
     "\n提示：用 uid 定位元素；页面变了就重新 browser({action:\"snapshot\"}) 取新 uid。" +
       "带 [occluded-by-…] 的元素中心被遮挡（可能只是滚出视口），优先选没有该标记的；" +
+      "被浮层遮挡的重复控件太多时，可传 excludeOccluded:true 直接略去它们；" +
       "无标签的输入框看 #id / [name=…]。",
   );
   return truncate(lines.join("\n"));
