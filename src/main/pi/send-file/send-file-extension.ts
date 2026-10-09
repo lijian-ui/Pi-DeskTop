@@ -48,19 +48,19 @@ export function createSendFileExtension(): InlineExtension {
           name: "send_file",
           label: "发送文件给用户",
           description:
-            "把一个本地文件直接发送给当前聊天中的用户（IM 场景通过扫码登录的机器人/网页机器人发送文件消息；桌面场景用户也能看到工作目录但不会收到文件推送）。" +
-            "用于用户明确索要某个文件、或你需要把生成的交付物（报告/图片/表格/代码文件等）直接递给用户时。用法注意：\n" +
-            "- filePath 必须是文件已生成并落盘后的绝对路径；先创建好文件再调用。\n" +
-            "- 若文件不存在/超大小限制/当前不是 IM 会话，工具会返回发送失败——此时不要在回复里谎称已发送，改为在正文里把路径给用户即可。",
+            "Send a local file directly to the user in the current chat (over IM the file is delivered by the signed-in bot; in the desktop app the user can see the working directory but does not receive a push). " +
+            "Use it when the user explicitly asks for a file, or when you need to hand a generated deliverable (report/image/spreadsheet/code file, etc.) directly to the user. Notes:\n" +
+            "- filePath must be the absolute path of a file that already exists on disk; create the file first, then call this tool.\n" +
+            "- If the file is missing, exceeds the size limit, or the current session is not an IM chat, the tool returns a send failure — do not claim in your reply that it was sent; instead give the user the path in the message body.",
           promptSnippet:
             "Send a local file directly to the current chat's user (works over IM channels)",
           promptGuidelines: [
-            "用户明确要某个文件、或需要把生成/保存的交付物直接递交给用户时，用 send_file（filePath=已落盘的绝对路径）。",
-            "先确保文件已经创建好再调用；如果文件不存在或发送失败（如当前不是 IM 会话、文件超限），如实告诉用户发送结果，把文件路径放到回复正文里即可，不要谎称已发送。",
+            "When the user explicitly asks for a file, or a generated/saved deliverable needs to be handed directly to the user, use send_file (filePath = an absolute path already on disk).",
+            "Make sure the file is created before calling; if the file does not exist or the send fails (e.g. the current session is not an IM chat, or the file exceeds the limit), tell the user the send result honestly and just put the file path in the reply body — do not falsely claim it was sent.",
           ],
           parameters: Type.Object(
             {
-              filePath: Type.String({ description: "要发送的本地文件绝对路径（必须先已存在）。" }),
+              filePath: Type.String({ description: "Absolute path of the local file to send (must already exist)." }),
             },
             { required: ["filePath"] },
           ),
@@ -73,20 +73,20 @@ export function createSendFileExtension(): InlineExtension {
           ): Promise<AgentToolResult<SendFileResult>> => {
             if (!readSendFileConfigSync().enabled) {
               return buildResult(
-                "send_file 工具当前未启用（sendfile-config.json enabled=false）。请在回复正文中把文件路径给用户。",
+                "The send_file tool is currently disabled (sendfile-config.json enabled=false). Give the user the file path in the reply body instead.",
                 false,
               );
             }
             const typed = params as unknown as SendFileParams;
             const rawPath = String(typed.filePath ?? "").trim();
             if (!rawPath) {
-              return buildResult("send_file 缺少 filePath 参数，无法发送。", false);
+              return buildResult("send_file is missing the filePath parameter; nothing was sent.", false);
             }
             // Resolve `file://` / normalize, then confirm the file exists.
             const filePath = rawPath.replace(/^file:\/\//, "").trim();
             if (!existsSync(filePath)) {
               return buildResult(
-                `文件不存在：${basename(filePath)}（${filePath}）。请先创建该文件，或确认路径无误。`,
+                `File not found: ${basename(filePath)} (${filePath}). Create the file first, or double-check the path.`,
                 false,
               );
             }
@@ -96,7 +96,7 @@ export function createSendFileExtension(): InlineExtension {
               "";
             if (!sessionPath) {
               return buildResult(
-                "无法确定当前会话，文件未发送。请在回复正文中给出文件路径。",
+                "Could not determine the current session; the file was not sent. Give the user the file path in the reply body.",
                 false,
               );
             }
@@ -106,20 +106,20 @@ export function createSendFileExtension(): InlineExtension {
               const { getImGateway } = await import("../../index");
               const gateway = getImGateway();
               if (!gateway) {
-                return buildResult("IM 网关未就绪，文件未发送。请在回复正文中给出文件路径。", false);
+                return buildResult("The IM gateway is not ready; the file was not sent. Give the user the file path in the reply body.", false);
               }
               res = await gateway.sendFileToSession(sessionPath, filePath);
             } catch (err) {
               console.warn("[send_file] gateway call failed:", err);
               return buildResult(
-                `文件发送异常：${err instanceof Error ? err.message : String(err)}`,
+                `File send error: ${err instanceof Error ? err.message : String(err)}`,
                 false,
               );
             }
             if (res.ok) {
-              return buildResult(`已成功将 ${basename(filePath)} 发送给用户。`, true);
+              return buildResult(`Successfully sent ${basename(filePath)} to the user.`, true);
             }
-            return buildResult(res.message || "文件未发送。", false);
+            return buildResult(res.message || "The file was not sent.", false);
           },
         }),
       );

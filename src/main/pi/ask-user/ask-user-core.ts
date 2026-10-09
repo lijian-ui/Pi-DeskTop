@@ -10,10 +10,10 @@
  * Pi SDK (ctx.mode="print", no ctx.ui), so interaction goes through our own
  * IPC card queue (ask-user-extension.ts + renderer AskUserPanel).
  *
- * Content/envelope strings are localized to Chinese for consistency with the
- * other first-party tools (todo etc.). Reserved labels stay in their original
- * English form: the model authors options in whatever language, but those
- * exact strings would collide with the UI-appended free-text row.
+ * Content/envelope strings are in English to save model tokens (consistent with
+ * the other first-party tools). Reserved labels stay in their original English
+ * form: the model authors options in whatever language, but those exact strings
+ * would collide with the UI-appended free-text row.
  *
  * The file is deliberately SDK-free: everything here is a pure function of
  * plain shared types (src/shared/ask-user-types.ts), so it can be unit-tested
@@ -89,12 +89,12 @@ export const AskUserQuestionnaireSchema = Type.Object({
 /* Runtime validation (mirrors rpiv validate-questionnaire.ts).        */
 /* ------------------------------------------------------------------ */
 
-export const ERROR_NO_QUESTIONS = "错误：至少需要 1 个问题";
-export const ERROR_TOO_MANY_QUESTIONS = `错误：每次调用最多 ${MAX_QUESTIONS} 个问题`;
-export const ERROR_DUPLICATE_QUESTION = "错误：同一调用内问题文本必须唯一";
-export const ERROR_TOO_FEW_OPTIONS = `错误：每个问题至少需要 ${MIN_OPTIONS} 个选项`;
-export const ERROR_RESERVED_LABEL = `错误：选项标签为保留词（${RESERVED_LABELS.join("、")}）——这些由界面自动追加，请勿自行编写`;
-export const ERROR_DUPLICATE_OPTION_LABEL = "错误：同一问题内选项标签必须唯一";
+export const ERROR_NO_QUESTIONS = "Error: at least 1 question is required";
+export const ERROR_TOO_MANY_QUESTIONS = `Error: at most ${MAX_QUESTIONS} questions per call`;
+export const ERROR_DUPLICATE_QUESTION = "Error: question text must be unique within a single call";
+export const ERROR_TOO_FEW_OPTIONS = `Error: each question needs at least ${MIN_OPTIONS} options`;
+export const ERROR_RESERVED_LABEL = `Error: option label is reserved (${RESERVED_LABELS.join(", ")}) — the UI appends these automatically, do not author them yourself`;
+export const ERROR_DUPLICATE_OPTION_LABEL = "Error: option labels must be unique within a question";
 
 const RESERVED_LABEL_SET: ReadonlySet<string> = new Set<string>(RESERVED_LABELS);
 
@@ -146,16 +146,16 @@ export function validateAskUserQuestionnaire(params: AskUserParams): AskUserVali
 /* Answer formatting + LLM-facing envelope (mirrors rpiv).             */
 /* ------------------------------------------------------------------ */
 
-const NO_INPUT_PLACEHOLDER = "(无输入)";
-const DECLINE_MESSAGE = "用户已取消作答（未回答任何问题）。不要假设答案，请按你的最佳判断继续，或向用户说明你需要的决策。";
-const ENVELOPE_PREFIX = "用户已回答你的问题：";
-const ENVELOPE_SUFFIX = "现在可以带着用户的回答继续。";
+const NO_INPUT_PLACEHOLDER = "(no input)";
+const DECLINE_MESSAGE = "The user declined to answer (no questions answered). Do not assume answers; continue with your best judgment, or tell the user which decision you need.";
+const ENVELOPE_PREFIX = "The user answered your questions:";
+const ENVELOPE_SUFFIX = "You can now continue with the user's answers.";
 
 /** Scalar form of one answer (used inside the envelope segments). */
 export function formatAnswerScalar(a: AskUserAnswer): string {
   switch (a.kind) {
     case "multi":
-      return a.selected && a.selected.length > 0 ? a.selected.join("、") : NO_INPUT_PLACEHOLDER;
+      return a.selected && a.selected.length > 0 ? a.selected.join(", ") : NO_INPUT_PLACEHOLDER;
     case "custom":
       return a.answer && a.answer.length > 0 ? a.answer : NO_INPUT_PLACEHOLDER;
     case "option":
@@ -169,9 +169,9 @@ export function formatAnswerScalar(a: AskUserAnswer): string {
 /** One `"Q"=A` segment with optional `selected preview:` / `user notes:` suffixes. */
 function buildAnswerSegment(a: AskUserAnswer): string {
   const parts: string[] = [`"${a.question}"="${formatAnswerScalar(a)}"`];
-  if (a.preview && a.preview.length > 0) parts.push(`选中预览：${a.preview}`);
-  if (a.notes && a.notes.length > 0) parts.push(`用户备注：${a.notes}`);
-  return `${parts.join("。")}。`;
+  if (a.preview && a.preview.length > 0) parts.push(`Selected preview: ${a.preview}`);
+  if (a.notes && a.notes.length > 0) parts.push(`User notes: ${a.notes}`);
+  return `${parts.join(". ")}.`;
 }
 
 /**
@@ -189,7 +189,7 @@ export function buildAskUserEnvelope(result: AskUserResult | null | undefined, p
     if (a) segments.push(buildAnswerSegment(a));
   }
   if (result.globalNote && result.globalNote.length > 0) {
-    segments.push(`全局备注：${result.globalNote}。`);
+    segments.push(`Global note: ${result.globalNote}.`);
   }
   if (segments.length === 0) {
     return DECLINE_MESSAGE;

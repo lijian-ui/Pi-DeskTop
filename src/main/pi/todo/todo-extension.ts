@@ -82,10 +82,10 @@ function toNum(v: unknown): number {
 
 function formatTasks(snapshot: TodoSnapshot): string {
   const live = snapshot.tasks.filter((t) => t.status !== "deleted");
-  if (live.length === 0) return "（清单为空）";
+  if (live.length === 0) return "(checklist is empty)";
   return live
     .map((t) => {
-      const dep = t.blockedBy?.length ? `  ↳ 依赖 #${t.blockedBy.join(",#")}` : "";
+      const dep = t.blockedBy?.length ? `  ↳ blocked by #${t.blockedBy.join(",#")}` : "";
       return `#${t.id} [${t.status}] ${t.content}${dep}`;
     })
     .join("\n");
@@ -94,22 +94,22 @@ function formatTasks(snapshot: TodoSnapshot): string {
 function renderSummary(prev: TodoSnapshot, next: TodoSnapshot, op: TodoOp): string {
   if (op.kind === "error") {
     const total = prev.tasks.filter((t) => t.status !== "deleted").length;
-    return `✗ ${op.message}（当前 ${total} 项）\n${formatTasks(prev)}`;
+    return `✗ ${op.message} (${total} item(s) now)\n${formatTasks(prev)}`;
   }
   const live = next.tasks.filter((t) => t.status !== "deleted");
   const done = live.filter((t) => t.status === "completed").length;
   const head =
     op.kind === "create"
-      ? `✓ 已创建 ${op.ids.length} 项（#${op.ids.join(",#")}）`
+      ? `✓ Created ${op.ids.length} item(s) (#${op.ids.join(",#")})`
       : op.kind === "update"
         ? op.changed
-          ? `✓ #${op.id} 已更新（${op.fromStatus} → ${op.toStatus}）`
-          : `#${op.id} 无变化（已是 ${op.toStatus}）`
+          ? `✓ #${op.id} updated (${op.fromStatus} → ${op.toStatus})`
+          : `#${op.id} unchanged (already ${op.toStatus})`
         : op.kind === "delete"
-          ? `✓ #${op.id} 已删除`
-          : `✓ 已清空清单（${op.count} 项）`;
+          ? `✓ #${op.id} deleted`
+          : `✓ Cleared the checklist (${op.count} item(s))`;
   const body = op.kind === "clear" ? "" : `\n${formatTasks(next)}`;
-  return `${head}（待办 ${live.length} 项，已完成 ${done}）${body}`;
+  return `${head} (${live.length} pending, ${done} completed)${body}`;
 }
 
 export const todoExtension: InlineExtension = {
@@ -122,15 +122,15 @@ export const todoExtension: InlineExtension = {
         name: "todo",
         label: "任务清单",
         description:
-          "维护当前会话的执行任务清单：把多步工作拆成若干任务，随执行推进同步更新状态。" +
-          "状态流转：pending（待办）→ in_progress（进行中）→ completed（已完成），可回退；delete 移除任务。" +
-          "任务可声明 blockedBy 依赖（等某任务完成后再开始）。",
+          "Maintain the execution checklist for the current session: split multi-step work into tasks and keep their status in sync as you progress. " +
+          "Status flow: pending → in_progress → completed, and back; delete removes a task. " +
+          "A task can declare blockedBy dependencies (start only after the named tasks complete).",
         promptSnippet:
           "Maintain a live task checklist for multi-step work: create items up front, update their status as you go.",
         promptGuidelines: [
-          "需要 3 步以上的工作，先调用 todo create 建立完整清单，再逐步执行并同步更新状态；不要攒到最后一次更新。",
-          "每完成一步立即把对应任务 update 到 completed；开始处理某任务前先 update 到 in_progress。",
-          "依赖表达用 blockedBy 的 id 数组（如 [#2, #3]）；一次 update 改一个任务。",
+          "For work needing 3+ steps, first call todo create to build the full checklist, then execute step by step and keep status updated; do not save all updates until the end.",
+          "Immediately update the corresponding task to completed as soon as a step finishes; update to in_progress before starting a task.",
+          "Express dependencies via blockedBy's id array (e.g. [#2, #3]); each update changes one task.",
         ],
         parameters: todoParams,
         execute: async (
@@ -142,7 +142,7 @@ export const todoExtension: InlineExtension = {
         ): Promise<AgentToolResult<TodoSnapshot>> => {
           if (!readTodoConfigSync().enabled) {
             return {
-              content: textContent("todo 工具当前未启用（todo-config.json enabled=false）。"),
+              content: textContent("The todo tool is currently disabled (todo-config.json enabled=false)."),
               details: emptyTodoState(),
             };
           }
@@ -167,7 +167,7 @@ export const todoExtension: InlineExtension = {
             const id = toNum(params.id);
             if (!Number.isInteger(id) || id < 1) {
               return {
-                content: textContent(`✗ id 必须是正整数（收到：${JSON.stringify(params.id)}）\n${formatTasks(prev)}`),
+                content: textContent(`✗ id must be a positive integer (got: ${JSON.stringify(params.id)})\n${formatTasks(prev)}`),
                 details: prev,
               };
             }

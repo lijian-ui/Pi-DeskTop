@@ -103,18 +103,18 @@ export function createSubagentExtension(
         name: "subagent",
         label: "Subagent",
           description:
-          "委派任务给专门的子代理（在隔离会话中运行，不继承主会话上下文）。" +
-          "适用场景：为了节省当前上下文窗口，遇到 侦察 / 探索 / 调研 / 摘要 / 总结 / 可并行处理 类任务，务必优先委派，不要自己 inline 完成。" +
-          "模式：single { agent, task }；parallel { tasks: [{agent, task}] }（可声明依赖形成 DAG）；chain { chain: [{agent, task}] }（顺序，上一步结果喂下一步，等价于线性依赖）。" +
-          "DAG：给 tasks 中某项加 id，另一项用 dependsOn: [该id] 表示先等它完成再运行；某任务的上游失败时它会被自动跳过（已跳过任务不再占用模型）。" +
-          "角色来自 Markdown 文件：~/.pi/agent/agents 与 <cwd>/.pi/agents（frontmatter: name, description, tools, thinking, model；正文 = 角色指令，拼入子代理首条用户消息）。" +
-          "示例：用户说“侦察这个项目” → 调用 subagent({ agent: \"scout\", task: \"侦察 E:\\\\Project\\\\pi-desktop 结构\" })。" +
-          "若不确定有哪些角色，先用无参调用列出。",
+          "Delegate a task to a specialized subagent (runs in an isolated session; does not inherit the main session's context). " +
+          "When to use: to conserve the current context window, always prefer delegating reconnaissance / exploration / research / summarization / parallelizable tasks instead of doing them inline. " +
+          "Modes: single { agent, task }; parallel { tasks: [{agent, task}] } (declare dependencies to form a DAG); chain { chain: [{agent, task}] } (sequential, each step's result feeds the next; equivalent to linear dependencies). " +
+          "DAG: give a task in tasks an id, then another task uses dependsOn: [that id] to wait for it; if an upstream task fails, the downstream one is skipped automatically (skipped tasks no longer consume model calls). " +
+          "Roles come from Markdown files: ~/.pi/agent/agents and <cwd>/.pi/agents (frontmatter: name, description, tools, thinking, model; body = role instructions, prepended to the subagent's first user message). " +
+          "Example: the user says \"scout this project\" → call subagent({ agent: \"scout\", task: \"Scout the structure of E:\\\\Project\\\\pi-desktop\" }). " +
+          "If unsure which roles exist, call it with no arguments to list them.",
         promptSnippet:
-          "Delegate a task to a specialized subagent running in an isolated session (single / parallel / chain). Use for 侦察 / 探索 / 调研 / 摘要 / 可并行 类任务.",
+          "Delegate a task to a specialized subagent running in an isolated session (single / parallel / chain). Use for reconnaissance / exploration / research / summarization / parallelizable work.",
         promptGuidelines: [
-          "为了节省当前上下文窗口，遇到 侦察 / 探索 / 调研 / 摘要 / 可并行 类任务，务必优先用 subagent 工具委派，不要自己 inline 完成。",
-          "不确定有哪些角色时用无参 subagent 列出可用子代理。",
+          "To conserve the current context window, always prefer delegating reconnaissance / exploration / research / summarization / parallelizable tasks to the subagent tool instead of doing them inline.",
+          "When unsure which roles exist, call subagent with no arguments to list the available subagents.",
         ],
         parameters: {
           type: "object",

@@ -108,8 +108,8 @@ export function detectCycle(
 function blockedByProblem(state: TodoSnapshot, blockedBy: readonly number[]): string | null {
   for (const dep of blockedBy) {
     const depTask = state.tasks.find((t) => t.id === dep);
-    if (!depTask) return `blockedBy 引用了不存在的任务 #${dep}`;
-    if (depTask.status === "deleted") return `blockedBy 引用的任务 #${dep} 已删除`;
+    if (!depTask) return `blockedBy references a nonexistent task #${dep}`;
+    if (depTask.status === "deleted") return `blockedBy references task #${dep}, which is deleted`;
   }
   return null;
 }
@@ -131,12 +131,12 @@ export function applyTodoMutation(state: TodoSnapshot, mutation: TodoMutation): 
         .filter((s) => s.length > 0)
         .map((s) => s.slice(0, MAX_TODO_TEXT));
       if (subjects.length === 0) {
-        return errorResult(state, "create 需要至少一条非空任务内容");
+        return errorResult(state, "create needs at least one non-empty task");
       }
       if (state.tasks.length + subjects.length > MAX_TODOS) {
         return errorResult(
           state,
-          `任务数超出上限 ${MAX_TODOS}（当前 ${state.tasks.length} 项，本次新增 ${subjects.length} 项）；请先删除或完成部分任务`,
+          `Task count exceeds the limit of ${MAX_TODOS} (currently ${state.tasks.length}, adding ${subjects.length}); delete or complete some tasks first`,
         );
       }
       let nextId = state.nextId;
@@ -155,10 +155,10 @@ export function applyTodoMutation(state: TodoSnapshot, mutation: TodoMutation): 
 
     case "update": {
       const idx = state.tasks.findIndex((t) => t.id === mutation.id);
-      if (idx === -1) return errorResult(state, `#${mutation.id} 不存在`);
+      if (idx === -1) return errorResult(state, `#${mutation.id} does not exist`);
       const current = state.tasks[idx];
       if (current.status === "deleted") {
-        return errorResult(state, `#${current.id} 已删除，不能更新`);
+        return errorResult(state, `#${current.id} is deleted and cannot be updated`);
       }
 
       const hasMutation =
@@ -166,7 +166,7 @@ export function applyTodoMutation(state: TodoSnapshot, mutation: TodoMutation): 
         mutation.status !== undefined ||
         mutation.blockedBy !== undefined;
       if (!hasMutation) {
-        return errorResult(state, "update 至少需要一个可修改字段：content / status / blockedBy");
+        return errorResult(state, "update needs at least one changeable field: content / status / blockedBy");
       }
 
       let newStatus = current.status;
@@ -174,7 +174,7 @@ export function applyTodoMutation(state: TodoSnapshot, mutation: TodoMutation): 
         if (!isTransitionValid(current.status, mutation.status)) {
           return errorResult(
             state,
-            `非法状态迁移：${current.status} → ${mutation.status}（deleted 状态不可恢复）`,
+            `Illegal status transition: ${current.status} → ${mutation.status} (deleted is irreversible)`,
           );
         }
         newStatus = mutation.status;
@@ -184,12 +184,12 @@ export function applyTodoMutation(state: TodoSnapshot, mutation: TodoMutation): 
       if (mutation.blockedBy !== undefined) {
         const dedup = [...new Set(mutation.blockedBy)];
         if (dedup.includes(current.id)) {
-          return errorResult(state, `#${current.id} 不能依赖自己`);
+          return errorResult(state, `#${current.id} cannot depend on itself`);
         }
         const problem = blockedByProblem(state, dedup);
         if (problem) return errorResult(state, problem);
         if (detectCycle(state.tasks, current.id, dedup)) {
-          return errorResult(state, `blockedBy 会形成循环依赖`);
+          return errorResult(state, `blockedBy would create a circular dependency`);
         }
         newBlockedBy = dedup.length > 0 ? dedup : undefined;
       }
@@ -197,7 +197,7 @@ export function applyTodoMutation(state: TodoSnapshot, mutation: TodoMutation): 
       const updated: TodoTask = { ...current, status: newStatus };
       if (mutation.content !== undefined) {
         const trimmed = trimContent(mutation.content);
-        if (!trimmed) return errorResult(state, `任务内容不能为空`);
+        if (!trimmed) return errorResult(state, `task content cannot be empty`);
         updated.content = trimmed;
       }
       if (mutation.blockedBy !== undefined) {
@@ -220,9 +220,9 @@ export function applyTodoMutation(state: TodoSnapshot, mutation: TodoMutation): 
 
     case "delete": {
       const idx = state.tasks.findIndex((t) => t.id === mutation.id);
-      if (idx === -1) return errorResult(state, `#${mutation.id} 不存在`);
+      if (idx === -1) return errorResult(state, `#${mutation.id} does not exist`);
       const current = state.tasks[idx];
-      if (current.status === "deleted") return errorResult(state, `#${current.id} 已删除`);
+      if (current.status === "deleted") return errorResult(state, `#${current.id} is deleted`);
       const newTasks = [...state.tasks];
       newTasks[idx] = { ...current, status: "deleted" };
       return {

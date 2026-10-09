@@ -559,36 +559,36 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
           name: "browser",
           label: "浏览器控制",
           description:
-            "控制浏览器操作业务系统（单一入口，靠 action 区分操作）。" +
-            "观察：snapshot(结构+元素uid，加 delta:true 只取与上次的差异) / screenshot(图片) / tabs(标签列表) / status(连接诊断)。" +
-            "交互：navigate(打开URL) / click / type(追加输入) / fill(清空再写，支持 fields 数组批量) / press_key / hover / scroll。" +
-            "click/type/fill/press_key/navigate 会返回后验信号：navigated(URL是否变) / newRequests(是否发出新请求) / effective(是否真的生效)；" +
-            "fill/type 还有 valueChanged(控件值/勾选/选中项是否真的写入)，批量 fill 另给 fieldsChanged。" +
-            "effective=false 说明动作没产生可见效果，别盲目重试。可加 waitFor:{url|selector,timeout} 等结果再返回。" +
-            "高级：evaluate(跑JS) / drag(拖拽) / upload(上传文件) / get_cookie(导出指定站点 Cookie，含 HttpOnly)。" +
-            "窗口：window show 弹出可见窗口让用户自己完成验证码/扫码登录，登录完 window hide 切回后台。" +
-            "浏览器由本应用自己启动（独立 profile、默认不可见、登录态跨会话保留），**不需要安装任何浏览器扩展**。",
+            "Control the browser to operate business systems (single entry point; the action field selects the operation). " +
+            "Observe: snapshot (structure + element uid; add delta:true for a diff against the last snapshot) / screenshot (image) / tabs (tab list) / status (connection diagnostics). " +
+            "Interact: navigate (open URL) / click / type (append) / fill (clear then write; accepts a fields array for batch) / press_key / hover / scroll. " +
+            "click/type/fill/press_key/navigate return post-action signals: navigated (URL changed) / newRequests (new requests fired) / effective (whether the action really took effect); " +
+            "fill/type also return valueChanged (whether the control's value/checked/selectedIndex actually changed), and batch fill returns fieldsChanged. " +
+            "effective=false means the action produced no visible effect — do not blindly retry. Add waitFor:{url|selector,timeout} to wait for an outcome before returning. " +
+            "Advanced: evaluate (run JS) / drag / upload (upload a file) / get_cookie (export cookies for a given site, including HttpOnly). " +
+            "Window: window show pops a visible window so the user can complete a CAPTCHA/QR login themselves; window hide returns to the background afterwards. " +
+            "The browser is launched by this app itself (separate profile, hidden by default, login state persists across sessions) — **no browser extension is required**.",
           promptSnippet:
             "Control the browser to operate the business system via one tool: snapshot/screenshot to see, navigate/click/type/fill to act, window to show/hide for login, status to diagnose. Pick the action, not a separate tool name.",
           promptGuidelines: [
-            '操作业务系统前，先 browser({action:"snapshot"}) 观察页面、拿元素 uid，或 browser({action:"tabs"}) 找目标标签页 id；后续定位一律用 uid / targetId。',
-            '用户给网址让你干活时，先 browser({action:"navigate", url}) 打开，再 snapshot 看内容。',
-            '点击/输入用 uid（来自最近一次 snapshot）；uid 失效就重新 snapshot，不要盲目重试。',
-            'click/type/fill/press_key/navigate 的返回里 effective=false 表示 URL 未变、无新请求、控件值未变、元素仍在原位——即这一步没生效；应重新 snapshot 核对，而不是原样重试。fill/type 会明确给 valueChanged：为 true 就说明值确实写进去了，即使 effective 里其它项都为 false 也算成功，不要再重试。要等结果可在动作里带 waitFor:{url:"..."} 或 {selector:"..."}（默认等 5s）。',
-            '填多字段表单（登录等）用 browser({action:"fill", fields:[{uid,text},…], submit:true}) 一次写完，省往返调用。',
-            '报错「存在 N 个非空白标签页」时：先 browser({action:"tabs"}) 看列表，再在动作里带 targetId 指定目标标签页；不要假设自动落在你要的那个 tab。',
-            'snapshot 被大量被遮挡的浮层/隐藏表单淹没时，加 excludeOccluded:true 直接略去被遮挡节点（结果里会给 occludedSkipped 计数）。',
-            'browser({action:"type"}) 是**追加**输入；输入框已有值时应改用 browser({action:"fill"})（先清空再写）；fill 的 submit:true 只在确实要提交表单时使用，避免误提交业务单据。',
-            "页面结构变化（跳转/弹窗/提交）后要重新 snapshot 取新 uid，旧 uid 可能已失效。",
-            '动作之后只想确认「有没有反应」时，用 browser({action:"snapshot", delta:true})：页面没实质变化会返回精简结果并明确告诉你「没反应」，省上下文；有变化会先列出差异、再给全量清单。需要重新核对完整元素清单时才用不带 delta 的 snapshot。',
-            '需要看图片/图表/版式时用 browser({action:"screenshot"})；截图仅用于视觉确认，不作为点击坐标依据。',
-            '点不到的元素可先 browser({action:"press_key", key:"Tab"}) 移焦点再 Enter 触发，常能绕过遮挡层。',
-            'hover 才出现的菜单：先 browser({action:"hover"}) 再 snapshot 拿新 uid。',
-            '能用 snapshot + click 完成的，不要绕道 browser({action:"evaluate"}) 跑 JS（该动作默认被门禁拒绝）。',
-            '接口自动化（HTTP 调用需要带登录态）时用 browser({action:"get_cookie", url:"<业务站点URL>"}) 获取完整 Cookie 字符串（含 HttpOnly）；一次只导指定站点、受白名单约束。返回值含 valid=yes/no/unknown 会话探活：valid=no（401/403 或重定向到登录页）说明登录态已失效，**不要盲目重试**，应立即 browser({action:"window", windowAction:"show"}) 弹出窗口，请用户扫码/验证码重新登录后再 hide 切回；valid=unknown 时先办正事、以接口 401 为准。完整 Cookie 等同账号会话凭据：只用于授权范围内的自动化，不要泄露给第三方或写入公开文件。',
-            '撞到登录页：系统只在**验证码/扫码/短信登录**场景自动弹窗；纯用户名密码登录页不会自动弹窗，让你自己 snapshot → fill → submit。分三种情况：① 对话历史里已有用户给的账号密码 → 先用 snapshot 定位表单字段（密码框显示 value=[已掩码] 是**安全遮蔽、正常现象**，不是空框也不是异常，填完后系统继续遮蔽、不会回显密码，**也不要在对话里复述密码**），再 browser({action:"fill", uid:<密码框uid>, text:<密码>}) 填写；提交后再 snapshot 看登录是否成功（URL 变了 / 登录框消失 / 出现业务页面元素）。② 出现验证码/扫码/短信/密码错误提示 → 立即 browser({action:"window", windowAction:"show"}) 弹窗让用户介入。③ 还没拿到凭据 → prompt 用户提供账号密码，再走 ①。自动弹窗提示出现时不要重复调 window；用户登录完成后 browser({action:"window", windowAction:"hide"}) 切回后台。',
-            '三类高危动作默认被门禁拒绝：upload 上传本机文件 / evaluate 跑任意 JS / press_key 带 ctrl·meta·alt 组合键。被拒时错误消息会说清原因、并指出要在 browser-config.json 的 guard 段放开哪一项 —— **把这个决定交给用户，不要自己想办法绕过**（例如用 evaluate 顶替 upload）。',
-            '其他 browser 调用报错或异常时，先 browser({action:"status"}) 查连接与配置。',
+            'Before operating a business system, first call browser({action:"snapshot"}) to observe the page and get element uids, or browser({action:"tabs"}) to find the target tab id; always locate elements with uid / targetId afterwards.',
+            'When the user gives you a URL to work on, first call browser({action:"navigate", url}) to open it, then snapshot to see the content.',
+            'Click/type with uid (from the latest snapshot); if a uid is stale, snapshot again — do not blindly retry.',
+            'In the return of click/type/fill/press_key/navigate, effective=false means the URL did not change, no new requests fired, the control value did not change, and the element stayed in place — i.e. the action had no effect; snapshot again to re-check instead of retrying as-is. fill/type explicitly report valueChanged: true means the value really was written, so it is a success even if other effective fields are false — do not retry. To wait for an outcome, pass waitFor:{url:"..."} or {selector:"..."} in the action (default wait 5s).',
+            'For multi-field forms (e.g. login), use browser({action:"fill", fields:[{uid,text},…], submit:true}) to write the whole form in one call, saving round-trips.',
+            'On the error "N non-blank tabs exist": first call browser({action:"tabs"}) to see the list, then pass targetId in the action to pick the target tab; do not assume it lands on the tab you want.',
+            'When a snapshot is flooded by occluded overlays/hidden forms, add excludeOccluded:true to omit occluded nodes (the result reports an occludedSkipped count).',
+            'browser({action:"type"}) **appends** input; when a field already has a value, use browser({action:"fill"}) instead (clear then write); fill\'s submit:true should only be used when you really want to submit the form, to avoid accidentally submitting business documents.',
+            "After the page structure changes (navigation/dialog/submit), snapshot again to get fresh uids; old uids may be stale.",
+            'To merely confirm "did anything react" after an action, use browser({action:"snapshot", delta:true}): if the page did not substantively change it returns a condensed result that explicitly tells you "no reaction", saving context; if it changed it lists the diff first, then the full list. Only use a snapshot without delta when you need to re-check the complete element list.',
+            'Use browser({action:"screenshot"}) to see images/charts/layout; screenshots are for visual confirmation only, not as a basis for click coordinates.',
+            'For an element you cannot click, first browser({action:"press_key", key:"Tab"}) to move focus then Enter to trigger it — this often bypasses overlay layers.',
+            'For menus that only appear on hover: first browser({action:"hover"}) then snapshot to get the new uids.',
+            'If snapshot + click can do it, do not detour through browser({action:"evaluate"}) to run JS (that action is denied by the guard by default).',
+            'For API automation (HTTP calls that need the login state), use browser({action:"get_cookie", url:"<business site URL>"}) to get the full Cookie string (including HttpOnly); only the specified site is exported per call, bound by the allowlist. The return includes valid=yes/no/unknown session probing: valid=no (401/403 or redirect to login) means the login state has expired — **do not blindly retry**; immediately browser({action:"window", windowAction:"show"}) to pop the window and ask the user to log in again via QR/captcha, then hide to switch back; when valid=unknown, do the real work first and take the API\'s 401 as the source of truth. A full Cookie is equivalent to account session credentials: use it only for automation within the authorized scope, and never leak it to third parties or write it to public files.',
+            'When you hit a login page: the system only auto-pops the window for **captcha/QR/SMS login**; a pure username/password login page will not auto-pop, leaving you to snapshot → fill → submit yourself. Three cases: ① the account and password from the user are already in the conversation history → first snapshot to locate the form fields (the password box showing value=[masked] is **normal secure masking**, not an empty box or an anomaly; after filling the system keeps masking it and will not echo the password, **and do not repeat the password in the conversation**), then fill with browser({action:"fill", uid:<password box uid>, text:<password>}); after submitting, snapshot again to see whether login succeeded (URL changed / login box gone / business page elements appeared). ② If a captcha/QR/SMS/password-error prompt appears → immediately browser({action:"window", windowAction:"show"}) to pop the window and let the user take over. ③ If you do not yet have credentials → prompt the user for account/password, then go to ①. Do not call window again when the auto-pop notice appears; after the user finishes logging in, browser({action:"window", windowAction:"hide"}) to switch back to the background.',
+            'Three high-risk actions are denied by the guard by default: upload (upload a local file) / evaluate (run arbitrary JS) / press_key with ctrl·meta·alt combos. When denied, the error message explains why and points to which item to enable in the guard section of browser-config.json — **leave that decision to the user; do not find your own way around it** (e.g. using evaluate instead of upload).',
+            'When other browser calls error or misbehave, first browser({action:"status"}) to check the connection and config.',
           ],
           parameters: Type.Object(
             {
@@ -612,22 +612,22 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
                   Type.Literal("upload"),
                   Type.Literal("window"),
                 ],
-                { description: "操作类型。" },
+                { description: "Operation type." },
               ),
               // 窗口
               windowAction: Type.Optional(
                 Type.Union([Type.Literal("show"), Type.Literal("hide"), Type.Literal("status")], {
-                  description: "仅 action=window 时：show=可见窗口(登录用)，hide=切回无头，status=查看状态。",
+                  description: "Only for action=window: show=visible window (for login), hide=switch back to headless, status=view state.",
                 }),
               ),
               // 导航 / 目标选择
-              url: Type.Optional(Type.String({ description: "action=navigate、window(show) 时的目标 URL，或 action=get_cookie 时要导出的业务站点 URL（受白名单约束）。" })),
-              targetId: Type.Optional(Type.String({ description: "目标标签页 id（来自 tabs / snapshot）。" })),
+              url: Type.Optional(Type.String({ description: "Target URL for action=navigate / window(show), or the business site URL to export for action=get_cookie (bound by the allowlist)." })),
+              targetId: Type.Optional(Type.String({ description: "Target tab id (from tabs / snapshot)." })),
               // 元素定位
-              uid: Type.Optional(Type.String({ description: "元素 uid（来自 snapshot）。click/type/fill/hover/drag 用。" })),
-              selector: Type.Optional(Type.String({ description: "CSS 选择器（无 uid 时）。" })),
+              uid: Type.Optional(Type.String({ description: "Element uid (from snapshot). Used by click/type/fill/hover/drag." })),
+              selector: Type.Optional(Type.String({ description: "CSS selector (when there is no uid)." })),
               // 文本输入
-              text: Type.Optional(Type.String({ maxLength: 4000, description: "type / fill 的输入文本。" })),
+              text: Type.Optional(Type.String({ maxLength: 4000, description: "Input text for type / fill." })),
               fields: Type.Optional(
                 Type.Array(
                   Type.Object({
@@ -637,29 +637,29 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
                   }),
                   {
                     description:
-                      "仅 action=fill：批量填多个字段，一次调用写完整张表单（登录等）。每项 {uid|selector, text}；配 submit:true 可一并提交。",
+                      "Only for action=fill: batch-fill multiple fields to write the whole form in one call (e.g. login). Each item is {uid|selector, text}; with submit:true it also submits.",
                   },
                 ),
               ),
-              perCharacter: Type.Optional(Type.Boolean({ description: "逐字符输入（较慢但更接近真人）。" })),
-              pressEnter: Type.Optional(Type.Boolean({ description: "type 后回车。" })),
-              submit: Type.Optional(Type.Boolean({ description: "fill 后提交所在表单。" })),
-              includeSnapshot: Type.Optional(Type.Boolean({ description: "click 后附带一份新快照。" })),
+              perCharacter: Type.Optional(Type.Boolean({ description: "Type character by character (slower but closer to a human)." })),
+              pressEnter: Type.Optional(Type.Boolean({ description: "Press Enter after type." })),
+              submit: Type.Optional(Type.Boolean({ description: "Submit the enclosing form after fill." })),
+              includeSnapshot: Type.Optional(Type.Boolean({ description: "Attach a fresh snapshot after click." })),
               waitFor: Type.Optional(
                 Type.Object(
                   {
-                    url: Type.Optional(Type.String({ description: "URL 正则，命中即结束等待。" })),
-                    selector: Type.Optional(Type.String({ description: "CSS 选择器，出现即结束等待。" })),
-                    timeout: Type.Optional(Type.Number({ description: "最长等待毫秒数（默认 5000）。" })),
+                    url: Type.Optional(Type.String({ description: "URL regex; waiting ends as soon as it matches." })),
+                    selector: Type.Optional(Type.String({ description: "CSS selector; waiting ends as soon as it appears." })),
+                    timeout: Type.Optional(Type.Number({ description: "Max wait in milliseconds (default 5000)." })),
                   },
                   {
                     description:
-                      '可选：动作后等待条件成立再返回（click/type/fill/press_key/navigate 适用），把「动作→等结果」收敛成一次调用。例：{url:"/home"}。',
+                      'Optional: after the action, wait until the condition holds before returning (applies to click/type/fill/press_key/navigate), collapsing "act → wait for result" into one call. e.g. {url:"/home"}.',
                   },
                 ),
               ),
               // 按键
-              key: Type.Optional(Type.String({ description: "press_key 的键名，如 Enter/Tab/Escape/ArrowDown/a。" })),
+              key: Type.Optional(Type.String({ description: "Key name for press_key, e.g. Enter/Tab/Escape/ArrowDown/a." })),
               ctrlKey: Type.Optional(Type.Boolean()),
               altKey: Type.Optional(Type.Boolean()),
               shiftKey: Type.Optional(Type.Boolean()),
@@ -677,32 +677,32 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
                 ]),
               ),
               maxElements: Type.Optional(Type.Number({ minimum: 1, maximum: 400 })),
-              containingText: Type.Optional(Type.String({ description: "只返回标签文本包含该串的元素。" })),
-              roleFilter: Type.Optional(Type.String({ description: "只返回该 role/标签名的元素，如 button。" })),
+              containingText: Type.Optional(Type.String({ description: "Return only elements whose label text contains this string." })),
+              roleFilter: Type.Optional(Type.String({ description: "Return only elements with this role/tag name, e.g. button." })),
               delta: Type.Optional(
                 Type.Boolean({
                   description:
-                    "仅 action=snapshot：返回与上次快照的结构化差异（元素增删改 / 表单值变 / 文本变 / 焦点 / 跳转）；" +
-                    "页面无实质变化时输出精简形态（省略元素清单，省上下文）。适合「操作一下再看有没有反应」的轮询场景。默认 false。",
+                    "Only for action=snapshot: return a structured diff against the last snapshot (element added/removed/changed / form value changed / text changed / focus / navigation); " +
+                    "when the page did not substantively change, output a condensed form (omit the element list to save context). Suited to polling scenarios like \"act once and see if anything reacts\". Default false.",
                 }),
               ),
               excludeOccluded: Type.Optional(
                 Type.Boolean({
                   description:
-                    "仅 action=snapshot：略去中心被浮层遮挡的节点（occluded-by-*），只在结果里回 occludedSkipped 计数。" +
-                    "用于挡掉被遮罩盖住的隐藏表单/重复控件。默认 false（保留并标记 [occluded-by-…]）。",
+                    "Only for action=snapshot: omit nodes whose center is covered by an overlay (occluded-by-*), reporting only an occludedSkipped count in the result. " +
+                    "Use it to filter out hidden forms/duplicate controls masked by an overlay. Default false (keep them and mark [occluded-by-…]).",
                 }),
               ),
               // 截图选项
               format: Type.Optional(Type.Union([Type.Literal("png"), Type.Literal("jpeg")])),
-              quality: Type.Optional(Type.Number({ minimum: 0, maximum: 100, description: "JPEG 质量 0-100。" })),
+              quality: Type.Optional(Type.Number({ minimum: 0, maximum: 100, description: "JPEG quality 0-100." })),
               // 求值
-              expression: Type.Optional(Type.String({ maxLength: 4000, description: "evaluate 的 JS 表达式。" })),
+              expression: Type.Optional(Type.String({ maxLength: 4000, description: "JS expression for evaluate." })),
               // get_cookie 会话探活
               probe: Type.Optional(
                 Type.Boolean({
                   description:
-                    "仅 action=get_cookie：是否对该站点做一次无副作用 GET 探活以判断会话是否失效（默认 true）。返回 valid=yes/no/unknown。",
+                    "Only for action=get_cookie: whether to make a side-effect-free GET probe to the site to judge whether the session has expired (default true). Returns valid=yes/no/unknown.",
                 }),
               ),
               // 拖拽
@@ -714,7 +714,7 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
               toY: Type.Optional(Type.Number()),
               steps: Type.Optional(Type.Number({ minimum: 4, maximum: 60 })),
               // 上传
-              paths: Type.Optional(Type.Array(Type.String(), { description: "upload 的本地绝对路径数组。" })),
+              paths: Type.Optional(Type.Array(Type.String(), { description: "Array of absolute local paths for upload." })),
               // 后台策略
               background: Type.Optional(Type.Boolean()),
               foreground: Type.Optional(Type.Boolean()),

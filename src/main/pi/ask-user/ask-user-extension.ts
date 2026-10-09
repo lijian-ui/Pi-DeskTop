@@ -87,18 +87,18 @@ export function createAskUserExtension(
           name: "ask_user_question",
           label: "询问用户",
           description:
-            "在执行过程中向用户提出 1-4 个结构化问题（每题 2-4 个带说明的选项，用户可另选『自定义回答』自由输入，也可整体取消）。" +
-            "需要澄清含糊需求、让用户在多个方案/偏好/方向中做决定、或提供选项对比时使用——不要替用户猜测。用法注意：\n" +
-            "- 用户能通过自动追加的『自定义回答』行自由输入；不要自行编写 Other / Type something. 等标签（会被拒绝）。\n" +
-            "- 多选可同时成立时设 multiSelect: true；选项可带 markdown preview（原型/代码/配置示例）供用户对比真实产物——preview 仅用于单选。\n" +
-            "- 若你推荐某一项，把它放第一位并在标签末尾加『(推荐)』。\n" +
-            "- 不要连续堆叠多次调用——把所有澄清问题合并到一次调用。",
+            "Ask the user 1-4 structured questions during execution (each with 2-4 explained options; the user may also pick the 'custom answer' row to type freely, or cancel the whole set). " +
+            "Use it to clarify ambiguous requirements, to let the user decide among approaches/preferences/directions, or to compare options — do not guess on the user's behalf. Notes:\n" +
+            "- The user can always type freely via the auto-appended 'custom answer' row; do not write your own Other / Type something. labels (reserved words are rejected).\n" +
+            "- Set multiSelect: true when several answers can hold at once; options may carry a markdown preview (prototype/code/config sample) so the user can compare real artifacts — preview is single-select only.\n" +
+            "- If you recommend an option, put it first and append '(recommended)' to its label.\n" +
+            "- Do not stack multiple calls — merge all clarifying questions into a single call.",
           promptSnippet:
             "Ask the user up to 4 structured questions (2-4 options each) when requirements are ambiguous",
           promptGuidelines: [
-            "用户的请求含糊、缺少必要决策而无法继续时，用 ask_user_question 提问——一次最多 4 问，把该问的一次问完，不要背靠背多次调用。",
-            "每题必须 2-4 个选项；每个选项要有一句话说明其含义/代价。用户还能通过自动追加的『自定义回答』行输入自己的答案，或取消整个问卷。不要自行编写 Other / Type something. 标签——运行时保留词会被拒绝。",
-            "多个答案同时成立时设 multiSelect: true；选项带 preview markdown（界面原型/代码片段/配置示例）能让用户对比真实产物而非标签——preview 仅单选时使用。推荐项放第一位并在 label 后加『(推荐)』。",
+            "When the user's request is ambiguous or missing a necessary decision and you cannot proceed, ask via ask_user_question — at most 4 questions per call; ask everything at once, do not make multiple back-to-back calls.",
+            "Each question must have 2-4 options; each option needs a one-line explanation of its meaning/cost. The user can also type their own answer via the auto-appended 'custom answer' row, or cancel the whole questionnaire. Do not author your own Other / Type something. labels — the runtime rejects reserved words.",
+            "Set multiSelect: true when several answers can hold at once; options with a preview markdown (UI mockup/code snippet/config example) let the user compare real artifacts rather than labels — preview is single-select only. Put a recommended option first and append '(recommended)' to its label.",
           ],
           parameters: AskUserQuestionnaireSchema,
           execute: async (
@@ -110,7 +110,7 @@ export function createAskUserExtension(
           ): Promise<AgentToolResult<AskUserResult>> => {
             if (!readAskUserConfigSync().enabled) {
               return buildAskUserToolResult(
-                "ask_user_question 工具当前未启用（askuser-config.json enabled=false）。请直接以聊天文本向用户提问。",
+                "The ask_user_question tool is currently disabled (askuser-config.json enabled=false). Ask the user directly in chat text instead.",
                 { answers: [], cancelled: true },
               );
             }
@@ -128,13 +128,13 @@ export function createAskUserExtension(
             const sessionPath = ctx.sessionManager.getSessionFile() ?? "";
             if (!sessionPath) {
               return buildAskUserToolResult(
-                "无法确定当前会话，无法弹出问卷。请改用聊天文本直接向用户提问。",
+                "Could not determine the current session; cannot show the questionnaire. Ask the user directly in chat text instead.",
                 { answers: [], cancelled: true },
               );
             }
             if (hasActiveAskUser(sessionPath)) {
               return buildAskUserToolResult(
-                "该会话已有问题在等待用户回答。请等待其完成，不要重复发起询问。",
+                "This session already has a question waiting for the user. Wait for it to finish; do not ask again.",
                 { answers: [], cancelled: true },
               );
             }
@@ -143,7 +143,7 @@ export function createAskUserExtension(
             const prompt: AskUserPromptPayload = { id, sessionPath, questions: typed.questions };
             if (!send("pi:askUserPrompt", prompt)) {
               return buildAskUserToolResult(
-                "桌面界面不可用（窗口未就绪），无法弹出问卷。请不要再次调用此工具，改用聊天文本直接向用户提问。",
+                "The desktop UI is unavailable (window not ready); cannot show the questionnaire. Do not call this tool again — ask the user directly in chat text instead.",
                 { answers: [], cancelled: true },
               );
             }

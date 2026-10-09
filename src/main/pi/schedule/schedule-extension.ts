@@ -74,26 +74,26 @@ const scheduleShape = Type.Object(
       Type.Literal("once"),
     ]),
     time: Type.Optional(
-      Type.String({ description: "本地墙钟时间 HH:mm，daily/weekly/monthly/yearly 必填。" }),
+      Type.String({ description: "Local wall-clock time HH:mm; required for daily/weekly/monthly/yearly." }),
     ),
     everyMinutes: Type.Optional(
-      Type.Number({ description: "interval：间隔分钟数（≥1）。" }),
+      Type.Number({ description: "interval: interval in minutes (≥1)." }),
     ),
     weekdays: Type.Optional(
       Type.Array(Type.Number(), {
-        description: "weekly：星期几，0=周日 … 6=周六，可多个。",
+        description: "weekly: day of week, 0=Sunday … 6=Saturday, multiple allowed.",
       }),
     ),
     monthDay: Type.Optional(
-      Type.Number({ description: "monthly/yearly：几号（1-31），-1 表示当月最后一天。" }),
+      Type.Number({ description: "monthly/yearly: day of month (1-31); -1 means the last day of the month." }),
     ),
-    month: Type.Optional(Type.Number({ description: "yearly：月份（1-12）。" })),
+    month: Type.Optional(Type.Number({ description: "yearly: month (1-12)." })),
     at: Type.Optional(
-      Type.String({ description: "once：ISO 时间字符串，必须晚于当前时间。" }),
+      Type.String({ description: "once: ISO timestamp string, must be later than the current time." }),
     ),
     catchUp: Type.Optional(
       Type.Union([Type.Literal("skip"), Type.Literal("once")], {
-        description: "错过触发窗口时：skip 跳过（默认），once 补跑一次。",
+        description: "When a trigger window is missed: skip = skip (default), once = run once to catch up.",
       }),
     ),
   },
@@ -109,16 +109,16 @@ const scheduleParams = Type.Object(
       Type.Literal("delete"),
       Type.Literal("run"),
     ]),
-    taskId: Type.Optional(Type.String({ description: "update / delete / run 必填。" })),
+    taskId: Type.Optional(Type.String({ description: "Required for update / delete / run." })),
     name: Type.Optional(Type.String({ maxLength: MAX_NAME })),
     prompt: Type.Optional(
       Type.String({
         maxLength: MAX_PROMPT,
-        description: "到点后该任务要执行的指令。定时会话看不到当前对话，必须自包含。",
+        description: "The instruction this task runs when due. The scheduled session cannot see this conversation, so it must be self-contained.",
       }),
     ),
     cwd: Type.Optional(
-      Type.String({ description: "任务的工作目录；省略则用当前会话目录。" }),
+      Type.String({ description: "Working directory for the task; if omitted, the current session directory is used." }),
     ),
     enabled: Type.Optional(Type.Boolean()),
     schedule: Type.Optional(scheduleShape),
@@ -127,35 +127,35 @@ const scheduleParams = Type.Object(
 );
 
 // ── Formatting ─────────────────────────────────────────────────────────────
-const WEEKDAY_CN = ["日", "一", "二", "三", "四", "五", "六"];
+const WEEKDAY_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/** One-line Chinese rendering of a schedule, for tool output. */
+/** One-line English rendering of a schedule, for tool output. */
 function describeSchedule(s: TaskSchedule): string {
   switch (s.type) {
     case "interval":
-      return `每 ${s.everyMinutes ?? 60} 分钟`;
+      return `every ${s.everyMinutes ?? 60} min`;
     case "daily":
-      return `每天 ${s.time ?? "--:--"}`;
+      return `daily at ${s.time ?? "--:--"}`;
     case "weekly": {
       const days = normalizeWeekdays(s.weekdays);
-      const label = days.length ? days.map((d) => WEEKDAY_CN[d] ?? d).join("/") : "?";
-      return `每周${label} ${s.time ?? "--:--"}`;
+      const label = days.length ? days.map((d) => WEEKDAY_EN[d] ?? String(d)).join("/") : "?";
+      return `weekly on ${label} at ${s.time ?? "--:--"}`;
     }
     case "monthly": {
-      const day = s.monthDay === LAST_DAY_OF_MONTH ? "最后一天" : `${s.monthDay ?? 1} 号`;
-      return `每月 ${day} ${s.time ?? "--:--"}`;
+      const day = s.monthDay === LAST_DAY_OF_MONTH ? "the last day" : `day ${s.monthDay ?? 1}`;
+      return `monthly on ${day} at ${s.time ?? "--:--"}`;
     }
     case "yearly":
-      return `每年 ${s.month ?? 1} 月 ${s.monthDay ?? 1} 日 ${s.time ?? "--:--"}`;
+      return `yearly on ${s.month ?? 1}/${s.monthDay ?? 1} at ${s.time ?? "--:--"}`;
     case "once":
-      return `一次性 ${formatTime(s.at ? Date.parse(s.at) : null)}`;
+      return `once at ${formatTime(s.at ? Date.parse(s.at) : null)}`;
     default:
       return String(s.type);
   }
 }
 
 function formatTime(ms: number | null): string {
-  if (ms == null || !Number.isFinite(ms)) return "（无法计算）";
+  if (ms == null || !Number.isFinite(ms)) return "(n/a)";
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -185,7 +185,7 @@ function validHhMm(value: unknown): string | null {
  *  meaningful. */
 function buildSchedule(input: unknown): { schedule: TaskSchedule } | { error: string } {
   if (!input || typeof input !== "object") {
-    return { error: "缺少 schedule 参数（需要 type 及对应的字段）。" };
+    return { error: "Missing schedule parameter (needs type plus the fields it requires)." };
   }
   const raw = input as Record<string, unknown>;
   const type = raw.type;
@@ -204,19 +204,19 @@ function buildSchedule(input: unknown): { schedule: TaskSchedule } | { error: st
     case "interval": {
       const every = Number(raw.everyMinutes);
       if (!Number.isFinite(every) || every < 1) {
-        return { error: "interval 需要 everyMinutes ≥ 1。" };
+        return { error: "interval requires everyMinutes ≥ 1." };
       }
-      if (every > 10080) return { error: "interval 的 everyMinutes 不能超过 10080（一周）。" };
+      if (every > 10080) return { error: "interval everyMinutes must not exceed 10080 (one week)." };
       return { schedule: { ...base, everyMinutes: Math.floor(every) } };
     }
     case "once": {
       const at = typeof raw.at === "string" ? Date.parse(raw.at) : Number.NaN;
       if (Number.isNaN(at)) {
-        return { error: "once 需要合法的 ISO 时间字符串 at（如 2026-10-01T09:00:00）。" };
+        return { error: "once requires a valid ISO time string at (e.g. 2026-10-01T09:00:00)." };
       }
       if (at <= Date.now()) {
         return {
-          error: `once 的 at 必须晚于当前时间（收到 ${formatTime(at)}）。需要立即执行请直接用普通对话。`,
+          error: `once at must be later than the current time (got ${formatTime(at)}). To run immediately, just use a normal chat turn.`,
         };
       }
       return { schedule: { ...base, at: new Date(at).toISOString() } };
@@ -226,35 +226,35 @@ function buildSchedule(input: unknown): { schedule: TaskSchedule } | { error: st
     case "monthly":
     case "yearly": {
       const time = validHhMm(raw.time);
-      if (!time) return { error: `${type} 需要合法的 time（HH:mm，24 小时制）。` };
+      if (!time) return { error: `${type} requires a valid time (HH:mm, 24-hour).` };
       if (type === "weekly") {
         const days = normalizeWeekdays(raw.weekdays as number[] | null | undefined);
         if (days.length === 0) {
-          return { error: "weekly 需要 weekdays（0=周日 … 6=周六，可多个）。" };
+          return { error: "weekly requires weekdays (0=Sunday … 6=Saturday, multiple allowed)." };
         }
         return { schedule: { ...base, time, weekdays: days } };
       }
       if (type === "monthly") {
         const day = Number(raw.monthDay);
         const ok = day === LAST_DAY_OF_MONTH || (Number.isInteger(day) && day >= 1 && day <= 31);
-        if (!ok) return { error: "monthly 需要 monthDay（1-31，-1 表示当月最后一天）。" };
+        if (!ok) return { error: "monthly requires monthDay (1-31; -1 means the last day of the month)." };
         return { schedule: { ...base, time, monthDay: day } };
       }
       if (type === "yearly") {
         const month = Number(raw.month);
         const day = Number(raw.monthDay);
         if (!Number.isInteger(month) || month < 1 || month > 12) {
-          return { error: "yearly 需要 month（1-12）。" };
+          return { error: "yearly requires month (1-12)." };
         }
         if (!Number.isInteger(day) || day < 1 || day > 31) {
-          return { error: "yearly 需要 monthDay（1-31）。" };
+          return { error: "yearly requires monthDay (1-31)." };
         }
         return { schedule: { ...base, time, month, monthDay: day } };
       }
       return { schedule: { ...base, time } };
     }
     default:
-      return { error: `不支持的 type：${JSON.stringify(type)}。` };
+      return { error: `Unsupported type: ${JSON.stringify(type)}.` };
   }
 }
 
@@ -266,17 +266,17 @@ function renderTask(
 ): string {
   const next =
     task.schedule.type === "once" && !task.enabled
-      ? "（已执行完毕）"
+      ? "(already ran)"
       : formatTime(nextMs);
   const lines = [
     `- id: ${task.id}`,
-    `  名称: ${task.name}${task.enabled ? "" : "（已暂停）"}`,
-    `  计划: ${describeSchedule(task.schedule)}`,
-    `  下次运行: ${next}`,
+    `  name: ${task.name}${task.enabled ? "" : " (paused)"}`,
+    `  schedule: ${describeSchedule(task.schedule)}`,
+    `  next run: ${next}`,
   ];
-  if (lastMs) lines.push(`  上次运行: ${formatTime(lastMs)}`);
-  if (task.cwd) lines.push(`  工作目录: ${task.cwd}`);
-  lines.push(`  指令: ${truncate(task.prompt, 120)}`);
+  if (lastMs) lines.push(`  last run: ${formatTime(lastMs)}`);
+  if (task.cwd) lines.push(`  cwd: ${task.cwd}`);
+  lines.push(`  prompt: ${truncate(task.prompt, 120)}`);
   return lines.join("\n");
 }
 
@@ -297,19 +297,19 @@ export function createScheduleExtension(deps: ScheduleExtensionDeps = {}): Inlin
           name: "schedule",
           label: "定时任务",
           description:
-            "创建和管理定时任务（应用内的计划任务，到点后自动开一个隔离会话执行指定指令）。" +
-            "支持的计划：interval（每 N 分钟）、daily（每天 HH:mm）、weekly（每周几 HH:mm）、" +
-            "monthly（每月几号 HH:mm）、yearly（每年某月某日 HH:mm）、once（一次性 ISO 时间）。" +
-            "action=create/list/update/delete/run；list 会给出 taskId，update/delete/run 需要它。\n" +
-            "注意：定时任务的 prompt 必须自包含——到点执行时看不到当前对话；" +
-            "应用关闭期间不会触发（进程内调度，不是系统级计划任务）。",
+            "Create and manage scheduled tasks (in-app planned tasks that open an isolated session to run the given instruction when due). " +
+            "Supported schedules: interval (every N minutes), daily (every day at HH:mm), weekly (given weekday at HH:mm), " +
+            "monthly (given day of month at HH:mm), yearly (given month/day at HH:mm), once (single ISO timestamp). " +
+            "action=create/list/update/delete/run; list returns the taskId required by update/delete/run.\n" +
+            "Note: a scheduled task's prompt must be self-contained — the run cannot see this conversation; " +
+            "tasks do not fire while the app is closed (in-process scheduling, not a system-level scheduler).",
           promptSnippet:
             "Create and manage scheduled tasks (interval / daily / weekly / monthly / yearly / once) that run a self-contained prompt later.",
           promptGuidelines: [
-            "用户提出「每天/每周/定时/到点提醒/自动执行」类需求时，用 schedule create 建任务；prompt 里写清到点后要做什么，必须自包含（定时会话看不到当前对话上下文）。",
-            "用户没说清触发时间就不要替他猜——先问清楚再创建。",
-            "创建/修改后，把「计划」和「下次运行时间」明确告诉用户；改或删之前先用 list 拿到 taskId。",
-            "应用关闭期间定时任务不会触发（进程内调度）；如果需要这一点，要如实告知用户。",
+            "When the user asks for something like 'every day / weekly / on a schedule / remind me at a time / run automatically', create a task with schedule create; write clearly in prompt what to do when it fires, and it must be self-contained (the scheduled session cannot see this conversation's context).",
+            "If the user has not specified the trigger time, do not guess for them — clarify first, then create.",
+            "After creating/modifying, clearly tell the user the schedule and the next run time; before update or delete, first use list to get the taskId.",
+            "Scheduled tasks do not fire while the app is closed (in-process scheduling); if this matters, tell the user honestly.",
           ],
           parameters: scheduleParams,
           execute: async (
@@ -321,7 +321,7 @@ export function createScheduleExtension(deps: ScheduleExtensionDeps = {}): Inlin
           ): Promise<AgentToolResult<ScheduleToolResult>> => {
             if (!readScheduleConfigSync().enabled) {
               return buildResult(
-                "schedule 工具当前未启用（schedule-config.json enabled=false）。",
+                "The schedule tool is currently disabled (schedule-config.json enabled=false).",
                 false,
               );
             }
@@ -338,7 +338,7 @@ export function createScheduleExtension(deps: ScheduleExtensionDeps = {}): Inlin
             const { tasks, states } = await readScheduledTasks();
 
             if (p.action === "list") {
-              if (tasks.length === 0) return buildResult("当前没有任何定时任务。", true);
+              if (tasks.length === 0) return buildResult("No scheduled tasks yet.", true);
               const shown = tasks.slice(0, MAX_LISTED);
               const body = shown
                 .map((t) => {
@@ -346,7 +346,7 @@ export function createScheduleExtension(deps: ScheduleExtensionDeps = {}): Inlin
                   const lastMs = st?.lastRunAt ? Date.parse(st.lastRunAt) : null;
                   // The scheduler only persists nextRunAt on its next tick, so a
                   // task created seconds ago has none — preview it instead of
-                  // reporting "无法计算".
+                  // reporting "(n/a)".
                   const nextMs = st?.nextRunAt
                     ? Date.parse(st.nextRunAt)
                     : computeNextRun(t.schedule, Date.now(), lastMs);
@@ -355,24 +355,24 @@ export function createScheduleExtension(deps: ScheduleExtensionDeps = {}): Inlin
                 .join("\n");
               const more =
                 tasks.length > shown.length
-                  ? `\n（共 ${tasks.length} 个，已省略 ${tasks.length - shown.length} 个）`
+                  ? `\n(${tasks.length} total, ${tasks.length - shown.length} omitted)`
                   : "";
-              return buildResult(`共 ${tasks.length} 个定时任务：\n${body}${more}`, true);
+              return buildResult(`${tasks.length} scheduled task(s):\n${body}${more}`, true);
             }
 
             // create
             if (p.action === "create") {
               const name = typeof p.name === "string" ? p.name.trim() : "";
-              if (!name) return buildResult("create 需要 name（任务名称）。", false);
+              if (!name) return buildResult("create requires name (the task name).", false);
               const prompt = typeof p.prompt === "string" ? p.prompt.trim() : "";
               if (!prompt) {
                 return buildResult(
-                  "create 需要 prompt（到点后要执行的指令，必须自包含）。",
+                  "create requires prompt (the instruction to run when due; must be self-contained).",
                   false,
                 );
               }
               const built = buildSchedule(p.schedule);
-              if ("error" in built) return buildResult(`计划无效：${built.error}`, false);
+              if ("error" in built) return buildResult(`Invalid schedule: ${built.error}`, false);
 
               const cwd =
                 (typeof p.cwd === "string" && p.cwd.trim()) ||
@@ -393,10 +393,10 @@ export function createScheduleExtension(deps: ScheduleExtensionDeps = {}): Inlin
               const next = computeNextRun(built.schedule, Date.now(), null);
               const note =
                 built.schedule.type === "interval"
-                  ? "（interval 任务首次会在下一个调度周期内立即触发）"
+                  ? "(interval tasks fire once within the next scheduling cycle)"
                   : "";
               return buildResult(
-                `✓ 已创建定时任务「${name}」\n- id: ${task.id}\n- 计划: ${describeSchedule(built.schedule)}\n- 下次运行: ${formatTime(next)}${note}\n- 工作目录: ${cwd || "（默认定时任务目录）"}\n- 状态: ${task.enabled ? "启用" : "已暂停"}`,
+                `✓ Created scheduled task "${name}"\n- id: ${task.id}\n- schedule: ${describeSchedule(built.schedule)}\n- next run: ${formatTime(next)}${note}\n- cwd: ${cwd || "(default scheduled-task dir)"}\n- status: ${task.enabled ? "enabled" : "paused"}`,
                 true,
               );
             }
@@ -404,32 +404,32 @@ export function createScheduleExtension(deps: ScheduleExtensionDeps = {}): Inlin
             // update / delete / run all need an existing task
             const taskId = typeof p.taskId === "string" ? p.taskId.trim() : "";
             if (!taskId) {
-              return buildResult(`${p.action} 需要 taskId（可先 action="list" 获取）。`, false);
+              return buildResult(`${p.action} requires taskId (call action="list" first to get one).`, false);
             }
             const existing = tasks.find((t) => t.id === taskId);
             if (!existing) {
-              return buildResult(`找不到 id 为 ${taskId} 的定时任务。`, false);
+              return buildResult(`No scheduled task found with id ${taskId}.`, false);
             }
 
             if (p.action === "delete") {
               await deleteScheduledTask(taskId);
-              return buildResult(`✓ 已删除定时任务「${existing.name}」（${taskId}）。`, true);
+              return buildResult(`✓ Deleted scheduled task "${existing.name}" (${taskId}).`, true);
             }
 
             if (p.action === "run") {
               if (!deps.runNow) {
-                return buildResult("当前环境不支持立即运行定时任务。", false);
+                return buildResult("Running a scheduled task immediately is not supported in this environment.", false);
               }
               try {
                 await deps.runNow(taskId);
               } catch (err) {
                 return buildResult(
-                  `立即运行失败：${err instanceof Error ? err.message : String(err)}`,
+                  `Failed to run immediately: ${err instanceof Error ? err.message : String(err)}`,
                   false,
                 );
               }
               return buildResult(
-                `✓ 已触发「${existing.name}」，正在后台运行（本次手动运行不会改变原有计划节奏）。`,
+                `✓ Triggered "${existing.name}"; it is running in the background (a manual run does not change the existing schedule cadence).`,
                 true,
               );
             }
@@ -442,12 +442,12 @@ export function createScheduleExtension(deps: ScheduleExtensionDeps = {}): Inlin
             if (typeof p.enabled === "boolean") patch.enabled = p.enabled;
             if (p.schedule !== undefined) {
               const built = buildSchedule(p.schedule);
-              if ("error" in built) return buildResult(`计划无效：${built.error}`, false);
+              if ("error" in built) return buildResult(`Invalid schedule: ${built.error}`, false);
               patch.schedule = built.schedule;
             }
             if (Object.keys(patch).length === 0) {
               return buildResult(
-                "update 没有收到任何要修改的字段（name / prompt / cwd / enabled / schedule）。",
+                "update received no fields to change (name / prompt / cwd / enabled / schedule).",
                 false,
               );
             }
@@ -455,7 +455,7 @@ export function createScheduleExtension(deps: ScheduleExtensionDeps = {}): Inlin
             await saveScheduledTask(updated);
             const next = computeNextRun(updated.schedule, Date.now(), null);
             return buildResult(
-              `✓ 已更新定时任务「${updated.name}」\n- id: ${updated.id}\n- 计划: ${describeSchedule(updated.schedule)}\n- 下次运行: ${formatTime(next)}\n- 状态: ${updated.enabled ? "启用" : "已暂停"}`,
+              `✓ Updated scheduled task "${updated.name}"\n- id: ${updated.id}\n- schedule: ${describeSchedule(updated.schedule)}\n- next run: ${formatTime(next)}\n- status: ${updated.enabled ? "enabled" : "paused"}`,
               true,
             );
           },
