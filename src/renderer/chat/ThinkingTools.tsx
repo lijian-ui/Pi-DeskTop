@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useRef } from "react";
+import { memo, useState } from "react";
 import { ChevronRight, Brain } from "lucide-react";
 import type { Message, ToolExecution as ToolExecutionData } from "../store/agent-store";
 import { useTranslation } from "react-i18next";
@@ -121,22 +121,17 @@ function ThinkingTools({ messages }: Props) {
   // 中间回复内容 = 除最终正文外其余消息的 content。
   const hasIntermediate = messages.some((m) => !!m.content?.trim());
 
-  // 流式时展开，全部完成后折叠。Hooks 必须先于任何条件返回，
-  // 保证 hooks 调用次数稳定（组件可能在同一会话中被复用渲染）。
+  // Hooks 必须先于任何条件返回调用，保证调用次数稳定
+  // （组件可能在同一会话中被复用渲染）。
   const isStreaming = messages.some((m) => m.isStreaming);
   const isToolRunning = tools.some((tool) => tool.isRunning);
   const streamingOrRunning = isStreaming || isToolRunning;
   // 面板默认始终折叠：流式过程中也不自动展开（避免过程内容每 token 跳动），
-  // 运行状态只通过标题行徽标表达（2px 状态点）。完全由用户手动开合。
+  // 运行状态只通过标题行徽标表达（2px 状态点）。开合完全由用户决定 ——
+  // 手动展开后不再因「思考写完 / 工具跑完 / 回合结束」被自动收起。
   const [expanded, setExpanded] = useState(false);
 
   const turnSettled = !isStreaming && !isToolRunning;
-  // 回合真正结束时，自动收起用户手动展开的面板（回到安静的一行）。
-  const prevSettledRef = useRef(turnSettled);
-  useEffect(() => {
-    if (turnSettled && !prevSettledRef.current) setExpanded(false);
-    prevSettledRef.current = turnSettled;
-  }, [turnSettled]);
 
   // 没有任何过程性内容 → 不渲染面板。
   if (!hasThinking && !hasTools && !hasIntermediate) return null;

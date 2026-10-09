@@ -2,7 +2,7 @@ export interface PiDeskAPI {
   prompt(text: string, images?: any[], cwd?: string, sessionPath?: string): Promise<void>;
   steer(text: string, cwd?: string, sessionPath?: string): Promise<void>;
   followUp(text: string, cwd?: string, sessionPath?: string): Promise<void>;
-  abort(cwd?: string): Promise<void>;
+  abort(cwd?: string, sessionPath?: string): Promise<void>;
 
   // Bash guard (permission prototype)
   onBashApprovalRequest(

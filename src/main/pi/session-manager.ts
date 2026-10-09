@@ -1127,6 +1127,14 @@ export class PiDeskSessionManager {
     */
    private servicesByCwd: Map<string, Promise<any>> = new Map();
   /**
+   * Scheduled-task sessions currently running. Unlike interactive sessions,
+   * scheduled tasks build their own isolated session outside `this.units` —
+   * they don't go through `ensureUnit` — so `broadcastRunningState()` and
+   * `abort()` would otherwise miss them entirely, leaving the composer with a
+   * grey send button and no way to stop a mid-flight task. Keyed by sessionPath.
+   */
+  private runningTaskSessions = new Map<string, { session: any; cwd: string }>();
+  /**
    * ResourceLoaders that have already handed their ExtensionRuntime to a
    * session. A cached services bundle shares ONE resourceLoader → ONE runtime
    * across every session built from it, but a runtime is permanently poisoned
@@ -1676,6 +1684,14 @@ export class PiDeskSessionManager {
     for (const u of this.units.values()) {
       if (u.runningPath) running.push(u.runningPath);
     }
+    // Scheduled-task sessions run outside this.units. They must be included
+    // here too: the renderer re-applies getState().running on every
+    // reloadMessages() (i.e. on each streaming message_end), so omitting them
+    // would wipe the task's path from runningPaths mid-run and hide the stop
+    // button right after it appears.
+    for (const path of this.runningTaskSessions.keys()) {
+      running.push(path);
+    }
     return running;
   }
 
@@ -1746,6 +1762,12 @@ export class PiDeskSessionManager {
         running.push(u.runningPath);
         cwds.push(u.cwd);
       }
+    }
+    // Scheduled-task sessions run outside this.units — they register themselves
+    // in runningTaskSessions so the renderer can show their stop button too.
+    for (const [path, info] of this.runningTaskSessions) {
+      running.push(path);
+      cwds.push(info.cwd);
     }
     const wc = this.webContents && !this.webContents.isDestroyed()
       ? this.webContents
@@ -1940,7 +1962,40 @@ export class PiDeskSessionManager {
     await unit.runtime.session?.followUp(text);
   }
 
-  async abort(cwd?: string): Promise<void> {
+  async abort(cwd?: string, sessionPath?: string): Promise<void> {
+    // Scheduled-task sessions run outside this.units — they register in
+    // runningTaskSessions. Prefer a sessionPath match (when the renderer knows
+    // exactly which session is focused); fall back to cwd scan for any running
+    // task in that workspace.
+    let matchedTaskPath: string | undefined;
+    if (sessionPath && this.runningTaskSessions.has(sessionPath)) {
+      matchedTaskPath = sessionPath;
+    } else if (cwd) {
+      for (const [path, info] of this.runningTaskSessions) {
+        if (info.cwd === cwd) {
+          matchedTaskPath = path;
+          break;
+        }
+      }
+    }
+
+    if (matchedTaskPath) {
+      const { session } = this.runningTaskSessions.get(matchedTaskPath)!;
+      abortSubagents(matchedTaskPath);
+      try {
+        if (session?.abortBash) session.abortBash();
+        await session.abort();
+      } catch {
+        // Abort raced the turn finishing; scheduled prompt() finally handles cleanup.
+      }
+      // The scheduled task's own finally() will delete from runningTaskSessions
+      // and broadcast, but clear it here too so a second click doesn't hit a
+      // stale entry and the UI reflects the stop immediately.
+      this.runningTaskSessions.delete(matchedTaskPath);
+      this.broadcastRunningState();
+      return;
+    }
+
     const unit = this.units.get(this.resolveCwd(cwd));
     if (!unit) return;
     // Interrupt this parent's subagents FIRST — they run in their own
@@ -3474,10 +3529,18 @@ export class PiDeskSessionManager {
     });
     this.emitScheduled("started", { taskId: task.id, sessionPath });
 
+    // Register so broadcastRunningState() picks it up — otherwise the renderer
+    // has no idea this session is running, the composer shows a grey send
+    // button, and the user can't stop the task mid-flight.
+    this.runningTaskSessions.set(sessionPath, { session, cwd });
+    this.broadcastRunningState();
+
+    let finishReason: string = "unknown";
     try {
       // The trigger message is just a trigger — the real task lives in the
       // system prompt's <scheduled_task> block.
       await session.prompt(SCHEDULED_TRIGGER_MESSAGE);
+      finishReason = "success-prompt-returned";
       // Optional IM completion push (task.imPushInstanceId configured).
       if (task.imPushInstanceId && this.onImPushRequest) {
         const finishedAt = new Date().toLocaleString("zh-CN");
@@ -3498,6 +3561,7 @@ export class PiDeskSessionManager {
         status: "success",
       });
     } catch (err) {
+      finishReason = "error:" + (err instanceof Error ? err.message : String(err));
       await updateRun(runId, {
         finishedAt: new Date().toISOString(),
         status: "error",
@@ -3506,6 +3570,8 @@ export class PiDeskSessionManager {
     } finally {
       unsubscribeEvents();
       session.dispose();
+      this.runningTaskSessions.delete(sessionPath);
+      this.broadcastRunningState();
       this.emitScheduled("completed", { taskId: task.id, sessionPath });
     }
   }

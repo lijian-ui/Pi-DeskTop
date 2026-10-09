@@ -110,9 +110,9 @@ export function registerIpcHandlers(
     await pmgr.followUp(text, cwd, sessionPath);
   });
 
-  ipcMain.handle("pi:abort", async (_, { cwd }) => {
+  ipcMain.handle("pi:abort", async (_, { cwd, sessionPath }) => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
-    await pmgr.abort(cwd);
+    await pmgr.abort(cwd, sessionPath);
   });
 
   // ── Bash guard (permission prototype) ──

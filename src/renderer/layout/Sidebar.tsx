@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { LucideIcon } from "lucide-react";
 import {
   Plus,
@@ -358,6 +359,10 @@ function SessionsSection({
   const [spaceCollapsed, setSpaceCollapsed] = useState(false);
   // Which session's "⋯" menu is open (at most one). null = none.
   const [menuOpenPath, setMenuOpenPath] = useState<string | null>(null);
+  // Viewport rect of the "⋯" trigger that opened the menu. The dropdown is
+  // portaled + fixed-positioned from it, so a height-limited scroll ancestor
+  // (the 定时任务 run list) can never clip it.
+  const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null);
   // Which session is currently in inline-rename mode. null = none.
   const [editingPath, setEditingPath] = useState<string | null>(null);
   // Which session is pending delete confirmation. null = none.
@@ -452,6 +457,63 @@ function SessionsSection({
     onReturnToChat();
   };
 
+  // Shared "⋯" dropdown, portaled to <body> and fixed-positioned from the
+  // trigger's viewport rect. Kept out of normal flow so a scrollable ancestor
+  // (the height-limited 定时任务 run list, .scheduledScrollList) can never
+  // clip it — notably the menu of the last row. Flips up when the trigger sits
+  // near the bottom of the window.
+  const renderSessionMenu = (session: SessionInfo) => {
+    if (menuOpenPath !== session.path || !menuAnchor) return null;
+    const MENU_W = 152;
+    const MENU_H = 116;
+    const GAP = 4;
+    const openUp = window.innerHeight - menuAnchor.bottom < MENU_H + GAP;
+    const top = openUp ? menuAnchor.top - MENU_H - GAP : menuAnchor.bottom + GAP;
+    const left = Math.max(
+      GAP,
+      Math.min(window.innerWidth - MENU_W - GAP, menuAnchor.right - MENU_W),
+    );
+    return createPortal(
+      <>
+        <div
+          className={styles.menuOverlay}
+          onClick={() => setMenuOpenPath(null)}
+        />
+        <div
+          className={styles.sessionMenu}
+          style={{ position: "fixed", top, left, right: "auto" }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className={styles.sessionMenuItem}
+            onClick={(e) => {
+              e.stopPropagation();
+              startRename(session.path);
+            }}
+          >
+            <Pencil size={13} />
+            <span>{t("sessions.rename")}</span>
+          </button>
+          <button
+            className={styles.sessionMenuItem}
+            onClick={(e) => handleExport(e, session.path)}
+          >
+            <Download size={13} />
+            <span>{t("sessions.export")}</span>
+          </button>
+          <button
+            className={`${styles.sessionMenuItem} ${styles.sessionMenuItemDanger}`}
+            onClick={(e) => handleDelete(e, session.path)}
+          >
+            <Trash2 size={13} />
+            <span>{t("sessions.delete")}</span>
+          </button>
+        </div>
+      </>,
+      document.body,
+    );
+  };
+
   // Render a single session row (shared by the 任务 list and 空间 folders).
   const renderRow = (session: SessionInfo) => {
     const isActive = currentPath === session.path;
@@ -503,51 +565,13 @@ function SessionsSection({
           title={t("sessions.more")}
           onClick={(e) => {
             e.stopPropagation();
+            setMenuAnchor(e.currentTarget.getBoundingClientRect());
             setMenuOpenPath(isMenuOpen ? null : session.path);
           }}
         >
           <MoreVertical size={14} />
         </button>
-        {isMenuOpen && (
-          <>
-            <div
-              className={styles.menuOverlay}
-              onClick={(e) => {
-                e.stopPropagation();
-                setMenuOpenPath(null);
-              }}
-            />
-            <div
-              className={styles.sessionMenu}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                className={styles.sessionMenuItem}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  startRename(session.path);
-                }}
-              >
-                <Pencil size={13} />
-                <span>{t("sessions.rename")}</span>
-              </button>
-              <button
-                className={styles.sessionMenuItem}
-                onClick={(e) => handleExport(e, session.path)}
-              >
-                <Download size={13} />
-                <span>{t("sessions.export")}</span>
-              </button>
-              <button
-                className={`${styles.sessionMenuItem} ${styles.sessionMenuItemDanger}`}
-                onClick={(e) => handleDelete(e, session.path)}
-              >
-                <Trash2 size={13} />
-                <span>{t("sessions.delete")}</span>
-              </button>
-            </div>
-          </>
-        )}
+        {renderSessionMenu(session)}
       </div>
     );
   };
@@ -611,51 +635,13 @@ function SessionsSection({
           title={t("sessions.more")}
           onClick={(e) => {
             e.stopPropagation();
+            setMenuAnchor(e.currentTarget.getBoundingClientRect());
             setMenuOpenPath(isMenuOpen ? null : s.path);
           }}
         >
           <MoreVertical size={14} />
         </button>
-        {isMenuOpen && (
-          <>
-            <div
-              className={styles.menuOverlay}
-              onClick={(e) => {
-                e.stopPropagation();
-                setMenuOpenPath(null);
-              }}
-            />
-            <div
-              className={styles.sessionMenu}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                className={styles.sessionMenuItem}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  startRename(s.path);
-                }}
-              >
-                <Pencil size={13} />
-                <span>{t("sessions.rename")}</span>
-              </button>
-              <button
-                className={styles.sessionMenuItem}
-                onClick={(e) => handleExport(e, s.path)}
-              >
-                <Download size={13} />
-                <span>{t("sessions.export")}</span>
-              </button>
-              <button
-                className={`${styles.sessionMenuItem} ${styles.sessionMenuItemDanger}`}
-                onClick={(e) => handleDelete(e, s.path)}
-              >
-                <Trash2 size={13} />
-                <span>{t("sessions.delete")}</span>
-              </button>
-            </div>
-          </>
-        )}
+        {renderSessionMenu(s)}
       </div>
     );
   };

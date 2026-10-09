@@ -36,8 +36,8 @@ const piAPI = {
     ipcRenderer.invoke("pi:steer", { text, cwd, sessionPath }),
   followUp: (text: string, cwd?: string, sessionPath?: string) =>
     ipcRenderer.invoke("pi:followUp", { text, cwd, sessionPath }),
-  abort: (cwd?: string) =>
-    ipcRenderer.invoke("pi:abort", { cwd }),
+  abort: (cwd?: string, sessionPath?: string) =>
+    ipcRenderer.invoke("pi:abort", { cwd, sessionPath }),
 
   // Bash guard (permission prototype)
   onBashApprovalRequest: (callback: (data: { requestId: number; command: string; cwd?: string; sessionPath?: string | null }) => void) => {

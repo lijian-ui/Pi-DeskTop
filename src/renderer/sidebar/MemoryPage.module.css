@@ -4,7 +4,10 @@
 
 .card {
   background: var(--bg-overlay-l1);
-  border-radius: var(--border-radius-md);
+  /* 与同套设置页（McpSettings 等）一致：卡片必须有 1px 描边，
+     否则卡片与页面底色对比过弱、边界看不清，整页会显得「糊在一起」。 */
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
   /* No overflow:hidden here — it would clip the absolutely-positioned
      gear dropdown (ruleMenu). Rounded corners are safe: the background lives
      on this element and children are transparent with their own padding. */
@@ -33,7 +36,7 @@
 
 .cardDivider {
   height: 1px;
-  background: var(--border-tertiary);
+  background: var(--border-neutral-l1);
   margin: 0 14px;
 }
 
@@ -70,7 +73,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--spacer-4);
-  padding: 12px 14px 8px;
+  padding: 12px 14px;
 }
 
 .createBtn {
@@ -102,8 +105,8 @@
   display: flex;
   align-items: flex-start;
   gap: var(--spacer-6);
-  padding: 8px 14px 12px;
-  border-top: 1px solid var(--border-tertiary);
+  padding: 12px 14px;
+  border-top: 1px solid var(--border-neutral-l1);
 }
 
 .ruleIcon {
@@ -153,8 +156,8 @@
 }
 
 .ruleEmpty {
-  padding: 10px 14px 14px;
-  border-top: 1px solid var(--border-tertiary);
+  padding: 14px;
+  border-top: 1px solid var(--border-neutral-l1);
   font-size: var(--body-xs-font-size, 12px);
   color: var(--text-tertiary);
 }
@@ -195,7 +198,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--border-tertiary);
+  border-bottom: 1px solid var(--border-neutral-l1);
 }
 
 .editorTitle {
@@ -224,7 +227,7 @@
   justify-content: flex-end;
   gap: var(--spacer-4);
   padding: 12px 16px;
-  border-top: 1px solid var(--border-tertiary);
+  border-top: 1px solid var(--border-neutral-l1);
 }
 
 .editorBtnGhost {
@@ -314,17 +317,18 @@
 .searchInput {
   width: 100%;
   padding: 7px 12px 7px 30px;
-  background: var(--bg-base-secondary);
+  background: var(--bg-overlay-l2);
   border: 1px solid var(--border-neutral-l2);
   border-radius: var(--radius-4);
   font-size: 13px;
   color: var(--text-default);
   outline: none;
-  transition: border-color 0.12s ease;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
 .searchInput:focus {
   border-color: var(--border-brand);
+  box-shadow: 0 0 0 3px var(--bg-brand-disabled);
 }
 
 .memList {
@@ -335,12 +339,17 @@
 }
 
 .memItem {
-  padding: 10px 14px;
-  border-top: 1px solid var(--border-tertiary);
+  padding: 12px 14px;
+  border-top: 1px solid var(--border-neutral-l1);
+  transition: background 0.12s ease;
 }
 
 .memItem:first-child {
   border-top: none;
+}
+
+.memItem:hover {
+  background: var(--bg-overlay-l2);
 }
 
 .memMeta {
@@ -354,7 +363,7 @@
 .badge {
   font-size: 11px;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--bg-brand-alpha, rgba(59, 130, 246, 0.12));
   color: var(--text-brand);
 }
@@ -374,7 +383,7 @@
   gap: 3px;
   font-size: 11px;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: rgba(245, 166, 35, 0.14);
   color: #d98600;
 }
@@ -441,7 +450,7 @@
   max-height: 220px;
   overflow-y: auto;
   padding: 6px 10px;
-  border: 1px solid var(--border-tertiary);
+  border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-4);
 }
 
@@ -455,32 +464,37 @@
 
 .memActions {
   display: flex;
-  gap: 6px;
-  margin-top: 8px;
+  align-items: center;
+  gap: 2px;
+  margin-top: 10px;
+  /* 按钮自带 8px 内边距，左移后首个按钮文字与上方正文左对齐。 */
+  margin-left: -8px;
 }
 
+/* 每条记忆的动作收敛为「无边框文字按钮」：原先 5 个带框 chip 并排会形成
+   一团视觉噪声，无框 + 悬停着色后次要动作会退到背景里，正文更突出。 */
 .memBtn,
 .memBtnDanger {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border: 1px solid var(--border-neutral-l2);
+  border: none;
   border-radius: var(--radius-4);
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   font-size: 12px;
-  padding: 3px 10px;
+  padding: 4px 8px;
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
 }
 
 .memBtn:hover {
-  background: var(--bg-overlay-l1);
+  background: var(--bg-overlay-l3);
   color: var(--text-default);
 }
 
 .memBtnDanger:hover {
-  background: rgba(229, 72, 77, 0.12);
+  background: rgba(229, 72, 77, 0.14);
   color: #e5484d;
 }
 
@@ -496,8 +510,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 14px;
-  border-top: 1px solid var(--border-tertiary);
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-neutral-l1);
   font-size: 12px;
 }
 
@@ -521,12 +535,17 @@
 
 .select {
   padding: 6px 10px;
-  background: var(--bg-base-secondary);
+  background: var(--bg-overlay-l2);
   border: 1px solid var(--border-neutral-l2);
   border-radius: var(--radius-4);
   font-size: 13px;
   color: var(--text-default);
   outline: none;
+}
+
+.select:focus {
+  border-color: var(--border-brand);
+  box-shadow: 0 0 0 3px var(--bg-brand-disabled);
 }
 
 .savedError {
@@ -536,35 +555,58 @@
 }
 
 /* ── 记忆设置 ── */
+/* 分组小标题做成「眉标」：左侧一条强调竖条 + 次级配色，让 7 个分组在长列表
+   里形成可扫读的层级。原先只是加粗文字、与节标题权重接近，主次不分。 */
 .cfgGroupTitle {
-  margin: 14px 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--spacer-16) 0 0;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: var(--text-secondary);
+}
+
+.cfgGroupTitle::before {
+  content: "";
+  flex-shrink: 0;
+  width: 3px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  background: var(--border-neutral-l3);
 }
 
 .cfgInput {
   width: 84px;
   padding: 6px 10px;
-  background: var(--bg-base-secondary);
+  background: var(--bg-overlay-l2);
   border: 1px solid var(--border-neutral-l2);
   border-radius: var(--radius-4);
   font-size: 13px;
   color: var(--text-default);
   text-align: right;
+  font-variant-numeric: tabular-nums;
   outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
 .cfgInput:focus {
-  border-color: var(--border-neutral-l3);
+  border-color: var(--border-brand);
+  box-shadow: 0 0 0 3px var(--bg-brand-disabled);
 }
 
 .cfgSelect {
   padding: 6px 10px;
-  background: var(--bg-base-secondary);
+  background: var(--bg-overlay-l2);
   border: 1px solid var(--border-neutral-l2);
   border-radius: var(--radius-4);
   font-size: 13px;
   color: var(--text-default);
   outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.cfgSelect:focus {
+  border-color: var(--border-brand);
+  box-shadow: 0 0 0 3px var(--bg-brand-disabled);
 }

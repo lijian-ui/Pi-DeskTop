@@ -894,7 +894,7 @@ export default function ChatComposer() {
   const handleStop = () => {
 
     clearQueue();
-    window.piDesk.abort(currentCwd).catch((err: any) => {
+    window.piDesk.abort(currentCwd, currentPath ?? undefined).catch((err: any) => {
       setError(err?.message ?? t("chat.failedToStop"));
     });
   };
