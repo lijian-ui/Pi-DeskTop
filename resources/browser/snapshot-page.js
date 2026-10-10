@@ -398,16 +398,24 @@
     }
     out.forms = { fields };
 
-    // —— 文本片段 ——
-    const snippets = [];
-    for (const element of document.querySelectorAll(TEXT_SELECTOR)) {
-      if (isHidden(element)) continue;
-      const text = String(element.innerText || "").replace(/\s+/g, " ").trim();
-      if (!text) continue;
-      snippets.push({ uid: remember(element), text: text.slice(0, 160) });
-      if (snippets.length >= 40) break;
+    // —— 文本内容 ——
+    // mode === "text"：输出整页正文（pageText），供模型读取表格/列表等长文本。
+    // 这是**安全替代 evaluate 抓 document.body.innerText** 的正规入口；此时不再产出
+    // 文本片段（同一内容重复出现只会白耗 token）。元素/表单仍保留，uid 依然可操作。
+    if (mode === "text") {
+      const body = (document.body && document.body.innerText) || "";
+      out.pageText = body.replace(/\n{3,}/g, "\n\n").trim().slice(0, 30000);
+    } else {
+      const snippets = [];
+      for (const element of document.querySelectorAll(TEXT_SELECTOR)) {
+        if (isHidden(element)) continue;
+        const text = String(element.innerText || "").replace(/\s+/g, " ").trim();
+        if (!text) continue;
+        snippets.push({ uid: remember(element), text: text.slice(0, 160) });
+        if (snippets.length >= 40) break;
+      }
+      out.textSnippets = snippets;
     }
-    out.textSnippets = snippets;
 
     // 被 excludeOccluded 剔除的噪声节点数（元素 + 字段合计），让调用方知道"少看了多少"。
     if (excludeOccluded) out.occludedSkipped = occludedSkipped;

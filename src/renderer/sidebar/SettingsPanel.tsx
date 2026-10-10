@@ -284,11 +284,18 @@ export default function SettingsPanel() {
         const existingCfg = (allCfg as Record<string, any>)[providerId];
 
         // The catalog IS the full model list — full replace on save.
+        // compat.supportsDeveloperRole 一律置 false：developer 角色是 OpenAI 官方
+        // 专有特性，三方网关的上游（vLLM / SGLang + Jinja chat template）遇到
+        // role:"developer" 往往直接拒（400/422 upstream_request_rejected），
+        // 退回 system 对所有服务端都安全。
         const models = validModels.map((m) => ({
           id: m.name.trim(),
           name: m.name.trim(),
           reasoning: m.reasoning ?? false,
-          ...(m.thinkingFormat ? { compat: { thinkingFormat: m.thinkingFormat } } : {}),
+          compat: {
+            supportsDeveloperRole: false,
+            ...(m.thinkingFormat ? { thinkingFormat: m.thinkingFormat } : {}),
+          },
           input: m.supportsImages ? ["text", "image"] : ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: Number.isFinite(m.contextWindow) ? m.contextWindow : 128000,

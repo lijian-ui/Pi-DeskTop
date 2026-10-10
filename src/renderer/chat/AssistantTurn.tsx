@@ -1,5 +1,5 @@
 import { memo, useState, useRef, useEffect } from "react";
-import { Copy, Check, Volume2, Loader2, Square } from "lucide-react";
+import { Copy, Check, Volume2, Loader2, Square, AlertTriangle } from "lucide-react";
 import type { Message, Artifact } from "../store/agent-store";
 import { useTranslation } from "react-i18next";
 import { useTtsStore } from "../store/tts-store";
@@ -249,7 +249,21 @@ function AssistantTurn({ messages, highlight }: Props) {
         {turnArtifacts.length ? (
           <ArtifactCards artifacts={turnArtifacts} />
         ) : null}
-        {(finalContent.trim() || finalMsg?.stoppedByUser) && (
+        {/* 模型请求失败卡片：SDK 在服务端失败时只把 stopReason 标成 "error"、
+            不抛异常，此前界面因此完全静默。这里把 errorMessage 显式呈现出来。 */}
+        {finalMsg?.errorMessage !== undefined && !isStreaming && !finalMsg.retryPending && (
+          <div className={styles.errorCard} role="alert">
+            <AlertTriangle size={14} className={styles.errorIcon} />
+            <div className={styles.errorBody}>
+              <div className={styles.errorTitle}>{t("chat.modelErrorTitle")}</div>
+              {finalMsg?.errorMessage?.trim() && (
+                <div className={styles.errorText}>{finalMsg.errorMessage}</div>
+              )}
+              <div className={styles.errorHint}>{t("chat.modelErrorHint")}</div>
+            </div>
+          </div>
+        )}
+        {(finalContent.trim() || finalMsg?.stoppedByUser || finalMsg?.errorMessage !== undefined) && (
           <div className={styles.meta}>
             <span className={styles.time}>{time}</span>
             {finalMsg?.stoppedByUser && (
@@ -318,6 +332,9 @@ function areEqual(prev: Props, next: Props): boolean {
       x.timestamp !== y.timestamp ||
       x.toolExecutions !== y.toolExecutions ||
       x.artifacts !== y.artifacts ||
+      x.stoppedByUser !== y.stoppedByUser ||
+      x.errorMessage !== y.errorMessage ||
+      x.retryPending !== y.retryPending ||
       x.id !== y.id
     ) {
       return false;

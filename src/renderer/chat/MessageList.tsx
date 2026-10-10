@@ -34,7 +34,11 @@ function isGhost(msg: Message): boolean {
       msg.content?.trim() ||
       msg.thinking?.trim() ||
       msg.isStreaming ||
-      msg.toolExecutions?.length
+      msg.toolExecutions?.length ||
+      // 只带错误的失败消息（content 为空）也必须保留，否则错误卡片会被丢掉。
+      // 但「正在自动重试」的失败只是中间态：隐藏它（不渲染空气泡，卡片也被抑制），
+      // 由底部的「正在重试」状态条代表；重试用尽会清掉该标记使其重新出现。
+      (msg.errorMessage !== undefined && !msg.retryPending)
     )
   );
 }
@@ -89,6 +93,8 @@ function findMessageEl(id: string): HTMLElement | null {
 export default function MessageList() {
   const messages = useAgentStore((s) => s.messages);
   const isStreaming = useAgentStore((s) => s.isStreaming);
+  const replyPending = useAgentStore((s) => s.replyPending);
+  const retryInfo = useAgentStore((s) => s.retryInfo);
   const { t } = useTranslation();
 
   // In-session content search: Titlebar search box → this locator.
@@ -241,11 +247,11 @@ export default function MessageList() {
       if (atBottomRef.current) {
         anchorRef.current?.scrollIntoView({ behavior: "smooth" });
       }
-    } else if (isStreaming && atBottomRef.current) {
+    } else if ((isStreaming || replyPending || retryInfo) && atBottomRef.current) {
       list.scrollTop = list.scrollHeight;
     }
     prevLen.current = messages.length;
-  }, [messages, isStreaming]);
+  }, [messages, isStreaming, replyPending, retryInfo]);
 
   // On (re)mount, start at the latest message and hide the jump button.
   useEffect(() => {
@@ -379,8 +385,14 @@ export default function MessageList() {
   // 在列表末尾补一个「请求中…」气泡。这覆盖了在线模型 TTFT（首字节延迟）
   // 期间 SDK 尚未发 message_start、AssistantTurn 尚未渲染的真空期——
   // 本地模型因 message_start 即时触发，此时 lastItem 已是 turn，不会重复显示。
+  //
+  // replyPending 覆盖比 isStreaming 更早的一段：消息**刚发出、agent_start 尚未到达**
+  // 时也显示「请求中…」，让用户一眼知道消息已发出（而不是"发完什么都没有"）。
+  // retryInfo 覆盖退避等待的空档：重试可重试错误时 SDK 会先发 agent_end(willRetry)，
+  // 此时 isStreaming 已转 false，若不看 retryInfo，等待期间会完全没有指示。
   const lastItem = renderItems[renderItems.length - 1];
-  const showRequesting = isStreaming && !(lastItem && lastItem.type === "turn");
+  const showRequesting =
+    (isStreaming || replyPending || !!retryInfo) && !(lastItem && lastItem.type === "turn");
 
   // Only render the most recent `visibleCount` turns; older ones are revealed
   // on demand as the user scrolls up.
@@ -427,9 +439,18 @@ export default function MessageList() {
               <span
                 className={assistantStyles.typing}
                 role="status"
-                aria-label={t("chat.requesting")}
+                aria-label={
+                  retryInfo
+                    ? t("chat.retrying", { n: retryInfo.attempt, max: retryInfo.maxAttempts })
+                    : t("chat.requesting")
+                }
+                title={retryInfo?.message || undefined}
               >
-                <span className={assistantStyles.typingText}>{t("chat.requesting")}</span>
+                <span className={assistantStyles.typingText}>
+                  {retryInfo
+                    ? t("chat.retrying", { n: retryInfo.attempt, max: retryInfo.maxAttempts })
+                    : t("chat.requesting")}
+                </span>
                 <span className={assistantStyles.typingDots}>
                   <span></span>
                   <span></span>

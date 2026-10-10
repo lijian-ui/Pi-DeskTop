@@ -1929,7 +1929,9 @@ export class PiDeskSessionManager {
     const seq = ++unit.runSeq;
     this.broadcastRunningState();
     try {
-      await unit.runtime.session?.prompt(text, { images });
+      // 刻意不用 `session?.prompt`：session 缺失时宁可抛错让渲染层报出来，
+      // 也不要静默 no-op —— 那会让用户"以为发出去了，却没有任何反应"。
+      await unit.runtime.session.prompt(text, { images });
     } finally {
       // Only clear the flag if we still own the latest run. A stale finally
       // from a turn that was aborted and then re-prompted must not wipe the
@@ -4018,6 +4020,14 @@ export class PiDeskSessionManager {
         if (model.cost === undefined) { model.cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }; changed = true; }
         if (model.contextWindow === undefined) { model.contextWindow = 128000; changed = true; }
         if (model.maxTokens === undefined) { model.maxTokens = 16384; changed = true; }
+        // 自定义网关的上游大多不接受 role:"developer"（OpenAI 官方专有特性），
+        // 统一退回 system —— 与 SettingsPanel 保存路径上的处理一致。这里同时
+        // 覆盖此前已存在的配置，无需用户重新保存模型页。
+        const compat = model.compat && typeof model.compat === "object" ? model.compat : {};
+        if (compat.supportsDeveloperRole !== false) {
+          model.compat = { ...compat, supportsDeveloperRole: false };
+          changed = true;
+        }
       }
       mr.registerProvider(providerId, config);
       if ((config as any).apiKey) {

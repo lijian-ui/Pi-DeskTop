@@ -441,6 +441,9 @@ const zhMessages = {
   "chat.statusRunning": "运行中",
   "chat.statusDone": "完成",
   "chat.statusError": "出错",
+  "chat.modelErrorTitle": "模型请求失败",
+  "chat.modelErrorHint": "本次没有收到模型回复。可重试、换一个模型，或新建会话 / 压缩上下文后再试。",
+  "chat.retrying": "请求失败，正在重试（{{n}}/{{max}}）…",
 
   "workspace.placeholder": "选择工作空间",
   "workspace.pick": "选择工作空间…",
@@ -1125,6 +1128,9 @@ const enMessages: Record<string, string> = {
   "chat.statusRunning": "Running",
   "chat.statusDone": "Done",
   "chat.statusError": "Error",
+  "chat.modelErrorTitle": "Model request failed",
+  "chat.modelErrorHint": "No reply was received this time. Retry, switch models, or start a new session / compact the context and try again.",
+  "chat.retrying": "Request failed, retrying ({{n}}/{{max}})…",
 
   "workspace.placeholder": "Select workspace",
   "workspace.pick": "Select workspace…",

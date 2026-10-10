@@ -886,7 +886,11 @@ export default function ChatComposer() {
     } else {
       useAgentStore.getState().addMessage(userMsg);
     }
+    // 标记「已发出、等待响应」：界面立刻显示「请求中…」（不必等 agent_start），
+    // 由看门狗兜底超时 —— 这样用户能明确区分"已发出"与"没发出去"。
+    useAgentStore.getState().setReplyPending(true);
     window.piDesk.prompt(fullBody, images, currentCwd, currentPath ?? undefined).catch((err: any) => {
+      useAgentStore.getState().setReplyPending(false);
       setError(err?.message ?? t("chat.failedToSend"));
     });
   };
@@ -894,6 +898,8 @@ export default function ChatComposer() {
   const handleStop = () => {
 
     clearQueue();
+    // 用户主动停止：立即撤掉「等待响应」看门狗与指示，避免停止后仍显示"请求中"。
+    useAgentStore.getState().setReplyPending(false);
     window.piDesk.abort(currentCwd, currentPath ?? undefined).catch((err: any) => {
       setError(err?.message ?? t("chat.failedToStop"));
     });

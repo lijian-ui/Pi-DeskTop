@@ -51,6 +51,78 @@ function scheduleSessionListReload(): void {
   }, 1500);
 }
 
+/**
+ * 往指定会话缓冲区追加一条可见的 custom 消息（不进入 LLM 上下文，仅展示）。
+ * 用于「非焦点会话出错」——横幅只属于当前面板，背景会话的错误必须落到它自己的
+ * 缓冲区，否则用户切过去看到的仍是"没有回复也没有报错"。
+ */
+function appendSessionNotice(path: string, text: string, customType = "session-notice"): void {
+  if (!path) return;
+  useSessionStore.getState().mutateBuffer(path, (msgs) => [
+    ...msgs,
+    {
+      id: `${customType}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      role: "custom" as const,
+      customType,
+      content: text,
+      timestamp: Date.now(),
+    },
+  ]);
+}
+
+/**
+ * 标记/清除「最近一条失败消息」的重试中状态。
+ *
+ * SDK 的时序是 message_end(错误) → auto_retry_start → message_end(错误) → … →
+ * auto_retry_end。也就是说错误消息总是**先**落进缓冲区、重试决定**后**到。
+ * 因此每次重试开始时把这条失败消息标成 retryPending，界面据此隐藏红卡片与空
+ * 气泡，只留底部的「正在重试」状态条；重试成功则标记保留（永久隐藏该次失败），
+ * 重试用尽则清除标记，让错误卡片重新出现。
+ */
+function markLastErrorRetrying(path: string, retrying: boolean): void {
+  if (!path) return;
+  useSessionStore.getState().mutateBuffer(path, (msgs) => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role !== "user" && msgs[i].errorMessage !== undefined) {
+        if (retrying) {
+          return msgs.map((m, j) => (j === i ? { ...m, retryPending: true } : m));
+        }
+        if (!msgs[i].retryPending) return msgs;
+        return msgs.map((m, j) =>
+          j === i ? { ...m, retryPending: undefined } : m
+        );
+      }
+    }
+    return msgs;
+  });
+}
+
+/**
+ * 「首次响应」看门狗：消息发出后若长时间收不到**任何**事件，判定为未被处理。
+ * 只在「发出 → 首个事件」这段窗口内计时（任何事件都会立即撤掉），所以不会误伤
+ * 长时间运行的工具或慢速首字节；它专门覆盖"请求发出去了但石沉大海"的场景。
+ */
+const FIRST_RESPONSE_TIMEOUT_MS = 60_000;
+let replyWatchdog: ReturnType<typeof setTimeout> | null = null;
+function clearReplyWatchdog(): void {
+  if (replyWatchdog) {
+    clearTimeout(replyWatchdog);
+    replyWatchdog = null;
+  }
+}
+function armReplyWatchdog(): void {
+  clearReplyWatchdog();
+  replyWatchdog = setTimeout(() => {
+    replyWatchdog = null;
+    const s = useAgentStore.getState();
+    if (!s.replyPending) return;
+    s.setReplyPending(false);
+    s.setError(
+      "发出消息后 60 秒仍未收到任何响应：消息可能未被处理（网络或模型服务无响应）。请稍后重试。",
+    );
+  }, FIRST_RESPONSE_TIMEOUT_MS);
+}
+
 /** Events that carry chat content — these are buffered per-session (including
  * for background sessions) so each conversation accumulates its full live
  * history independently. */
@@ -155,12 +227,40 @@ function reduceMessageEvent(msgs: Message[], ev: any): Message[] {
 
     case "message_end": {
       const msg = ev.message;
+      const stopReason = msg?.stopReason;
+      const errText =
+        typeof msg?.errorMessage === "string" && msg.errorMessage.trim()
+          ? msg.errorMessage.trim()
+          : undefined;
+      const last = msgs[msgs.length - 1];
+      const canFinalize = last?.role === "assistant" && last.isStreaming;
+      // 服务端失败时 SDK 不抛异常，只把 stopReason 标成 "error" 并把原因放进
+      // errorMessage（见 message-types.md）。此前渲染层完全忽略了它，于是长会话
+      // 撞上 400 多模态失败时界面只剩「请求中…」消失，既不回复也不报错。这里落库，
+      // 交给 AssistantTurn 渲染错误卡片。
+      if (stopReason === "error" && !canFinalize) {
+        // 极端情况（错误发生在首个 message_start 之前）没有任何流式气泡可挂载，
+        // 补一条只带错误的 assistant 消息，保证失败一定可见。
+        return [
+          ...msgs,
+          {
+            id: ev.messageId ?? `msg-${++msgCounter}`,
+            role: "assistant" as const,
+            content: "",
+            isStreaming: false,
+            errorMessage: errText ?? "",
+            timestamp: Date.now(),
+          },
+        ];
+      }
+      if (!canFinalize) return msgs;
       return msgs.map((m, i) =>
-        i === msgs.length - 1 && m.role === "assistant" && m.isStreaming
+        i === msgs.length - 1
           ? {
               ...m,
               isStreaming: false,
-              stoppedByUser: msg?.stopReason === "aborted" ? true : m.stoppedByUser,
+              stoppedByUser: stopReason === "aborted" ? true : m.stoppedByUser,
+              errorMessage: stopReason === "error" ? (errText ?? "") : m.errorMessage,
             }
           : m
       );
@@ -290,6 +390,8 @@ function drainQueue() {
     // but the model still needs the literal source.
     const refsText = next.attachments?.map(attachmentToText).join("\n\n") ?? "";
     const fullBody = [next.content, refsText].filter(Boolean).join("\n\n");
+    // 标记「已发出、等待响应」：界面立刻显示「请求中…」，并由看门狗兜底超时。
+    useAgentStore.getState().setReplyPending(true);
     window.piDesk
       .prompt(fullBody, images, cwd, path ?? undefined)
       .then(() => {
@@ -302,6 +404,7 @@ function drainQueue() {
         useAgentStore.setState((st) => ({
           messageQueue: [next, ...st.messageQueue],
         }));
+        useAgentStore.getState().setReplyPending(false);
         useAgentStore.getState().setError(err?.message ?? "Failed to send queued message");
       });
   });
@@ -327,6 +430,12 @@ export function useAgentSession() {
       const targetPath = payload?.sessionPath || focusedPath || "";
       const isFocus =
         !payload?.sessionPath || payload?.sessionPath === focusedPath;
+
+      // 收到本会话的**任何**事件 → 请求已被接受：撤掉「首次响应」看门狗
+      // （agent_start / 压缩 / 任意内容事件都会走到这里）。
+      if (isFocus && useAgentStore.getState().replyPending) {
+        useAgentStore.getState().setReplyPending(false);
+      }
 
       if (CONTENT_EVENTS.has(ev.type)) {
         session.mutateBuffer(targetPath, (msgs) => reduceMessageEvent(msgs, ev));
@@ -422,7 +531,25 @@ export function useAgentSession() {
         return;
       }
 
-      if (!isFocus) return;
+      // 重试是中间态，与焦点无关：先在缓冲区统一标记/清除。重试成功保留隐藏，
+      // 重试用尽才把红卡片放回来（见 markLastErrorRetrying）。
+      if (ev.type === "auto_retry_start") {
+        markLastErrorRetrying(targetPath, true);
+      } else if (ev.type === "auto_retry_end" && !ev.success) {
+        markLastErrorRetrying(targetPath, false);
+      }
+
+      if (!isFocus) {
+        // 非焦点会话的错误不能丢：横幅只属于当前面板，所以把错误作为可见的
+        // custom 消息落到**它自己的**缓冲区 —— 用户切过去时能看到失败原因，
+        // 而不是"没有回复也没有报错"。
+        if (ev.type === "auto_retry_end" && !ev.success && ev.finalError) {
+          appendSessionNotice(targetPath, `⚠️ 本轮请求失败：${String(ev.finalError)}`, "error-notice");
+        } else if (ev.type === "compaction_end" && !ev.result && ev.errorMessage) {
+          appendSessionNotice(targetPath, `⚠️ 上下文压缩失败：${String(ev.errorMessage)}`, "error-notice");
+        }
+        return;
+      }
 
       const store = useAgentStore.getState();
       switch (ev.type) {
@@ -432,6 +559,38 @@ export function useAgentSession() {
 
         case "agent_end":
           store.setStreaming(false);
+          // 兜底清掉重试状态条（正常由 auto_retry_end 清理；中止等路径可能不到）。
+          store.setRetryInfo(null);
+          // 空回合兜底：本轮既无正文、无思考、无工具、也无错误 → 明确告知
+          // "模型没有返回内容"，把"发完消息什么都没有"的静默变成可见提示。
+          // willRetry=true 时说明后面还有重试/压缩，不提示。
+          if (!ev.willRetry) {
+            const msgs = useSessionStore.getState().messagesByPath.get(targetPath) ?? [];
+            let lastUser = -1;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].role === "user") {
+                lastUser = i;
+                break;
+              }
+            }
+            const meaningful = msgs.slice(lastUser + 1).some(
+              (m) =>
+                !!m.content?.trim() ||
+                !!m.thinking?.trim() ||
+                (m.toolExecutions?.length ?? 0) > 0 ||
+                m.errorMessage !== undefined ||
+                m.stoppedByUser,
+            );
+            // lastUser >= 0 保证"本轮确实有用户消息"；否则（缓冲区空/尚未同步）
+            // 我们无从判断模型到底答没答，宁可不提示，避免误报。
+            if (lastUser >= 0 && !meaningful) {
+              appendSessionNotice(
+                targetPath,
+                "⚠️ 模型本轮没有返回任何内容（也没有报错）。请重试，或检查网络 / 更换模型。",
+                "no-reply",
+              );
+            }
+          }
           break;
 
         case "compaction_start":
@@ -461,15 +620,27 @@ export function useAgentSession() {
               .catch(() => {});
           } else {
             store.clearCompactDone();
+            // 压缩失败的原因此前被丢弃；挂到错误条上，避免"压缩失败"却无说明。
+            if (ev.errorMessage) store.setError(String(ev.errorMessage));
           }
           break;
 
         case "auto_retry_start":
           store.setRetrying(true);
+          store.setRetryInfo({
+            attempt: ev.attempt,
+            maxAttempts: ev.maxAttempts,
+            delayMs: ev.delayMs,
+            message: String(ev.errorMessage ?? ""),
+          });
           break;
 
         case "auto_retry_end":
           store.setRetrying(false);
+          store.setRetryInfo(null);
+          // 重试用尽仍失败时 SDK 在这里给出最终错误；此前只关掉重试徽标、
+          // 丢弃 finalError，用户看到的仍是"没有回复也没有报错"。
+          if (!ev.success && ev.finalError) store.setError(String(ev.finalError));
           break;
 
         case "queue_update":
@@ -517,10 +688,20 @@ export function useAgentSession() {
       }
     });
 
+    // 「等待响应」看门狗：replyPending 由发送方置位，收到本会话首个事件即撤销
+    // （见上方 onEvent 开头）。置位期间计时，超时无任何事件 → 明确报错。
+    const unsubPending = useAgentStore.subscribe((state, prev) => {
+      if (state.replyPending === prev.replyPending) return;
+      if (state.replyPending) armReplyWatchdog();
+      else clearReplyWatchdog();
+    });
+
     return () => {
       unsubscribe();
       unsubRunning();
       unsubRejected();
+      unsubPending();
+      clearReplyWatchdog();
       subscribedRef.current = false;
     };
   }, []);

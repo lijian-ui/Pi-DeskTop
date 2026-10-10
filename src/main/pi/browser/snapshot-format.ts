@@ -15,6 +15,8 @@ const MAX_TEXT_CHARS = 30_000;
 const MAX_ELEMENTS_SHOWN = 40;
 const MAX_FIELDS_SHOWN = 20;
 const MAX_SNIPPETS_SHOWN = 20;
+/** `mode:"text"` 的整页正文在渲染端的截断上限（页面脚本已先截到 30k）。 */
+const MAX_PAGE_TEXT_CHARS = 12_000;
 
 interface Rect {
   x: number;
@@ -91,6 +93,8 @@ export interface BrowserSnapshot {
   elements?: SnapElement[];
   forms?: { fields?: SnapField[] };
   textSnippets?: SnapSnippet[];
+  /** `mode:"text"` 时返回的整页正文（安全替代 evaluate 抓 innerText）。 */
+  pageText?: string;
   /** 粗粒度差异（历史字段，始终存在）。 */
   diff?: { firstSnapshot?: boolean; changed?: boolean };
   /** 结构化差异（仅 `delta:true` 时存在）。 */
@@ -275,8 +279,15 @@ export function formatBrowserSnapshot(snapshot: BrowserSnapshot): string {
     }
   }
 
+  // 整页正文（mode:"text"）：直接给出正文，不再渲染文本片段（同一内容重复只白耗 token）。
+  const pageText = snapshot.pageText?.trim();
+  if (pageText) {
+    lines.push("\n## 页面全文");
+    lines.push(truncate(pageText, MAX_PAGE_TEXT_CHARS));
+  }
+
   const snippets = snapshot.textSnippets ?? [];
-  if (snippets.length) {
+  if (!pageText && snippets.length) {
     lines.push("\n## 文本片段");
     for (const snippet of snippets.slice(0, MAX_SNIPPETS_SHOWN)) {
       lines.push(`- ${snippet.uid} ${compact(snippet.text, 160)}`);

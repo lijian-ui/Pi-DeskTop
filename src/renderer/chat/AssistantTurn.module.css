@@ -114,6 +114,50 @@
   line-height: 1.4;
 }
 
+/* 模型请求失败卡片：SDK 在服务端失败时只标 stopReason 而不抛异常，
+   此前界面完全静默；这里把 errorMessage 显式呈现出来。 */
+.errorCard {
+  display: flex;
+  gap: var(--spacer-8);
+  align-items: flex-start;
+  padding: var(--spacer-8) var(--spacer-12);
+  border: 1px solid var(--status-error-default);
+  background: var(--status-error-surface-l1);
+  border-radius: var(--radius-8);
+}
+
+.errorIcon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--status-error-default);
+}
+
+.errorBody {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacer-4);
+}
+
+.errorTitle {
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-strong);
+  color: var(--status-error-default);
+}
+
+.errorText {
+  font-family: var(--font-family-mono);
+  font-size: var(--body-xs-font-size);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.errorHint {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+}
+
 .copyBtn {
   display: inline-flex;
   align-items: center;

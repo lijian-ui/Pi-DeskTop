@@ -67,7 +67,7 @@ export function assertActionGuarded(
         throw guardError(
           "在页面里执行任意代码（browser evaluate）",
           "allowEvaluate",
-          "它在**已登录的页面上下文**里运行任意脚本，可读取并外发页面上的全部数据。优先用 snapshot + click/type 完成任务。",
+          "它在**已登录的页面上下文**里运行任意脚本，可读取并外发页面上的全部数据。读正文用 snapshot({mode:\"text\"})，操作元素用 snapshot + click/type 即可，无需 evaluate。",
         );
       }
       return;

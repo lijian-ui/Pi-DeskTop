@@ -24,6 +24,7 @@
  * 本工具已彻底不依赖任何浏览器扩展（2026-09-22 移除 existing 驱动与其回环桥）。
  */
 import { Type } from "typebox";
+import { createHash } from "node:crypto";
 import {
   defineTool,
   getAgentDir,
@@ -232,6 +233,29 @@ const SNAPSHOT_STALL_STOP = 5;
  */
 const READ_ONLY_ACTIONS = new Set<string>(["tab.list", "page.snapshot", "page.screenshot"]);
 
+/** 替换历史里被裁掉的浏览器截图（模型可见，按约定走英文）。 */
+const BROWSER_SHOT_OMITTED =
+  "[screenshot omitted] An earlier browser screenshot was dropped from history to keep the request within the provider size limit. " +
+  'If you need to look at the page again, call browser({action:"screenshot"}).';
+
+/** 是否是「带图片的 browser 工具结果」——即一次截图（tabResult 不含 image 块）。 */
+function isBrowserShot(m: unknown): boolean {
+  const r = m as { role?: unknown; toolName?: unknown; content?: unknown };
+  return (
+    r?.role === "toolResult" &&
+    r.toolName === "browser" &&
+    Array.isArray(r.content) &&
+    (r.content as any[]).some((b) => b?.type === "image")
+  );
+}
+
+/**
+ * 上一次截图的内容哈希（按 tab URL 缓存）。
+ * 用途：页面未变化时不再重复附图 —— 每张图都会永久留在上下文里（正是长会话爆掉的根因），
+ * 「截图看一眼有没有变」这种调用若原样重发，纯属浪费。拿不到 URL（如 about:blank）时不缓存。
+ */
+const lastShotHash = new Map<string, string>();
+
 export function createBrowserTool(options: BrowserToolOptions = {}): InlineExtension {
   const unattended = options.unattended === true;
 
@@ -267,6 +291,47 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
             `原因：连续 ${count} 次快照页面**毫无变化**，说明它在重复一个无效动作（死循环），系统已强制结束本轮。\n\n` +
             "建议：把目标拆得更具体，或直接告诉它你期望的下一步，然后重新发起。",
         });
+      });
+
+      /**
+       * 历史截图瘦身（`context` 钩子）。
+       *
+       * 背景：screenshot 的返回带 image 块（base64，单张可达数百 KB），SDK 会把
+       * **整段历史**原样发给模型，于是长会话里每次请求都在重发历史中的每一张截图。
+       * 累计到一定程度后服务端多模态处理直接失败（`400 Param Incorrect /
+       * failed during process multi-modal data`），表现为「发完消息停止按钮闪一下、
+       * 模型不回复、也没有报错」；新建会话则正常 —— 正因为历史里没有截图。
+       *
+       * 处理：只在**发往模型前**把「除最近一张外」的浏览器截图替换成一行文字占位，
+       * 最近一张（通常是本轮刚截的）保持可见。注意：
+       *  - 只动 role==="toolResult" 且 toolName==="browser" 的消息；用户在对话里
+       *    自己粘贴/上传的图片在 user 消息中，**绝不触碰**；
+       *  - 这是请求级副本：Pi 在钩子返回后会恢复会话状态（见 SDK docs/extensions.md），
+       *    界面历史与磁盘会话文件都保持原样。
+       */
+      pi.on("context", (event) => {
+        const messages = event.messages as any[];
+        // 定位最后一条「含图片」的浏览器工具结果 —— 它之前的截图都要被替换。
+        let lastShot = -1;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (isBrowserShot(messages[i])) {
+            lastShot = i;
+            break;
+          }
+        }
+        if (lastShot < 0) return; // 历史里没有浏览器截图，无需处理
+        let changed = false;
+        const next = messages.map((m, i) => {
+          if (i >= lastShot || !isBrowserShot(m)) return m;
+          changed = true;
+          return {
+            ...m,
+            content: (m.content as any[]).map((b) =>
+              b?.type === "image" ? { type: "text", text: BROWSER_SHOT_OMITTED } : b,
+            ),
+          };
+        });
+        return changed ? { messages: next } : undefined;
       });
 
       /**
@@ -413,7 +478,7 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
         if (stalledSnapshots >= SNAPSHOT_STALL_WARN) {
           text +=
             `\n\n⚠️ 已连续 ${stalledSnapshots} 次快照，页面**毫无变化**——你重复的动作没有生效。` +
-            "**不要再用同样的方式重试**：换一个策略（换 uid / 先 screenshot 看版式 / 换新思路），或直接停下向用户说明你卡住了。";
+            "**不要再用同样的方式重试**：换一个策略（换 uid / 先 snapshot({mode:\"text\"}) 看版式与正文 / 换新思路），或直接停下向用户说明你卡住了。";
         }
         return { content: [{ type: "text", text }], details: { snapshot } };
       };
@@ -423,14 +488,38 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
         signal: AbortSignal | undefined,
         cfg: BrowserConfig,
       ): Promise<AgentToolResult<unknown>> => {
-        const result = (await send("page.screenshot", rest, signal, cfg)) as { dataUrl?: string };
+        const result = (await send("page.screenshot", rest, signal, cfg)) as {
+          dataUrl?: string;
+          tab?: { url?: string; title?: string };
+        };
         if (!result.dataUrl) throw new Error("截图失败：浏览器未返回 dataUrl。");
+        const tab = result.tab;
+        // 页面身份写进文字里：模型据此确认截的是哪一页，无需额外再调 tabs/snapshot。
+        const where = tab?.url ? `页面：${tab.title || "(无标题)"}（${tab.url}）` : "";
+        // 内容去重：同一 URL 的截图字节完全相同 → 页面没变，省略重复图片（除非显式 force）。
+        const hash = createHash("sha1").update(result.dataUrl).digest("hex");
+        const key = tab?.url ?? "";
+        const unchanged = rest.force !== true && !!key && lastShotHash.get(key) === hash;
+        if (key) lastShotHash.set(key, hash);
+        if (unchanged) {
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `截图与上一张完全相同：页面无变化，已省略重复图片以节省上下文。${where}\n` +
+                  "确实需要这张图时请传 force: true。",
+              },
+            ],
+            details: { tab, omitted: true },
+          };
+        }
         const image = toImageContent(result.dataUrl);
         const content: ContentBlock[] = [
-          { type: "text", text: "已捕获当前业务系统截图（见附图）。" },
+          { type: "text", text: `已捕获当前业务系统截图（见附图）。${where}` },
           image,
         ];
-        return { content, details: { tab: (result as { tab?: unknown }).tab } };
+        return { content, details: { tab } };
       };
 
       const doClick = async (
@@ -560,7 +649,7 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
           label: "浏览器控制",
           description:
             "Control the browser to operate business systems (single entry point; the action field selects the operation). " +
-            "Observe: snapshot (structure + element uid; add delta:true for a diff against the last snapshot) / screenshot (image) / tabs (tab list) / status (connection diagnostics). " +
+            "Observe: snapshot (structure + element uid; add delta:true for a diff against the last snapshot; mode:\"text\" also returns the whole page text — the safe way to read tables/lists instead of evaluate) / screenshot (image) / tabs (tab list) / status (connection diagnostics). " +
             "Interact: navigate (open URL) / click / type (append) / fill (clear then write; accepts a fields array for batch) / press_key / hover / scroll. " +
             "click/type/fill/press_key/navigate return post-action signals: navigated (URL changed) / newRequests (new requests fired) / effective (whether the action really took effect); " +
             "fill/type also return valueChanged (whether the control's value/checked/selectedIndex actually changed), and batch fill returns fieldsChanged. " +
@@ -581,10 +670,10 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
             'browser({action:"type"}) **appends** input; when a field already has a value, use browser({action:"fill"}) instead (clear then write); fill\'s submit:true should only be used when you really want to submit the form, to avoid accidentally submitting business documents.',
             "After the page structure changes (navigation/dialog/submit), snapshot again to get fresh uids; old uids may be stale.",
             'To merely confirm "did anything react" after an action, use browser({action:"snapshot", delta:true}): if the page did not substantively change it returns a condensed result that explicitly tells you "no reaction", saving context; if it changed it lists the diff first, then the full list. Only use a snapshot without delta when you need to re-check the complete element list.',
-            'Use browser({action:"screenshot"}) to see images/charts/layout; screenshots are for visual confirmation only, not as a basis for click coordinates.',
+            'Observation priority: default to browser({action:"snapshot"}) to understand the page and verify an action\'s effect (add delta:true to compare against the last snapshot). To read long page content such as tables/lists, use browser({action:"snapshot", mode:"text"}) — it returns the whole page text (## 页面全文); never detour through evaluate for that. Reserve browser({action:"screenshot"}) for things only an image can convey — pictures/charts/layout, or a login QR code — and **do not screenshot a page that has not changed**: every image stays in the context permanently, and an identical one is dropped with a notice (pass force:true only when you genuinely need the image again).',
             'For an element you cannot click, first browser({action:"press_key", key:"Tab"}) to move focus then Enter to trigger it — this often bypasses overlay layers.',
             'For menus that only appear on hover: first browser({action:"hover"}) then snapshot to get the new uids.',
-            'If snapshot + click can do it, do not detour through browser({action:"evaluate"}) to run JS (that action is denied by the guard by default).',
+            'If snapshot + click can do it, do not detour through browser({action:"evaluate"}) to run JS (that action is denied by the guard by default). To extract page text/data, use browser({action:"snapshot", mode:"text"}) or snapshot + containingText, not evaluate.',
             'For API automation (HTTP calls that need the login state), use browser({action:"get_cookie", url:"<business site URL>"}) to get the full Cookie string (including HttpOnly); only the specified site is exported per call, bound by the allowlist. The return includes valid=yes/no/unknown session probing: valid=no (401/403 or redirect to login) means the login state has expired — **do not blindly retry**; immediately browser({action:"window", windowAction:"show"}) to pop the window and ask the user to log in again via QR/captcha, then hide to switch back; when valid=unknown, do the real work first and take the API\'s 401 as the source of truth. A full Cookie is equivalent to account session credentials: use it only for automation within the authorized scope, and never leak it to third parties or write it to public files.',
             'When you hit a login page: the system only auto-pops the window for **captcha/QR/SMS login**; a pure username/password login page will not auto-pop, leaving you to snapshot → fill → submit yourself. Three cases: ① the account and password from the user are already in the conversation history → first snapshot to locate the form fields (the password box showing value=[masked] is **normal secure masking**, not an empty box or an anomaly; after filling the system keeps masking it and will not echo the password, **and do not repeat the password in the conversation**), then fill with browser({action:"fill", uid:<password box uid>, text:<password>}); after submitting, snapshot again to see whether login succeeded (URL changed / login box gone / business page elements appeared). ② If a captcha/QR/SMS/password-error prompt appears → immediately browser({action:"window", windowAction:"show"}) to pop the window and let the user take over. ③ If you do not yet have credentials → prompt the user for account/password, then go to ①. Do not call window again when the auto-pop notice appears; after the user finishes logging in, browser({action:"window", windowAction:"hide"}) to switch back to the background.',
             'Three high-risk actions are denied by the guard by default: upload (upload a local file) / evaluate (run arbitrary JS) / press_key with ctrl·meta·alt combos. When denied, the error message explains why and points to which item to enable in the guard section of browser-config.json — **leave that decision to the user; do not find your own way around it** (e.g. using evaluate instead of upload).',
@@ -669,12 +758,18 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
               deltaY: Type.Optional(Type.Number()),
               // 快照选项
               mode: Type.Optional(
-                Type.Union([
-                  Type.Literal("auto"),
-                  Type.Literal("interactive"),
-                  Type.Literal("forms"),
-                  Type.Literal("text"),
-                ]),
+                Type.Union(
+                  [
+                    Type.Literal("auto"),
+                    Type.Literal("interactive"),
+                    Type.Literal("forms"),
+                    Type.Literal("text"),
+                  ],
+                  {
+                    description:
+                      'Snapshot mode. "text" additionally returns the whole page body text (## 页面全文), which is the safe way to read tables/lists/long content instead of evaluate. Default auto.',
+                  },
+                ),
               ),
               maxElements: Type.Optional(Type.Number({ minimum: 1, maximum: 400 })),
               containingText: Type.Optional(Type.String({ description: "Return only elements whose label text contains this string." })),
@@ -696,6 +791,12 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
               // 截图选项
               format: Type.Optional(Type.Union([Type.Literal("png"), Type.Literal("jpeg")])),
               quality: Type.Optional(Type.Number({ minimum: 0, maximum: 100, description: "JPEG quality 0-100." })),
+              force: Type.Optional(
+                Type.Boolean({
+                  description:
+                    "Only for action=screenshot: force-return the image even if it is byte-identical to the previous screenshot of the same page. By default an identical screenshot is skipped (text only) to save context. Default false.",
+                }),
+              ),
               // 求值
               expression: Type.Optional(Type.String({ maxLength: 4000, description: "JS expression for evaluate." })),
               // get_cookie 会话探活

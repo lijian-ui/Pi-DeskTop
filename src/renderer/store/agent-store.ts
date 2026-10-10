@@ -38,6 +38,18 @@ export interface Message {
   isStreaming?: boolean;
   /** Set when the user manually aborted this assistant message's generation. */
   stoppedByUser?: boolean;
+  /**
+   * 本轮请求失败时 SDK 给出的原因（`stopReason === "error"` 时由渲染层落库）。
+   * SDK 在服务端失败时只标记 stopReason、不抛异常，没有这个字段界面就会
+   * 完全静默（「请求中…」消失后既不回复也不报错）。
+   */
+  errorMessage?: string;
+  /**
+   * 本轮失败后 SDK 正在自动重试（`auto_retry_start` 已到达、`auto_retry_end` 尚未）。
+   * 期间隐藏错误卡片与这条空消息——重试只是中间态，最终成败由 `auto_retry_end`
+   * 决定；重试成功则本条永远保持隐藏，失败则清除标记让错误卡片重新出现。
+   */
+  retryPending?: boolean;
   timestamp: number;
 }
 
@@ -67,6 +79,18 @@ interface AgentState {
   compactTokensBefore: number | null;
   compactTokensAfter: number | null;
   isRetrying: boolean;
+  /**
+   * 已发出消息、尚未收到本会话任何事件（首次响应看门狗计时中）。
+   * 用于在 `agent_start` 之前就显示「请求中…」，让用户明确知道消息**已发出**；
+   * 超时无任何事件则由看门狗转为错误提示。
+   */
+  replyPending: boolean;
+  /**
+   * 正在自动重试的详情（`auto_retry_start` → `auto_retry_end` 之间）。
+   * 之前只有布尔 `isRetrying` 且无人读取，界面上完全看不出"正在重试"，
+   * 只能靠一张红卡片知道出事。这里带上尝试次数与原因供状态条展示。
+   */
+  retryInfo: { attempt: number; maxAttempts: number; delayMs: number; message: string } | null;
   model: ModelInfo | null;
   thinkingLevel: string;
   /** 当前会话已注册的斜杠命令（内置 /compact + 扩展包注册的 /命令）。 */
@@ -93,6 +117,8 @@ interface AgentState {
   ) => void;
   clearCompactDone: () => void;
   setRetrying: (v: boolean) => void;
+  setRetryInfo: (info: { attempt: number; maxAttempts: number; delayMs: number; message: string } | null) => void;
+  setReplyPending: (v: boolean) => void;
   setModel: (model: ModelInfo | null) => void;
   setThinkingLevel: (level: string) => void;
   setCommands: (commands: Array<{ name: string; description: string }>) => void;
@@ -134,6 +160,8 @@ export const useAgentStore = create<AgentState>((set) => ({
   compactTokensBefore: null,
   compactTokensAfter: null,
   isRetrying: false,
+  replyPending: false,
+  retryInfo: null,
   model: null,
   thinkingLevel: "off",
   commands: [],
@@ -219,6 +247,8 @@ export const useAgentStore = create<AgentState>((set) => ({
       compactTokensAfter: null,
     }),
   setRetrying: (v) => set({ isRetrying: v }),
+  setRetryInfo: (info) => set({ retryInfo: info }),
+  setReplyPending: (v) => set({ replyPending: v }),
   setModel: (model) => set({ model }),
   setThinkingLevel: (level) => set({ thinkingLevel: level }),
   setCommands: (commands) => set({ commands }),
