@@ -31,6 +31,7 @@ import {
   type AgentToolResult,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
+import { mountDeferredTool } from "../deferred-tools";
 import { readBrowserConfigSync, type BrowserConfig } from "./browser-config";
 import { ManagedCdp } from "./cdp-client";
 import { assertBrowserAuthorized, authSummary } from "./auth";
@@ -68,9 +69,25 @@ type TextBlock = { type: "text"; text: string };
 type ImageBlock = { type: "image"; data: string; mimeType: string };
 type ContentBlock = TextBlock | ImageBlock;
 
+/**
+ * 浏览器意图关键词（deferred 试点的弱模型兜底）：用户消息命中即由宿主直接
+ * 装载 browser，跳过「模型自发调 tool_search」这一弱模型学不会的推理跳板。
+ * 刻意保守 —— 宁可漏（漏了还有声明行 + tool_search 两条正路），不误触发：
+ * 只认「打开/访问/抓取网页」这类明确浏览动作或 URL 本身。命中后本会话内
+ * 保持装载（applyUnitToolSet 重放会保留已装载的 deferred 工具）。
+ */
+const BROWSER_INTENT_RE =
+  /(打开|访问|浏览|抓取|爬取|网页|网站|浏览器|登录.{0,6}(站|后台|系统)|截图.{0,6}页|\bhttps?:\/\/\S)/i;
+
 export interface BrowserToolOptions {
   /** 服务无人值守（定时任务）会话：授权改走配置常驻授权（需 allowUnattended）。 */
   unattended?: boolean;
+  /**
+   * 试点：注册为 `deferred`（不进 tools 数组 / system prompt），模型经
+   * `tool_search` 按需装载。还须 browser-config.json 的 `deferred` 未被显式
+   * 关闭才生效（双开关：调用方声明意图 + 用户配置回退）。
+   */
+  deferred?: boolean;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -264,6 +281,24 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
     factory: (pi) => {
       const bootCfg = readBrowserConfigSync();
       if (!bootCfg.enabled) return; // 总开关关 → 不注册工具
+      // 试点双开关：调用方声明 deferred 意图 + 用户配置未显式关闭。
+      const deferred = options.deferred === true && bootCfg.deferred;
+      if (deferred) {
+        // 试点机制（tool_search 补挂 + 声明行 + 关键词自动装载）见
+        // deferred-tools.ts；与 schedule 等其他 deferred 工具共享一个
+        // <deferred_tools> 块（自动合并）。
+        mountDeferredTool(pi, {
+          name: "browser",
+          intent: BROWSER_INTENT_RE,
+          hintLine:
+            "`browser` (open web pages / click / type / screenshot on real logged-in sites) is NOT loaded yet. " +
+            "If the user asks to open or visit a website / web page / URL, or to use the browser: " +
+            'FIRST call `tool_search` with query "browser", THEN call `browser` — ' +
+            "it appears in your tool list immediately after tool_search returns. Do not guess its parameters.",
+          loadedLine:
+            "`browser` (web automation) has just been loaded for this request — it is in your tool list now. Call it directly.",
+        });
+      }
       // **预热托管 Chrome**（后台、不阻塞、幂等）：Chrome 冷启动需要数秒，
       // 这里只 spawn 进程并连接 CDP，真正调用时通常已就绪。
       void ensureManagedChrome(bootCfg.managed.headless, bootCfg)
@@ -647,6 +682,8 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
         defineTool({
           name: "browser",
           label: "浏览器控制",
+          // 试点：deferred = 注册但不声明给模型（不进 tools 数组），tool_search 命中才装载。
+          exposure: deferred ? "deferred" : "direct",
           description:
             "Control the browser to operate business systems (single entry point; the action field selects the operation). " +
             "Observe: snapshot (structure + element uid; add delta:true for a diff against the last snapshot; mode:\"text\" also returns the whole page text — the safe way to read tables/lists instead of evaluate) / screenshot (image) / tabs (tab list) / status (connection diagnostics). " +
@@ -662,18 +699,14 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
           promptGuidelines: [
             'Before operating a business system, first call browser({action:"snapshot"}) to observe the page and get element uids, or browser({action:"tabs"}) to find the target tab id; always locate elements with uid / targetId afterwards.',
             'When the user gives you a URL to work on, first call browser({action:"navigate", url}) to open it, then snapshot to see the content.',
-            'Click/type with uid (from the latest snapshot); if a uid is stale, snapshot again — do not blindly retry.',
-            'In the return of click/type/fill/press_key/navigate, effective=false means the URL did not change, no new requests fired, the control value did not change, and the element stayed in place — i.e. the action had no effect; snapshot again to re-check instead of retrying as-is. fill/type explicitly report valueChanged: true means the value really was written, so it is a success even if other effective fields are false — do not retry. To wait for an outcome, pass waitFor:{url:"..."} or {selector:"..."} in the action (default wait 5s).',
-            'For multi-field forms (e.g. login), use browser({action:"fill", fields:[{uid,text},…], submit:true}) to write the whole form in one call, saving round-trips.',
+            'Click/type with uid from the latest snapshot; after any structure change (navigation/dialog/submit) old uids go stale — snapshot again for fresh ones, do not blindly retry.',
+            'fill/type report valueChanged: true means the value really was written, so the action succeeded even if other effective fields are false — do not retry.',
             'On the error "N non-blank tabs exist": first call browser({action:"tabs"}) to see the list, then pass targetId in the action to pick the target tab; do not assume it lands on the tab you want.',
-            'When a snapshot is flooded by occluded overlays/hidden forms, add excludeOccluded:true to omit occluded nodes (the result reports an occludedSkipped count).',
             'browser({action:"type"}) **appends** input; when a field already has a value, use browser({action:"fill"}) instead (clear then write); fill\'s submit:true should only be used when you really want to submit the form, to avoid accidentally submitting business documents.',
-            "After the page structure changes (navigation/dialog/submit), snapshot again to get fresh uids; old uids may be stale.",
-            'To merely confirm "did anything react" after an action, use browser({action:"snapshot", delta:true}): if the page did not substantively change it returns a condensed result that explicitly tells you "no reaction", saving context; if it changed it lists the diff first, then the full list. Only use a snapshot without delta when you need to re-check the complete element list.',
-            'Observation priority: default to browser({action:"snapshot"}) to understand the page and verify an action\'s effect (add delta:true to compare against the last snapshot). To read long page content such as tables/lists, use browser({action:"snapshot", mode:"text"}) — it returns the whole page text (## 页面全文); never detour through evaluate for that. Reserve browser({action:"screenshot"}) for things only an image can convey — pictures/charts/layout, or a login QR code — and **do not screenshot a page that has not changed**: every image stays in the context permanently, and an identical one is dropped with a notice (pass force:true only when you genuinely need the image again).',
+            'Observation priority: default to snapshot to understand the page and verify an action\'s effect; reserve screenshot for things only an image can convey — pictures/charts/layout, or a login QR code — and **do not screenshot a page that has not changed** (every image stays in the context permanently).',
             'For an element you cannot click, first browser({action:"press_key", key:"Tab"}) to move focus then Enter to trigger it — this often bypasses overlay layers.',
             'For menus that only appear on hover: first browser({action:"hover"}) then snapshot to get the new uids.',
-            'If snapshot + click can do it, do not detour through browser({action:"evaluate"}) to run JS (that action is denied by the guard by default). To extract page text/data, use browser({action:"snapshot", mode:"text"}) or snapshot + containingText, not evaluate.',
+            'If snapshot + click can do it, do not detour through browser({action:"evaluate"}) to run JS (that action is denied by the guard by default).',
             'For API automation (HTTP calls that need the login state), use browser({action:"get_cookie", url:"<business site URL>"}) to get the full Cookie string (including HttpOnly); only the specified site is exported per call, bound by the allowlist. The return includes valid=yes/no/unknown session probing: valid=no (401/403 or redirect to login) means the login state has expired — **do not blindly retry**; immediately browser({action:"window", windowAction:"show"}) to pop the window and ask the user to log in again via QR/captcha, then hide to switch back; when valid=unknown, do the real work first and take the API\'s 401 as the source of truth. A full Cookie is equivalent to account session credentials: use it only for automation within the authorized scope, and never leak it to third parties or write it to public files.',
             'When you hit a login page: the system only auto-pops the window for **captcha/QR/SMS login**; a pure username/password login page will not auto-pop, leaving you to snapshot → fill → submit yourself. Three cases: ① the account and password from the user are already in the conversation history → first snapshot to locate the form fields (the password box showing value=[masked] is **normal secure masking**, not an empty box or an anomaly; after filling the system keeps masking it and will not echo the password, **and do not repeat the password in the conversation**), then fill with browser({action:"fill", uid:<password box uid>, text:<password>}); after submitting, snapshot again to see whether login succeeded (URL changed / login box gone / business page elements appeared). ② If a captcha/QR/SMS/password-error prompt appears → immediately browser({action:"window", windowAction:"show"}) to pop the window and let the user take over. ③ If you do not yet have credentials → prompt the user for account/password, then go to ①. Do not call window again when the auto-pop notice appears; after the user finishes logging in, browser({action:"window", windowAction:"hide"}) to switch back to the background.',
             'Three high-risk actions are denied by the guard by default: upload (upload a local file) / evaluate (run arbitrary JS) / press_key with ctrl·meta·alt combos. When denied, the error message explains why and points to which item to enable in the guard section of browser-config.json — **leave that decision to the user; do not find your own way around it** (e.g. using evaluate instead of upload).',
@@ -889,8 +922,11 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
   };
 }
 
-/** 普通/空间会话。 */
+/** IM 会话：常驻 direct（IM 无 tool_search 交互语境，保持原行为）。 */
 export const browserTool = createBrowserTool();
+
+/** 桌面普通/空间会话：试点 deferred（browser-config.json `deferred` 未关闭时生效）。 */
+export const browserToolDeferred = createBrowserTool({ deferred: true });
 
 /** 定时任务会话：无人值守常驻授权（需 allowUnattended）。 */
 export const browserToolUnattended = createBrowserTool({ unattended: true });

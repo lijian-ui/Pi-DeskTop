@@ -70,6 +70,12 @@ export interface BrowserConfig {
   /** 后台静默：不主动抢焦点/激活标签。默认 **true**。 */
   background: boolean;
   /**
+   * 试点：桌面普通会话把 browser 注册为 `deferred`（不进 tools 数组、不占
+   * system prompt），模型需要时经 `tool_search` 按需装载。默认 **true**；
+   * 显式写 false 回退为常驻 direct。定时任务/IM 不受影响（始终 direct）。
+   */
+  deferred: boolean;
+  /**
    * 定时任务（无人值守）下是否允许浏览器操作，默认 **true**；allowedDomains 为可选额外收窄。
    * 默认放开是为了「定时任务开箱即用」：总开关 `enabled` 仍默认 false（用户须在设置里显式授权），
    * 三类高危动作（upload / evaluate / 组合键）也仍是 fail-closed，故该默认值不构成静默越权。
@@ -98,6 +104,7 @@ function defaultConfig(): BrowserConfig {
     enabled: false,
     managed: { headless: true, executablePath: "", extraArgs: [], cdpPort: 17319 },
     background: true,
+    deferred: true,
     allowUnattended: true,
     allowUnattendedRead: true,
     allowedDomains: [],
@@ -128,6 +135,8 @@ function normalize(raw: unknown): BrowserConfig {
       cdpPort: typeof managed.cdpPort === "number" && managed.cdpPort > 0 ? managed.cdpPort : 17319,
     },
     background: r.background !== false,
+    // 试点开关：默认开（缺字段 = true），显式写 false 回退常驻 direct。
+    deferred: r.deferred !== false,
     // 默认放开：缺字段 = true（`!== false`），只有显式写 false 才收紧。
     // （与 guard 三项的「严格 === true 才放开」相反：那三项是高危动作，必须 fail-closed。）
     allowUnattended: r.allowUnattended !== false,

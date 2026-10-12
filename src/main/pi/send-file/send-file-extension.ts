@@ -54,10 +54,8 @@ export function createSendFileExtension(): InlineExtension {
             "- If the file is missing, exceeds the size limit, or the current session is not an IM chat, the tool returns a send failure — do not claim in your reply that it was sent; instead give the user the path in the message body.",
           promptSnippet:
             "Send a local file directly to the current chat's user (works over IM channels)",
-          promptGuidelines: [
-            "When the user explicitly asks for a file, or a generated/saved deliverable needs to be handed directly to the user, use send_file (filePath = an absolute path already on disk).",
-            "Make sure the file is created before calling; if the file does not exist or the send fails (e.g. the current session is not an IM chat, or the file exceeds the limit), tell the user the send result honestly and just put the file path in the reply body — do not falsely claim it was sent.",
-          ],
+          // 两条均为 description Notes 的逐句复述（何时使用 / 先建文件 / 失败如实告知并给路径）。
+          promptGuidelines: [],
           parameters: Type.Object(
             {
               filePath: Type.String({ description: "Absolute path of the local file to send (must already exist)." }),

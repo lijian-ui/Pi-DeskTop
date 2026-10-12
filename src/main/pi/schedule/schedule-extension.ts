@@ -27,6 +27,7 @@ import {
   type AgentToolResult,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
+import { mountDeferredTool } from "../deferred-tools";
 import { readScheduleConfigSync } from "./schedule-config";
 import {
   deleteScheduledTask,
@@ -284,18 +285,53 @@ export interface ScheduleExtensionDeps {
   /** Fire a task immediately (management-page "run now" path). Injected by
    *  PiSessionManager to avoid an extension → session-manager import cycle. */
   runNow?: (taskId: string) => Promise<void>;
+  /**
+   * 试点（与 browser 同机制）：注册为 `deferred`（不进 tools 数组 / system
+   * prompt），模型经 tool_search 按需装载 + 关键词自动装载兜底。还须
+   * schedule-config.json 的 `deferred` 未被显式关闭才生效（双开关：调用方
+   * 声明意图 + 用户配置回退）。IM / 定时任务会话不传 → 保持常驻 direct。
+   */
+  deferred?: boolean;
 }
+
+/**
+ * 定时意图关键词（deferred 试点的弱模型兜底）：用户消息命中即由宿主直接
+ * 装载 schedule，跳过「模型自发调 tool_search」这一弱模型学不会的推理跳板。
+ * 刻意保守 —— 「每天/每周」类时间副词必须后接动作动词才算命中（「我每天8点
+ * 起床」是记忆场景，不该装载定时工具）；「定时/提醒我/schedule/cron」这类
+ * 强信号单独成立。宁可漏（漏了还有声明行 + tool_search 两条正路），不误触发。
+ */
+const SCHEDULE_INTENT_RE =
+  /(定时|周期|循环|提醒我|到点|设.{0,6}(任务|提醒|计划)|每(天|日|周|月|年)[^.。，]{0,10}(提醒|运行|执行|发|检查|汇总|生成|推送|备份|报告|拉取|抓取|清理)|\b(schedule|remind|cron)\b|every\s*(day|week|month|hour|monday|tuesday|wednesday|thursday|friday|saturday|sunday))/i;
 
 export function createScheduleExtension(deps: ScheduleExtensionDeps = {}): InlineExtension {
   return {
     name: "schedule",
     factory: (pi) => {
-      if (!readScheduleConfigSync().enabled) return; // master switch off → no tool
+      const cfg = readScheduleConfigSync();
+      if (!cfg.enabled) return; // master switch off → no tool
+      // 试点双开关：调用方声明 deferred 意图 + 用户配置未显式关闭。
+      const deferred = deps.deferred === true && cfg.deferred;
+      if (deferred) {
+        mountDeferredTool(pi, {
+          name: "schedule",
+          intent: SCHEDULE_INTENT_RE,
+          hintLine:
+            "`schedule` (create / manage scheduled tasks: daily / weekly / reminders / run-automatically jobs) is NOT loaded yet. " +
+            "If the user asks to schedule or remind or run something automatically on a cadence: " +
+            'FIRST call `tool_search` with query "schedule", THEN call `schedule` — ' +
+            "it appears in your tool list immediately after tool_search returns. Do not guess its parameters.",
+          loadedLine:
+            "`schedule` (create/manage scheduled tasks) has just been loaded for this request — it is in your tool list now. Call it directly.",
+        });
+      }
 
       pi.registerTool(
         defineTool({
           name: "schedule",
           label: "定时任务",
+          // 试点：deferred = 注册但不声明给模型（不进 tools 数组），tool_search 命中才装载。
+          exposure: deferred ? "deferred" : "direct",
           description:
             "Create and manage scheduled tasks (in-app planned tasks that open an isolated session to run the given instruction when due). " +
             "Supported schedules: interval (every N minutes), daily (every day at HH:mm), weekly (given weekday at HH:mm), " +
@@ -308,8 +344,10 @@ export function createScheduleExtension(deps: ScheduleExtensionDeps = {}): Inlin
           promptGuidelines: [
             "When the user asks for something like 'every day / weekly / on a schedule / remind me at a time / run automatically', create a task with schedule create; write clearly in prompt what to do when it fires, and it must be self-contained (the scheduled session cannot see this conversation's context).",
             "If the user has not specified the trigger time, do not guess for them — clarify first, then create.",
-            "After creating/modifying, clearly tell the user the schedule and the next run time; before update or delete, first use list to get the taskId.",
-            "Scheduled tasks do not fire while the app is closed (in-process scheduling); if this matters, tell the user honestly.",
+            // "update/delete 前先 list 拿 taskId"已在 description（list returns the taskId required by update/delete/run）。
+            "After creating/modifying, clearly tell the user the schedule and the next run time.",
+            // 事实"应用关闭不触发"已在 description；只保留诚实告知这条纪律。
+            "If the app-closed limitation matters for the user's request, tell the user honestly.",
           ],
           parameters: scheduleParams,
           execute: async (

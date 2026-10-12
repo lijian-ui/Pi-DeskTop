@@ -11,6 +11,7 @@ import {
   type AgentSessionEvent,
   type AgentSessionRuntime,
   type ExtensionUIContext,
+  type LoadSkillsResult,
 } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -30,7 +31,7 @@ export type ThinkingLevelValue =
 
 import { readFile, writeFile, mkdir, unlink, readdir, rm } from "node:fs/promises";
 import { existsSync, statSync, watch, mkdirSync, readdirSync, readFileSync, type FSWatcher } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import extract from "extract-zip";
@@ -42,12 +43,13 @@ import { soulExtension } from "./soul-extension";
 import { computeCacheWaste, CACHE_TTL_MS } from "./cache-stats";
 import { readRules, writeRules, deleteRulesFile } from "./rules";
 import { rulesExtension } from "./rules-extension";
+import { docsStripExtension } from "./docs-strip-extension";
 import { loadConfig } from "./memory/config";
 import { readJsonFileSync } from "../json-file";
 import { scanMemoryContent } from "./memory/guard";
 import { webSearchExtension } from "./web-search-extension";
 import { todoExtension } from "./todo/todo-extension";
-import { browserTool, browserToolUnattended } from "./browser/browser-tool";
+import { browserTool, browserToolDeferred, browserToolUnattended } from "./browser/browser-tool";
 import { createAskUserExtension } from "./ask-user/ask-user-extension";
 import { createSendFileExtension } from "./send-file/send-file-extension";
 import { createScheduleExtension } from "./schedule/schedule-extension";
@@ -65,7 +67,7 @@ import type { ToolMode } from "../../shared/tool-catalog-types";
 import { SCHEDULED_TRIGGER_MESSAGE } from "../../shared/schedule";
 // Pure helper (mirrors the SDK's cwd → sessions-dir encoding). im-session-map
 // only imports this module as a *type*, so there is no runtime import cycle.
-import { sessionDirFor } from "../im/im-session-map";
+import { sessionDirFor, IM_CHAT_SUBDIR } from "../im/im-session-map";
 import { createSubagentExtension } from "./subagent";
 import { abortSubagents } from "./subagent/runner";
 import { TaskScheduler } from "./scheduler";
@@ -168,6 +170,18 @@ function authJsonPath(): string {
  */
 function chatOnlyCwd(): string {
   return join(getAgentDir(), "chat");
+}
+
+/**
+ * 该 cwd 是否为 IM 会话的默认工作区（`chat/im/<channel>`）。IM 与桌面共用
+ * `ensureUnit`，但试点要求 browser 在 IM 保持常驻 direct（IM 没有交互式
+ * tool_search 的语境）；只有桌面普通/空间会话走 deferred。
+ * IM 配置了自定义 workspace 时与桌面共享 services，走 deferred（可接受：
+ * 模型仍可经 tool_search 装载）。
+ */
+function isImSessionCwd(cwd: string): boolean {
+  const rel = relative(join(chatOnlyCwd(), IM_CHAT_SUBDIR), resolve(cwd));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /**
@@ -888,6 +902,53 @@ function createContextFilesOverride() {
   };
 }
 
+/**
+ * skillsOverride factory: caps each skill's prompt-visible `description` to a
+ * token budget so the `<skills>` catalog stays lean. SKILL.md frontmatter is
+ * user-authored and can balloon into multi-sentence essays (llm-wiki's ~250
+ * chars alone ≈ 250+ tokens EVERY turn), while the catalog only needs a
+ * "when should I load this" one-liner — the full body is read on demand via
+ * the read tool anyway.
+ *
+ * Truncation strategy: if over budget, keep up to the first sentence-ending
+ * boundary (。！？.!?) within the cap, else hard-cut at the cap on a word/CJK
+ * boundary and append "…". Under-budget descriptions pass through untouched,
+ * so this is a pure guard against future bloat — it never rewrites a concise
+ * description, and the SKILL.md files on disk are never modified (the override
+ * only affects the in-memory prompt copy).
+ */
+const SKILL_DESC_MAX_CHARS = 160;
+
+function compactSkillDescription(description: string): string {
+  const text = description.trim();
+  if (text.length <= SKILL_DESC_MAX_CHARS) return text;
+  const window = text.slice(0, SKILL_DESC_MAX_CHARS + 1);
+  // Prefer ending on the last sentence boundary that fits the budget.
+  const boundary = Math.max(
+    window.lastIndexOf("。"),
+    window.lastIndexOf("！"),
+    window.lastIndexOf("？"),
+    window.lastIndexOf(". "),
+    window.lastIndexOf("! "),
+    window.lastIndexOf("? "),
+  );
+  if (boundary >= 40) return text.slice(0, boundary + 1);
+  // No sentence boundary in range → cut at the cap on a safe char.
+  let cut = SKILL_DESC_MAX_CHARS;
+  while (cut > 0 && /\s/.test(text[cut])) cut--;
+  return `${text.slice(0, cut)}…`;
+}
+
+function createSkillsCompactOverride() {
+  return (base: LoadSkillsResult): LoadSkillsResult => ({
+    ...base,
+    skills: base.skills.map((skill) => {
+      const compact = compactSkillDescription(skill.description);
+      return compact === skill.description ? skill : { ...skill, description: compact };
+    }),
+  });
+}
+
 async function readCompactionConfig(): Promise<CompactionConfig> {
   const settings = await readSettingsJson();
   const c = settings.compaction ?? {};
@@ -1375,8 +1436,11 @@ export class PiDeskSessionManager {
         cwd: servicesKey,
         modelRuntime: this.modelRuntime!,
         resourceLoaderOptions: {
-          extensionFactories: [soulExtension, rulesExtension, webSearchExtension, browserTool, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), createSendFileExtension(), createScheduleExtension({ runNow: (taskId) => this.runScheduledTaskNow(taskId) }), hermesMemoryExtension, createMcpMount()],
+          // deferred 试点：桌面普通/空间会话走 deferred（tool_search 按需装载），
+          // IM 默认工作区（chat/im/<channel>）保持常驻 direct。browser / schedule 同机制。
+          extensionFactories: [soulExtension, rulesExtension, docsStripExtension, webSearchExtension, isImSessionCwd(servicesKey) ? browserTool : browserToolDeferred, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), createSendFileExtension(), createScheduleExtension({ runNow: (taskId) => this.runScheduledTaskNow(taskId), deferred: !isImSessionCwd(servicesKey) }), hermesMemoryExtension, createMcpMount()],
           agentsFilesOverride: createContextFilesOverride(),
+          skillsOverride: createSkillsCompactOverride(),
         },
       });
       this.servicesByCwd.set(servicesKey, servicesPromise);
@@ -2478,6 +2542,10 @@ export class PiDeskSessionManager {
       // MCP 工具走服务器级权限闸（见 evaluateMcp）。放在 bash 分支之前，因为
       // MCP 工具名永远不会是 "bash"，顺序只为可读性。codemode 脚本里的嵌套调用
       // 同样会经过这里（SDK 文档：nested 调用与 direct 调用共用 tool_call 钩子）。
+      // tool_search 是「装载工具」的元操作（不执行任何外部动作；被装载的
+      // browser/MCP 工具各自再走自己的闸），与定时任务闸同样放行 —— 否则
+      // browser deferred 试点每次装载都会凭空弹一个 "tool_search" MCP 审批。
+      if (event.toolName === "tool_search") return undefined;
       if (isMcpToolName(event.toolName)) {
         const decision = await this.evaluateMcp(event.toolName, unit);
         if (decision === "allow") return undefined;
@@ -2970,8 +3038,21 @@ export class PiDeskSessionManager {
   ): void {
     const session = unit.runtime?.session;
     if (!session) return;
-    const allNames =
-      (session as any).getAllTools?.()?.map((t: any) => t.name) ?? [];
+    const allTools =
+      (session as any).getAllTools?.() ?? [];
+    const allNames: string[] = allTools.map((t: any) => t.name);
+    // deferred 工具（browser 试点）：注册但不声明。宿主重放显式工具集时不能
+    // 把它们塞回激活集 —— 仅保留 tool_search 已装载（当前确实在活跃集里）的。
+    const activeNow = new Set(session.getActiveToolNames?.() ?? []);
+    const deferredLoaded = new Set(
+      allTools
+        .filter((t: any) => t.exposure === "deferred" && activeNow.has(t.name))
+        .map((t: any) => t.name),
+    );
+    // 本会话是否处于 deferred 试点（按注册 exposure 判定，天然按 unit
+    // 区分：IM 会话注册的是 direct → 不成立，tool_search 不会被强行激活）。
+    // 试点工具集（browser / schedule…）：只要存在任意 deferred 工具即成立。
+    const pilotActive = allTools.some((t: any) => t.exposure === "deferred");
     // A mode is a SESSION-LEVEL lens over the global config: built-ins must be
     // both globally enabled AND admitted by the mode; extension tools must
     // survive the global config gate AND belong to a feature the mode allows.
@@ -2981,13 +3062,21 @@ export class PiDeskSessionManager {
     const extNames = allNames.filter(
       (n: string) =>
         !BUILTIN_TOOL_NAMES.includes(n) &&
-        !isExtensionToolDisabled(n) &&
+        // tool_search 归 mcp 特性，但试点需要它独立于 MCP 存活（MCP 关闭时
+        // 仍是第一方装载通道）→ 试点会话豁免 mcp 特性开关与服务器能力判断。
+        (!isExtensionToolDisabled(n) || (n === "tool_search" && pilotActive)) &&
         modeAllowsTool(mode, n) &&
+        // deferred 且尚未被 tool_search 装载 → 不进重放集（保持未声明）。
+        (!allTools.some((t: any) => t.name === n && t.exposure === "deferred") ||
+          deferredLoaded.has(n)) &&
         // MCP 的固定名基础工具（codemode / tool_search / 资源工具）由扩展
         // 无条件注册，只有存在对应 exposure 的服务器时才该进入活跃集 ——
         // 否则没配任何服务器也会凭空多出一个 codemode。`mcp__*` 则天然只在
         // 服务器连上并注册后才出现，无需这层判断。
-        (!isMcpToolName(n) || n.startsWith("mcp__") || mcpInfraAllowed(n)),
+        (!isMcpToolName(n) ||
+          n.startsWith("mcp__") ||
+          mcpInfraAllowed(n) ||
+          (n === "tool_search" && pilotActive)),
     );
     session.setActiveToolsByName([...builtins, ...extNames]);
   }
@@ -3450,8 +3539,9 @@ export class PiDeskSessionManager {
       cwd,
       modelRuntime: this.modelRuntime,
       resourceLoaderOptions: {
-        extensionFactories: [createScheduledTaskExtension(task), rulesExtension, webSearchExtension, browserToolUnattended, createSubagentExtension(() => this.webContents, () => this.modelRuntime), createMcpMount({ unattended: true })],
+        extensionFactories: [createScheduledTaskExtension(task), rulesExtension, docsStripExtension, webSearchExtension, browserToolUnattended, createSubagentExtension(() => this.webContents, () => this.modelRuntime), createMcpMount({ unattended: true })],
         agentsFilesOverride: createContextFilesOverride(),
+        skillsOverride: createSkillsCompactOverride(),
       },
     });
 

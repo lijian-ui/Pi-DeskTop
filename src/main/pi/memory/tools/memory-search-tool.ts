@@ -47,12 +47,9 @@ target="project" returns only project-attributed memory entries (the ones labele
 
 Returns matching memory entries with their mutation target, scope, and dates. The displayed target is the value required by memory_replace and memory_remove.`,
     promptSnippet: 'Search extended memory store (unlimited capacity)',
-    promptGuidelines: [
-      'Use memory_search when you need context beyond what is in the system prompt.',
-      'Use memory_search to find project-specific memories or user preferences.',
-      'Use memory_search with category filter to find specific types of memories (failure, correction, insight, etc.).',
-      'If a search returns nothing, call memory_search with an empty query to browse all stored memories (optionally filtered by project/target/category) before giving up.',
-    ],
+    // 前三条已被 description 的 Use cases + category 参数 schema 覆盖；
+    // 空查询 browse 兜底纪律现由 <memory-policy> 统一声明（compact 版）。
+    promptGuidelines: [],
     renderResult: createSharedToolResultRenderer(searchResultView),
     parameters: Type.Object({
       query: Type.Optional(Type.String({ description: 'Search query. Use natural language or specific terms. Leave empty to list all memories (optionally filtered by project/target/category).' })),

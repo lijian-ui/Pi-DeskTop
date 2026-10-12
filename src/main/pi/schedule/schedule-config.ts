@@ -15,18 +15,24 @@ import { readJsonFile, readJsonFileSync } from "../../json-file";
 
 export interface ScheduleConfig {
   enabled: boolean;
+  /**
+   * deferred 试点（与 browser 同机制）：注册但不声明给模型，经 tool_search
+   * 按需装载 + 关键词自动装载兜底。缺字段 → 默认启用；显式写 false 一键回退
+   * 常驻 direct。仅影响桌面普通/空间会话——IM 与定时任务会话由调用方决定。
+   */
+  deferred: boolean;
 }
 
 const SCHEDULE_CONFIG_FILE = "schedule-config.json";
 
 function defaultConfig(): ScheduleConfig {
-  return { enabled: true };
+  return { enabled: true, deferred: true };
 }
 
 function normalize(raw: unknown): ScheduleConfig {
   if (!raw || typeof raw !== "object") return defaultConfig();
   const r = raw as Record<string, unknown>;
-  return { enabled: r.enabled !== false }; // absent → default true
+  return { enabled: r.enabled !== false, deferred: r.deferred !== false }; // absent → default true
 }
 
 export async function readScheduleConfig(): Promise<ScheduleConfig> {
@@ -46,10 +52,12 @@ export function readScheduleConfigSync(): ScheduleConfig {
   }
 }
 
-export async function writeScheduleConfig(config: ScheduleConfig): Promise<void> {
+export async function writeScheduleConfig(patch: Partial<ScheduleConfig>): Promise<void> {
+  // 读-改-写整对象：设置页只翻 enabled 时不能把 deferred 试点字段抹掉。
+  const next: ScheduleConfig = { ...readScheduleConfigSync(), ...patch };
   const path = configPath();
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(config, null, 2), "utf-8");
+  await writeFile(path, JSON.stringify(next, null, 2), "utf-8");
 }
 
 function configPath(): string {

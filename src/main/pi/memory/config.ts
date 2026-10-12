@@ -61,7 +61,8 @@ function isThinkingLevel(value: unknown): value is ThinkingLevel {
 
 const DEFAULT_CONFIG: MemoryConfig = {
   memoryMode: "policy-only",
-  memoryPolicyStyle: "full",
+  // compact = 去重精简版（~270 token）；full 的 legacy 长版保留为显式 opt-in。
+  memoryPolicyStyle: "compact",
   memoryCharLimit: DEFAULT_MEMORY_CHAR_LIMIT,
   userCharLimit: DEFAULT_USER_CHAR_LIMIT,
   projectCharLimit: DEFAULT_PROJECT_CHAR_LIMIT,

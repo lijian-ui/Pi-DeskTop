@@ -5,10 +5,15 @@ import type { MemoryStore } from "./store/memory-store";
 type MemoryPolicyConfig = Pick<MemoryConfig, "memoryPolicyStyle" | "memoryPolicyCustomText">;
 
 export function resolveMemoryPolicyPrompt(config: MemoryPolicyConfig): string {
-  const style = config.memoryPolicyStyle ?? "full";
+  // 默认 compact：去重后的精简版（~270 token vs legacy full ~850）。
+  // full 保留为显式 opt-in（memoryPolicyStyle: "full"）。
+  const style = config.memoryPolicyStyle ?? "compact";
 
   switch (style) {
+    case "full":
+      return MEMORY_POLICY_PROMPT;
     case "compact":
+    default:
       return MEMORY_POLICY_PROMPT_COMPACT;
     case "custom":
       return config.memoryPolicyCustomText && config.memoryPolicyCustomText.trim().length > 0
@@ -16,9 +21,6 @@ export function resolveMemoryPolicyPrompt(config: MemoryPolicyConfig): string {
         : MEMORY_POLICY_PROMPT_COMPACT;
     case "none":
       return "";
-    case "full":
-    default:
-      return MEMORY_POLICY_PROMPT;
   }
 }
 

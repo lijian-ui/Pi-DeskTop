@@ -46,12 +46,13 @@ export function createSubagentExtension(
       (a) => `- ${a.name}: ${a.description}` + (a.tools ? ` (工具: ${a.tools.join(",")})` : "")
     );
     return (
-      "\n\n# 可用的子代理（Subagents）\n" +
+      "\n\n<available_subagents>\n" +
       "以下角色可通过 subagent 工具委派，让专门的子代理在隔离会话中完成任务，而非你自己 inline 处理：\n" +
       lines.join("\n") +
       "\n\n委派准则：为了节省当前上下文窗口，遇到 侦察 / 探索 / 调研 / 摘要 / 总结 / 可并行处理 类任务时，务必优先调用 subagent 工具委派，不要自己 inline 完成。" +
       "示例：用户说“侦察一下这个项目” → 调用 subagent({ agent: \"scout\", task: \"...\" })。" +
-      "若不确定有哪些角色，先用无参 subagent 列出。"
+      "若不确定有哪些角色，先用无参 subagent 列出。" +
+      "\n</available_subagents>"
     );
   }
 
@@ -112,10 +113,8 @@ export function createSubagentExtension(
           "If unsure which roles exist, call it with no arguments to list them.",
         promptSnippet:
           "Delegate a task to a specialized subagent running in an isolated session (single / parallel / chain). Use for reconnaissance / exploration / research / summarization / parallelizable work.",
-        promptGuidelines: [
-          "To conserve the current context window, always prefer delegating reconnaissance / exploration / research / summarization / parallelizable tasks to the subagent tool instead of doing them inline.",
-          "When unsure which roles exist, call subagent with no arguments to list the available subagents.",
-        ],
+        // 两条均为 description 逐句复述（"always prefer delegating…" 与 "call it with no arguments to list them"）。
+        promptGuidelines: [],
         parameters: {
           type: "object",
           properties: {

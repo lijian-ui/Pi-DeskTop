@@ -96,9 +96,9 @@ export function createAskUserExtension(
           promptSnippet:
             "Ask the user up to 4 structured questions (2-4 options each) when requirements are ambiguous",
           promptGuidelines: [
-            "When the user's request is ambiguous or missing a necessary decision and you cannot proceed, ask via ask_user_question — at most 4 questions per call; ask everything at once, do not make multiple back-to-back calls.",
-            "Each question must have 2-4 options; each option needs a one-line explanation of its meaning/cost. The user can also type their own answer via the auto-appended 'custom answer' row, or cancel the whole questionnaire. Do not author your own Other / Type something. labels — the runtime rejects reserved words.",
-            "Set multiSelect: true when several answers can hold at once; options with a preview markdown (UI mockup/code snippet/config example) let the user compare real artifacts rather than labels — preview is single-select only. Put a recommended option first and append '(recommended)' to its label.",
+            // 选项数量/custom answer 行/multiSelect/preview/recommended/单次调用
+            // 均已在 description 的 Notes 逐条声明；仅保留触发时机这一条全局纪律。
+            "When the user's request is ambiguous or missing a necessary decision and you cannot proceed, ask via ask_user_question — ask everything at once, do not make multiple back-to-back calls.",
           ],
           parameters: AskUserQuestionnaireSchema,
           execute: async (

@@ -130,7 +130,7 @@ export const todoExtension: InlineExtension = {
         promptGuidelines: [
           "For work needing 3+ steps, first call todo create to build the full checklist, then execute step by step and keep status updated; do not save all updates until the end.",
           "Immediately update the corresponding task to completed as soon as a step finishes; update to in_progress before starting a task.",
-          "Express dependencies via blockedBy's id array (e.g. [#2, #3]); each update changes one task.",
+          // blockedBy 用法与"每次 update 改一个任务"已在 description（依赖语义）与参数 schema（单个 id）。
         ],
         parameters: todoParams,
         execute: async (

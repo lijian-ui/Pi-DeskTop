@@ -113,7 +113,7 @@ export const webSearchExtension: InlineExtension = {
           promptSnippet:
             "Search the web for real-time information (news, docs, facts); returns ranked results with snippets and URLs.",
           promptGuidelines: [
-            "Use web_search when the answer depends on current or external facts (news, docs, versions, prices, APIs, errors).",
+            // "何时搜索"已在 description（"Use it when training data may be stale…"）。
             "After web_search, call web_fetch on the 1-3 most relevant URLs to read full content before answering; snippets alone may be outdated or inaccurate.",
             "Cite every fact with [n](url) using the result index and URL. Never invent URLs.",
           ],
@@ -151,7 +151,7 @@ export const webSearchExtension: InlineExtension = {
             "Fetch the full text of a web page by URL (converted to markdown) for in-depth reading. A URL is required — get it from web_search results or from the user.",
           promptSnippet: "Fetch the full text (markdown) of a web page by URL for in-depth reading.",
           promptGuidelines: [
-            "web_fetch reads the FULL page text for a URL — call it after web_search to read the source in depth.",
+            // "读全文/在 web_search 后调用"已在 description 与 web_search 的 guidelines 各声明一次。
             "Fetch 1-3 URLs at most; avoid fetching many pages at once to conserve context.",
           ],
           parameters: fetchParams,

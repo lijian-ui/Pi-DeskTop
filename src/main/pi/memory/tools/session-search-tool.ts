@@ -87,10 +87,10 @@ any:
 exclude:
 - delta`,
     promptSnippet: 'Search past session JSONL files for compact source anchors',
+    // L92/L93 原条目已被 description（"It returns compact JSONL line-range anchors, not summaries or previews"
+    // + all/any/exclude 语义段）逐句覆盖；保留配置前提这一条 schema 表达不了的纪律。
     promptGuidelines: [
       'Use session_search with markdown only when the session search anchor mode is configured.',
-      'Request source anchors, not summaries or previews.',
-      'Use all for required terms, any for alternatives, and exclude for terms that must not appear in a returned range.',
     ],
     renderResult: createSharedToolResultRenderer(searchResultView),
     parameters: Type.Object({
@@ -156,10 +156,9 @@ Examples:
 
 Returns bounded conversation snippets with session dates and project context. Large messages are truncated with their original character count.`,
     promptSnippet: 'Search past conversations for relevant context',
-    promptGuidelines: [
-      'Use session_search when the user asks about previous discussions or past work.',
-      'Use session_search when you need context from earlier sessions.',
-    ],
+    // 两条均为 description 首句（"Use this when the user asks about previous discussions… or when you
+    // need context from earlier sessions"）的逐字复述。
+    promptGuidelines: [],
     renderResult: createSharedToolResultRenderer(searchResultView),
     parameters: Type.Object({
       query: Type.String({ description: 'Search query. Use natural language or specific terms.' }),

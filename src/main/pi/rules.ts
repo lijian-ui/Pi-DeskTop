@@ -8,7 +8,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
  *
  * A SINGLE markdown file holds ALL user rules (`~/.pi/agent/rules/rules.md`).
  * It is injected at the ABSOLUTE BOTTOM of the system prompt as a
- * `<rules>…</rules>` block via the rulesExtension (before_agent_start), so
+ * `<user-rules>…</user-rules>` block via the rulesExtension (before_agent_start), so
  * every conversation — including scheduled tasks — follows the rules.
  *
  * Hot-reload: the extension re-reads the file on EVERY turn, so edits apply

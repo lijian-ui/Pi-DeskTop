@@ -20,7 +20,7 @@ const MEMORY_CATEGORIES = [
  * 1) 导入设置：两个滑块开关控制 Pi SDK 是否把 AGENTS.md 与 CLAUDE.md
  *    （含 CLAUDE.local.md）注入系统提示词，拨动即保存。
  * 2) 规则：单一 rules.md 文件（~/.pi/agent/rules/rules.md），以
- *    `<rules>…</rules>` 追加到系统提示词最末尾，所有会话与定时任务遵循。
+ *    `<user-rules>…</user-rules>` 追加到系统提示词最末尾，所有会话与定时任务遵循。
  * 3) 记忆库：浏览 / 搜索 / 编辑 / 删除 / 置顶 Hermes 记忆（可编辑）。
  * 4) 快照：记忆库 7 天轮转备份的手动触发与列表。
  * 5) 记忆设置：核心记忆旋钮（沉淀/复习/衰减/锚点/守卫），改完热重载生效。

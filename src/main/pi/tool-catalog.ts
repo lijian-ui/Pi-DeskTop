@@ -113,8 +113,12 @@ export function isMcpResourceTool(name: string): boolean {
  *
  * `mcp__*` 不需要这层判断：它们只有在服务器真的连上并注册后才会出现在
  * getAllTools() 里。但 codemode / tool_search / 资源工具是扩展**无条件注册**的，
- * 若只凭「mcp 特性开启」就放行，没配任何服务器时也会凭空多出一个 codemode 工具。
+ * 若只凭「mcp 特性开启」就放行，没配任何服务器时也会凭空多出一个 codemode。
  * 所以这里回读 mcp.json：只有当存在对应 exposure 的 enabled 服务器时才放行。
+ *
+ * 注意：browser deferred 试点对 `tool_search` 的放行**不在这里** —— 试点按
+ * 会话（unit）区分（IM 保持 direct、不需要装载通道），由 applyUnitToolSet
+ * 依据本会话注册表里 browser 的 exposure 自行判断。
  */
 export function mcpInfraAllowed(name: string): boolean {
   if (!readMcpFeatureConfigSync().enabled) return false;

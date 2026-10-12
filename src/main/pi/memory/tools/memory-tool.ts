@@ -492,10 +492,9 @@ This action-specific tool accepts only the parameters listed in its schema.`;
       label,
       description,
       promptSnippet: `${label}: persistent memory that survives across sessions`,
-      promptGuidelines: [
-        "Use this tool proactively when the user corrects you, shares a preference, or reveals durable environment or project facts.",
-        "Do not use memory tools for temporary task state, TODO items, or session progress.",
-      ],
+      // 触发时机与禁存内容已在 description 内嵌的 MEMORY_TOOL_DESCRIPTION
+      // （WHEN TO SAVE / Do NOT save）中完整声明，guidelines 不再复述。
+      promptGuidelines: [],
       renderResult: createSharedToolResultRenderer(memoryResultView),
       parameters,
       async execute(_toolCallId, params, signal, _onUpdate, ctx?: { cwd?: string }) {
