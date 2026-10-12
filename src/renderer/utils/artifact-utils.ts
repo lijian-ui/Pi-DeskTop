@@ -16,7 +16,7 @@
  */
 
 import type { Artifact, Message } from "../store/agent-store";
-import { resolveAgainstCwd } from "./path-utils";
+import { resolveAgainstCwd, toWindowsPath } from "./path-utils";
 
 // ── Structured file-writer tools ──────────────────────────────────────
 // A tool is treated as a file-writer when its (normalized) name contains
@@ -40,13 +40,16 @@ function isFileWriteTool(toolName: string): boolean {
 const FILE_PATH_KEYS = ["file_path", "filePath", "path", "filename", "file"];
 
 /** Try to extract a file path from a tool execution's input args. Returns
- *  null when the tool is not a file-writer or no path key is present. */
+ *  null when the tool is not a file-writer or no path key is present.
+ *  Paths are normalised (see toWindowsPath) because the model may hand over a
+ *  bash-style `/c/Users/…`; this channel is never stat()-verified, so a bad
+ *  path here would surface as a broken artifact card. */
 export function extractFilePath(toolName: string, input: any): string | null {
   if (!input || typeof input !== "object") return null;
   if (!isFileWriteTool(toolName)) return null;
   for (const k of FILE_PATH_KEYS) {
     const v = input[k];
-    if (typeof v === "string" && v.trim()) return v.trim();
+    if (typeof v === "string" && v.trim()) return toWindowsPath(v.trim());
   }
   return null;
 }
