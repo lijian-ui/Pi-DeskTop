@@ -113,6 +113,16 @@ const piAPI = {
     ipcRenderer.invoke("pi:imQqLoginStatus", loginId),
   imQqCancelLogin: (loginId: string) =>
     ipcRenderer.invoke("pi:imQqCancelLogin", loginId),
+  imDingtalkStartLogin: () => ipcRenderer.invoke("pi:imDingtalkStartLogin"),
+  imDingtalkLoginStatus: (loginId: string) =>
+    ipcRenderer.invoke("pi:imDingtalkLoginStatus", loginId),
+  imDingtalkCancelLogin: (loginId: string) =>
+    ipcRenderer.invoke("pi:imDingtalkCancelLogin", loginId),
+  imFeishuStartLogin: () => ipcRenderer.invoke("pi:imFeishuStartLogin"),
+  imFeishuLoginStatus: (loginId: string) =>
+    ipcRenderer.invoke("pi:imFeishuLoginStatus", loginId),
+  imFeishuCancelLogin: (loginId: string) =>
+    ipcRenderer.invoke("pi:imFeishuCancelLogin", loginId),
   imIsSession: (sessionPath: string) =>
     ipcRenderer.invoke("pi:imIsSession", sessionPath),
   imMigrateSession: (sessionPath: string, newCwd: string) =>

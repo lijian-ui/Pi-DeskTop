@@ -11,6 +11,8 @@ import { useEffect, useMemo, useState } from "react";
 import { X, Check, FolderOpen, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type {
+  DingtalkRegisterStatus,
+  FeishuRegisterStatus,
   ImChannelInstance,
   ImChannelType,
   QqLoginStatus,
@@ -64,6 +66,132 @@ const NOT_IMPL: Record<ImChannelType, string | null> = {
   qq: null,
 };
 
+/** 钉钉 / 飞书扫码创建共用的快照形状（两家字段一致）。 */
+type QrLoginSnapshot = {
+  loginId: string;
+  status: "running" | "confirmed" | "error" | "canceled" | "expired";
+  qrcodeUrl: string;
+  qrcode: string;
+  message: string;
+};
+
+/**
+ * 扫码创建块（钉钉代建机器人 / 飞书代建应用）——两家的交互完全一致，
+ * 只是文案与回调不同，所以抽成一个组件，避免两份重复的 JSX。
+ */
+function QrCreateBlock({
+  title,
+  hint,
+  startLabel,
+  fetchingLabel,
+  boundText,
+  login,
+  fetching,
+  qrError,
+  onStart,
+  onCancel,
+  onRebind,
+  onQrError,
+}: {
+  title: string;
+  hint: string;
+  startLabel: string;
+  fetchingLabel: string;
+  /** 已绑定/已创建时的摘要文案；空串表示尚未绑定。 */
+  boundText: string;
+  login: QrLoginSnapshot | null;
+  fetching: boolean;
+  qrError: boolean;
+  onStart: () => void;
+  onCancel: () => void;
+  onRebind: () => void;
+  onQrError: () => void;
+}) {
+  const { t } = useTranslation();
+  const confirmed = login?.status === "confirmed";
+  const hasBound = Boolean(boundText);
+  const settled =
+    login?.status === "error" || login?.status === "canceled" || login?.status === "expired";
+
+  return (
+    <div className={styles.field}>
+      <span className={styles.fieldLabel}>{title}</span>
+
+      {(confirmed || (!login && hasBound)) && (
+        <div className={styles.wxBound}>
+          <Check size={16} />
+          <span>{boundText}</span>
+        </div>
+      )}
+
+      {!login && !hasBound && (
+        <>
+          <p className={styles.fieldHint}>{hint}</p>
+          <button
+            type="button"
+            className={styles.wxBindBtn}
+            onClick={onStart}
+            disabled={fetching}
+          >
+            {fetching ? fetchingLabel : startLabel}
+          </button>
+        </>
+      )}
+
+      {login && !confirmed && (
+        <div className={styles.wxQrArea}>
+          {login.qrcodeUrl ? (
+            <img
+              className={styles.wxQrImg}
+              src={login.qrcodeUrl}
+              alt="QR"
+              onError={onQrError}
+            />
+          ) : (
+            <div className={styles.wxQrEmpty}>{fetchingLabel}</div>
+          )}
+
+          <div className={styles.wxStatus}>{login.message}</div>
+
+          {qrError && login.qrcode && (
+            <p className={styles.wxLink}>
+              {t("im.qrLinkFallback")}
+              <span className={styles.wxLinkUrl}>{login.qrcode}</span>
+            </p>
+          )}
+
+          <div className={styles.wxActions}>
+            {settled && (
+              <button
+                type="button"
+                className={styles.wxBindBtn}
+                onClick={onStart}
+                disabled={fetching}
+              >
+                {startLabel}
+              </button>
+            )}
+            <button type="button" className={styles.wxGhostBtn} onClick={onCancel}>
+              {t("im.qrCancel")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(confirmed || hasBound) && (
+        <button
+          type="button"
+          className={styles.wxGhostBtn}
+          onClick={onRebind}
+          disabled={fetching}
+        >
+          {t("im.qrRebind")}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function ImChannelModal({
   editInstance = null,
   onClose,
@@ -103,6 +231,14 @@ export default function ImChannelModal({
   const boundQqAppId = type === "qq" ? (config["appId"] ?? "") : "";
   // Already-bound instance → show bound summary + rebind button.
   const boundBotId = type === "weixin" ? (config["botId"] ?? "") : "";
+
+  // ── DingTalk / Feishu QR create state ──
+  const [dtLogin, setDtLogin] = useState<DingtalkRegisterStatus | null>(null);
+  const [dtFetching, setDtFetching] = useState(false);
+  const [dtQrError, setDtQrError] = useState(false);
+  const [fsLogin, setFsLogin] = useState<FeishuRegisterStatus | null>(null);
+  const [fsFetching, setFsFetching] = useState(false);
+  const [fsQrError, setFsQrError] = useState(false);
 
   const startWxLogin = async () => {
     setWxFetching(true);
@@ -159,6 +295,108 @@ export default function ImChannelModal({
     void window.piDesk.imWeixinSubmitVerifyCode(wxLogin.loginId, wxVerifyCode.trim());
     setWxVerifyError(false);
   };
+
+  // ── DingTalk QR create（官方设备码流程：扫码后代建机器人）──
+  const startDtLogin = async () => {
+    setDtFetching(true);
+    setDtQrError(false);
+    try {
+      setDtLogin(await window.piDesk.imDingtalkStartLogin());
+    } catch (err) {
+      setDtLogin({
+        loginId: "",
+        status: "error",
+        qrcodeUrl: "",
+        qrcode: "",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setDtFetching(false);
+    }
+  };
+
+  const cancelDtLogin = () => {
+    if (dtLogin?.loginId) void window.piDesk.imDingtalkCancelLogin(dtLogin.loginId);
+    setDtLogin(null);
+  };
+
+  const rebindDt = async () => {
+    cancelDtLogin();
+    await startDtLogin();
+  };
+
+  // ── Feishu QR create（官方 registerApp：扫码代建应用）──
+  const startFsLogin = async () => {
+    setFsFetching(true);
+    setFsQrError(false);
+    try {
+      setFsLogin(await window.piDesk.imFeishuStartLogin());
+    } catch (err) {
+      setFsLogin({
+        loginId: "",
+        status: "error",
+        qrcodeUrl: "",
+        qrcode: "",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setFsFetching(false);
+    }
+  };
+
+  const cancelFsLogin = () => {
+    if (fsLogin?.loginId) void window.piDesk.imFeishuCancelLogin(fsLogin.loginId);
+    setFsLogin(null);
+  };
+
+  const rebindFs = async () => {
+    cancelFsLogin();
+    await startFsLogin();
+  };
+
+  // Poll the DingTalk snapshot until it settles.
+  useEffect(() => {
+    if (!dtLogin?.loginId) return;
+    if (dtLogin.status !== "running") return;
+    const iv = setInterval(async () => {
+      const s = await window.piDesk.imDingtalkLoginStatus(dtLogin.loginId);
+      if (!s) {
+        clearInterval(iv);
+        return;
+      }
+      setDtLogin(s);
+      if (s.status === "confirmed" && s.credentials) {
+        const c = s.credentials;
+        setConfig((prev) => ({ ...prev, clientId: c.clientId, clientSecret: c.clientSecret }));
+      }
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [dtLogin?.loginId, dtLogin?.status]);
+
+  // Poll the Feishu snapshot until it settles.
+  useEffect(() => {
+    if (!fsLogin?.loginId) return;
+    if (fsLogin.status !== "running") return;
+    const iv = setInterval(async () => {
+      const s = await window.piDesk.imFeishuLoginStatus(fsLogin.loginId);
+      if (!s) {
+        clearInterval(iv);
+        return;
+      }
+      setFsLogin(s);
+      if (s.status === "confirmed" && s.credentials) {
+        const c = s.credentials;
+        // 飞书适配器读的是 appSecret / brand（register 返回 clientSecret / domain）。
+        setConfig((prev) => ({
+          ...prev,
+          appId: c.appId,
+          appSecret: c.clientSecret,
+          brand: c.domain,
+        }));
+      }
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [fsLogin?.loginId, fsLogin?.status]);
 
   // Poll the login snapshot while one is in flight.
   useEffect(() => {
@@ -536,6 +774,70 @@ export default function ImChannelModal({
                 </button>
               )}
             </div>
+          ) : type === "dingtalk" || type === "feishu" ? (
+            <>
+              {type === "dingtalk" && (
+                <QrCreateBlock
+                  title={t("im.dingtalkBindTitle")}
+                  hint={t("im.dingtalkBindHint")}
+                  startLabel={t("im.dingtalkBindStart")}
+                  fetchingLabel={t("im.dingtalkFetching")}
+                  boundText={
+                    dtLogin?.credentials?.clientId ?? config["clientId"]
+                      ? t("im.dingtalkBound", {
+                          clientId: dtLogin?.credentials?.clientId ?? config["clientId"],
+                        })
+                      : ""
+                  }
+                  login={dtLogin}
+                  fetching={dtFetching}
+                  qrError={dtQrError}
+                  onStart={() => void startDtLogin()}
+                  onCancel={cancelDtLogin}
+                  onRebind={() => void rebindDt()}
+                  onQrError={() => setDtQrError(true)}
+                />
+              )}
+              {type === "feishu" && (
+                <QrCreateBlock
+                  title={t("im.feishuBindTitle")}
+                  hint={t("im.feishuBindHint")}
+                  startLabel={t("im.feishuBindStart")}
+                  fetchingLabel={t("im.feishuFetching")}
+                  boundText={
+                    fsLogin?.credentials?.appId ?? config["appId"]
+                      ? t("im.feishuBound", {
+                          appId: fsLogin?.credentials?.appId ?? config["appId"],
+                        })
+                      : ""
+                  }
+                  login={fsLogin}
+                  fetching={fsFetching}
+                  qrError={fsQrError}
+                  onStart={() => void startFsLogin()}
+                  onCancel={cancelFsLogin}
+                  onRebind={() => void rebindFs()}
+                  onQrError={() => setFsQrError(true)}
+                />
+              )}
+              {fields.map((f) => (
+                <label key={f.key} className={styles.field}>
+                  <span className={styles.fieldLabel}>
+                    {t(f.labelKey)}
+                    {!f.optional && <span className={styles.required}>*</span>}
+                  </span>
+                  <input
+                    className={styles.fieldInput}
+                    type={f.secret ? "password" : "text"}
+                    value={config[f.key] ?? ""}
+                    placeholder={f.secret ? "••••••••" : f.optional ? t("common.optional") : ""}
+                    onChange={(e) =>
+                      setConfig({ ...config, [f.key]: e.target.value })
+                    }
+                  />
+                </label>
+              ))}
+            </>
           ) : (
             fields.map((f) => (
               <label key={f.key} className={styles.field}>

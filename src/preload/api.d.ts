@@ -115,6 +115,14 @@ export interface PiDeskAPI {
   /** Poll the QQ binding snapshot. */
   imQqLoginStatus(loginId: string): Promise<QqLoginStatus | null>;
   imQqCancelLogin(loginId: string): Promise<{ ok: boolean }>;
+  /** Start a DingTalk bot QR registration (official device-code flow creates the bot). */
+  imDingtalkStartLogin(): Promise<DingtalkRegisterStatus>;
+  imDingtalkLoginStatus(loginId: string): Promise<DingtalkRegisterStatus | null>;
+  imDingtalkCancelLogin(loginId: string): Promise<{ ok: boolean }>;
+  /** Start a Feishu app creation via QR (official registerApp / RFC 8628). */
+  imFeishuStartLogin(): Promise<FeishuRegisterStatus>;
+  imFeishuLoginStatus(loginId: string): Promise<FeishuRegisterStatus | null>;
+  imFeishuCancelLogin(loginId: string): Promise<{ ok: boolean }>;
   /** True when the session file belongs to an IM conversation. */
   imIsSession(sessionPath: string): Promise<boolean>;
   /** Migrate a single IM conversation to a new cwd (desktop workspace picker). */
@@ -511,6 +519,40 @@ export interface QqLoginStatus {
   credentials?: {
     appId: string;
     appSecret: string;
+  };
+}
+
+
+/** 钉钉机器人扫码创建状态快照（官方设备码注册，主进程后台轮询）。 */
+export interface DingtalkRegisterStatus {
+  loginId: string;
+  status: "running" | "confirmed" | "error" | "canceled" | "expired";
+  /** 二维码图片地址（<img> 直接显示）。 */
+  qrcodeUrl: string;
+  /** 二维码原始内容（备用链接）。 */
+  qrcode: string;
+  message: string;
+  /** status === "confirmed" 时携带新建机器人凭据。 */
+  credentials?: {
+    clientId: string;
+    clientSecret: string;
+  };
+}
+
+/** 飞书应用扫码创建状态快照（官方 registerApp / RFC 8628）。 */
+export interface FeishuRegisterStatus {
+  loginId: string;
+  status: "running" | "confirmed" | "error" | "canceled" | "expired";
+  /** 二维码图片地址（<img> 直接显示）。 */
+  qrcodeUrl: string;
+  /** 二维码原始内容（备用链接）。 */
+  qrcode: string;
+  message: string;
+  /** status === "confirmed" 时携带应用凭据；domain 写进渠道配置的 brand。 */
+  credentials?: {
+    appId: string;
+    clientSecret: string;
+    domain: "feishu" | "lark";
   };
 }
 

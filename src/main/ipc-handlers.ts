@@ -24,6 +24,16 @@ import {
   cancelLogin as cancelQqLogin,
 } from "./im/qq/qq-login";
 import {
+  startLogin as startDingtalkLogin,
+  getLoginStatus as getDingtalkLoginStatus,
+  cancelLogin as cancelDingtalkLogin,
+} from "./im/dingtalk/dingtalk-register";
+import {
+  startLogin as startFeishuLogin,
+  getLoginStatus as getFeishuLoginStatus,
+  cancelLogin as cancelFeishuLogin,
+} from "./im/feishu/feishu-register";
+import {
   readWebSearchConfig,
   writeWebSearchConfig,
   type WebSearchConfig,
@@ -451,6 +461,30 @@ export function registerIpcHandlers(
   });
   ipcMain.handle("pi:imQqCancelLogin", async (_, loginId: string) => {
     cancelQqLogin(String(loginId));
+    return { ok: true };
+  });
+
+  // ── DingTalk QR create（扫码一键创建机器人）──
+  ipcMain.handle("pi:imDingtalkStartLogin", async () => {
+    return startDingtalkLogin();
+  });
+  ipcMain.handle("pi:imDingtalkLoginStatus", async (_, loginId: string) => {
+    return getDingtalkLoginStatus(String(loginId));
+  });
+  ipcMain.handle("pi:imDingtalkCancelLogin", async (_, loginId: string) => {
+    cancelDingtalkLogin(String(loginId));
+    return { ok: true };
+  });
+
+  // ── Feishu QR create（扫码一键创建应用）──
+  ipcMain.handle("pi:imFeishuStartLogin", async () => {
+    return startFeishuLogin();
+  });
+  ipcMain.handle("pi:imFeishuLoginStatus", async (_, loginId: string) => {
+    return getFeishuLoginStatus(String(loginId));
+  });
+  ipcMain.handle("pi:imFeishuCancelLogin", async (_, loginId: string) => {
+    cancelFeishuLogin(String(loginId));
     return { ok: true };
   });
 
