@@ -426,13 +426,19 @@ export class WeixinAdapter implements ImChannelAdapter {
         token: this.token,
         cdnBaseUrl: this.cdnBaseUrl,
       });
+      // aes_key 编码约定（对照腾讯官方 @tencent-weixin/openclaw-weixin 的 send.js）：
+      // 出站媒体把 **hex 字符串** 直接 base64（base64 解出来是 32 个 ASCII 字符）；
+      // 只有「用户发来的图片」那种入站形态才是 base64(raw 16 字节)。
+      // 写成 Buffer.from(aeskey, "hex") 会发一枚 16 字节裸 key，微信客户端按 hex 串
+      // 解析失败 → 文件显示「下载失败，接收中断」。
+      const aesKeyB64 = Buffer.from(uploaded.aeskey).toString("base64");
       const media: MessageItem = isImage
         ? {
             type: MessageItemType.IMAGE,
             image_item: {
               media: {
                 encrypt_query_param: uploaded.downloadEncryptedQueryParam,
-                aes_key: Buffer.from(uploaded.aeskey, "hex").toString("base64"),
+                aes_key: aesKeyB64,
                 encrypt_type: 1,
               },
               mid_size: uploaded.fileSizeCiphertext,
@@ -443,7 +449,7 @@ export class WeixinAdapter implements ImChannelAdapter {
             file_item: {
               media: {
                 encrypt_query_param: uploaded.downloadEncryptedQueryParam,
-                aes_key: Buffer.from(uploaded.aeskey, "hex").toString("base64"),
+                aes_key: aesKeyB64,
                 encrypt_type: 1,
               },
               file_name: basename(filePath),
