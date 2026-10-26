@@ -27,7 +27,13 @@ import {
   sendDingtalkVoice,
   sendDingtalkWebhook,
 } from "./dingtalk-reply";
-import { wavToAmr, isFfmpegAvailable, getAudioDurationMs } from "../audio-convert";
+import {
+  wavToAmr,
+  wavToOpus,
+  wavDurationMs,
+  isFfmpegAvailable,
+  getAudioDurationMs,
+} from "../audio-convert";
 import { getActiveTtsConfig, synthesizeSpeech } from "../../tts/tts-service";
 import {
   uploadDingtalkMedia,
@@ -512,7 +518,17 @@ async sendKeyboard(
   }
 
   /**
-   * Voice reply: text → MiMo TTS → WAV → AMR → DingTalk voice message.
+   * Voice reply: text → MiMo TTS → WAV → 转码 → DingTalk voice message.
+   *
+   * Prefer OGG/Opus and fall back to AMR: desktop DingTalk is Chromium-based and
+   * cannot decode AMR-NB (mobile uses a native player, hence "phone works, PC
+   * shows only the transcript and the play button does nothing"). The official
+   * sampleAudio template accepts ogg / amr; Opus is larger, so if the upload
+   * exceeds DingTalk's 2MB voice cap we retry with AMR.
+   *
+   * duration comes from the WAV header (exact): AMR carries no duration metadata,
+   * so ffmpeg can only estimate it from bitrate.
+   *
    * Returns true on success, false on any failure (caller falls back to text).
    */
   async sendVoice(target: string, text: string): Promise<boolean> {
@@ -532,31 +548,45 @@ async sendKeyboard(
       const { audioBase64 } = await synthesizeSpeech(ttsConfig, text);
       const wavBuffer = Buffer.from(audioBase64, "base64");
       console.log("[im.voice][dingtalk] TTS ok; wavBytes=", wavBuffer.length);
-      const amrBuffer = wavToAmr(wavBuffer);
-      if (!amrBuffer) {
-        console.warn("[im.voice][dingtalk] WAV→AMR conversion failed (ffmpeg amr_nb encoder missing?) wavBytes=", wavBuffer.length);
+
+      const candidates: { ext: "ogg" | "amr"; data: Buffer }[] = [];
+      const opus = wavToOpus(wavBuffer);
+      if (opus) candidates.push({ ext: "ogg", data: opus });
+      const amr = wavToAmr(wavBuffer);
+      if (amr) candidates.push({ ext: "amr", data: amr });
+      if (candidates.length === 0) {
+        console.warn("[im.voice][dingtalk] transcode failed (neither ogg nor amr available)");
         return false;
       }
-      console.log("[im.voice][dingtalk] amrBytes=", amrBuffer.length);
-      // uploadDingtalkMedia streams from a file path, so persist the AMR first.
-      const amrPath = join(tmpdir(), `tts-${Date.now()}.amr`);
-      writeFileSync(amrPath, amrBuffer);
-      try {
-        const up = await uploadDingtalkMedia(this.credentials, amrPath, "voice");
-        if (!up) {
-          console.warn("[im.voice][dingtalk] upload failed (uploadDingtalkMedia returned null)");
-          return false;
+
+      for (const candidate of candidates) {
+        // uploadDingtalkMedia streams from a file path, so persist the audio first.
+        const file = join(tmpdir(), `tts-${Date.now()}.${candidate.ext}`);
+        writeFileSync(file, candidate.data);
+        try {
+          const up = await uploadDingtalkMedia(this.credentials, file, "voice");
+          if (!up) {
+            console.warn(
+              "[im.voice][dingtalk] upload failed, trying next format; ext=", candidate.ext,
+              "bytes=", candidate.data.length,
+            );
+            continue;
+          }
+          const durationMs = wavDurationMs(wavBuffer) || getAudioDurationMs(file);
+          console.log(
+            "[im.voice][dingtalk] uploaded mediaId=", up.mediaId,
+            "ext=", candidate.ext, "durationMs=", durationMs,
+          );
+          // sampleAudio's mediaId field references the media_id returned by
+          // /media/upload (same as sampleImageMsg/sampleFile), NOT a download URL.
+          await sendDingtalkVoice(this.credentials, target, up.mediaId, info.isGroup, durationMs);
+          console.log("[im:voice][dingtalk] voice reply sent OK; ext=", candidate.ext, "bytes=", candidate.data.length);
+          return true;
+        } finally {
+          try { unlinkSync(file); } catch { /* ignore */ }
         }
-        const durationMs = getAudioDurationMs(amrPath);
-        console.log("[im.voice][dingtalk] uploaded mediaId=", up.mediaId, "durationMs=", durationMs);
-        // sampleAudio's mediaId field references the media_id returned by
-        // /media/upload (same as sampleImageMsg/sampleFile), NOT a download URL.
-        await sendDingtalkVoice(this.credentials, target, up.mediaId, info.isGroup, durationMs);
-        console.log("[im:voice][dingtalk] voice reply sent OK; amrBytes=", amrBuffer.length);
-        return true;
-      } finally {
-        try { unlinkSync(amrPath); } catch { /* ignore */ }
       }
+      return false;
     } catch (err) {
       console.warn("[im.voice][dingtalk] sendVoice failed:", err);
       return false;

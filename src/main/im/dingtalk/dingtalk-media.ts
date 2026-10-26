@@ -79,14 +79,21 @@ export async function uploadDingtalkMedia(
     for (let attempt = 1; attempt <= MEDIA_RETRY_COUNT; attempt++) {
       try {
         const form = new FormData();
-        // Content-Type must match the media kind — DingTalk rejects/garbles audio
-        // uploaded as generic octet-stream. Voice needs audio/amr (reference:
-        // dingtalk-openclaw-connector media.ts uploadMediaToDingTalk).
+        // Content-Type must match the actual audio container: voice may be AMR
+        // (safest on mobile) or OGG/Opus (desktop DingTalk is Chromium-based and
+        // cannot decode AMR-NB). Tagging ogg as audio/amr breaks playback.
+        const ext = extname(filePath).toLowerCase();
         const contentType =
           mediaType === "image"
             ? "image/jpeg"
             : mediaType === "voice"
-              ? "audio/amr"
+              ? ext === ".ogg"
+                ? "audio/ogg"
+                : ext === ".mp3"
+                  ? "audio/mpeg"
+                  : ext === ".wav"
+                    ? "audio/wav"
+                    : "audio/amr"
               : "application/octet-stream";
         form.append("media", createReadStream(filePath), {
           filename: basename(filePath),

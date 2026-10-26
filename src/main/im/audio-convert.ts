@@ -101,6 +101,41 @@ export function wavToAmr(wavBuffer: Buffer): Buffer | null {
 }
 
 /**
+ * Exact duration from a WAV header (TTS returns standard PCM WAV).
+ *
+ * Why not parse the transcoded file: AMR has no duration metadata, so ffmpeg can
+ * only "estimate from bitrate" (`Estimating duration from bitrate, this may be
+ * inaccurate`). DingTalk's sampleAudio needs a duration in ms; a declared value
+ * far off the real length makes the desktop client refuse to play.
+ *
+ * Returns 0 when the header can't be parsed (callers fall back to ffmpeg).
+ */
+export function wavDurationMs(wav: Buffer): number {
+  try {
+    if (wav.length < 44) return 0;
+    if (wav.toString("ascii", 0, 4) !== "RIFF" || wav.toString("ascii", 8, 12) !== "WAVE") return 0;
+    let offset = 12;
+    let byteRate = 0;
+    let dataSize = 0;
+    while (offset + 8 <= wav.length) {
+      const id = wav.toString("ascii", offset, offset + 4);
+      const size = wav.readUInt32LE(offset + 4);
+      if (id === "fmt " && offset + 20 <= wav.length) {
+        byteRate = wav.readUInt32LE(offset + 16);
+      } else if (id === "data") {
+        dataSize = Math.min(size, wav.length - offset - 8);
+        break;
+      }
+      offset += 8 + size + (size % 2);
+    }
+    if (byteRate <= 0 || dataSize <= 0) return 0;
+    return Math.round((dataSize / byteRate) * 1000);
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Probe an audio file's duration in milliseconds via ffmpeg (`-i` prints it to
  * stderr). Falls back to 0 when ffmpeg is unavailable / the file can't be read.
  * DingTalk's sampleAudio template needs the duration as a milliseconds string.
