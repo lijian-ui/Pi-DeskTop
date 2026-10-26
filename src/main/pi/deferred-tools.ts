@@ -49,9 +49,12 @@ export function mountDeferredTool(pi: ExtensionAPI, spec: DeferredToolSpec): voi
   pi.on("before_agent_start", (event) => {
     const active = pi.getActiveTools();
     if (!active.includes("tool_search")) return;
+    // 1.2 起 before_agent_start 是 user / custom 两种事件的联合：只有用户提问的回合带
+    // `prompt`，自定义消息（pi.sendMessage triggerTurn）触发的回合没有可匹配文本。
+    const prompt = event.messageType === "user" ? event.prompt : "";
     let line: string | null = null;
     if (!active.includes(spec.name)) {
-      if (spec.intent.test(event.prompt)) {
+      if (spec.intent.test(prompt)) {
         pi.setActiveTools([...active, spec.name]);
         line = spec.loadedLine;
       } else {
