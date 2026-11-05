@@ -307,10 +307,10 @@
   padding-left: calc(var(--spacer-4) + 16px + var(--spacer-4));
 }
 
-/* 定时任务组内列表限高（约 5 行）并内部滚动：执行次数再多也只占这么高，
- * 更早的执行往下滚即可看到，侧边栏不会被无限撑长。 */
+/* 定时任务组内列表限高并内部滚动：执行次数再多也只占这么高，更早的执行往下滚即可看到，
+ * 侧边栏不会被无限撑长。限高值由展开区底部的拖拽条调整（默认 300px，见 Sidebar.tsx）。 */
 .scheduledScrollList {
-  max-height: 150px;
+  max-height: 300px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -318,6 +318,34 @@
 /* 限高的 flex 列里子项默认会被压扁（而不是溢出滚动），显式禁止收缩。 */
 .scheduledScrollList > * {
   flex-shrink: 0;
+}
+
+/* 定时任务组展开区底部的拖拽条：平时只有一条淡淡的横线，悬停/拖拽时显形。
+ * 点击热区（6px + 上下 padding）比可见的横线大，好抓。 */
+.schedResizeHandle {
+  position: relative;
+  height: 6px;
+  margin: 2px 0 4px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.schedResizeHandle::after {
+  content: "";
+  position: absolute;
+  left: 20%;
+  right: 20%;
+  top: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--bg-overlay-l2, rgba(128, 128, 128, 0.25));
+  transition: background 0.15s ease;
+}
+
+.schedResizeHandle:hover::after,
+.schedResizeHandle:active::after {
+  background: var(--border-brand, var(--icon-tertiary));
 }
 
 .sessionItem {

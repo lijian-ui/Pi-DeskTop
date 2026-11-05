@@ -386,6 +386,42 @@ function SessionsSection({
   // Scheduled-tasks UI state (collapse only — management lives in the 自动化 page)
   const [schedCollapsed, setSchedCollapsed] = useState(false);
 
+  // ── 定时任务组内列表高度（可拖拽）──
+  // 默认高度从固定 150px 提到 300px；展开区底部有拖拽条，上下拖动调整，
+  // 所有定时任务组共用一个高度，持久化到 localStorage（跨会话记住）。
+  const SCHED_LIST_HEIGHT_KEY = "pi.sidebar.schedListHeight";
+  const SCHED_LIST_MIN = 120;
+  const SCHED_LIST_DEFAULT = 300;
+  const schedListMax = () => Math.max(SCHED_LIST_MIN, Math.round(window.innerHeight * 0.7));
+  const clampSchedHeight = (h: number) =>
+    Math.min(Math.max(Math.round(h), SCHED_LIST_MIN), Math.max(SCHED_LIST_MIN, schedListMax()));
+  const [schedListHeight, setSchedListHeight] = useState<number>(() => {
+    const raw = Number(localStorage.getItem(SCHED_LIST_HEIGHT_KEY));
+    return Number.isFinite(raw) && raw >= SCHED_LIST_MIN ? clampSchedHeight(raw) : SCHED_LIST_DEFAULT;
+  });
+  useEffect(() => {
+    localStorage.setItem(SCHED_LIST_HEIGHT_KEY, String(schedListHeight));
+  }, [schedListHeight]);
+  // 拖拽起点（pointer capture 挂在拖拽条上，move/up 都由它接收）。
+  const schedResizeRef = useRef<{ startY: number; startH: number } | null>(null);
+  const onSchedResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    schedResizeRef.current = { startY: e.clientY, startH: schedListHeight };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onSchedResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const st = schedResizeRef.current;
+    if (!st) return;
+    // 往下拖 = 变高（列表在拖拽条上方）。
+    setSchedListHeight(clampSchedHeight(st.startH + (e.clientY - st.startY)));
+  };
+  const onSchedResizeEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    schedResizeRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
+
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
@@ -688,11 +724,24 @@ function SessionsSection({
                   <span className={styles.spaceCount}>{g.sessions.length}</span>
                 </button>
                 {!isCollapsed && (
-                  <div
-                    className={`${styles.spaceSessions} ${styles.scheduledScrollList}`}
-                  >
-                    {g.sessions.map((s) => renderScheduledRow(s, g.label))}
-                  </div>
+                  <>
+                    <div
+                      className={`${styles.spaceSessions} ${styles.scheduledScrollList}`}
+                      style={{ maxHeight: schedListHeight }}
+                    >
+                      {g.sessions.map((s) => renderScheduledRow(s, g.label))}
+                    </div>
+                    {/* 展开区底部的拖拽条：上下拖动调整列表限高（所有组共用）。 */}
+                    <div
+                      className={styles.schedResizeHandle}
+                      onPointerDown={onSchedResizeStart}
+                      onPointerMove={onSchedResizeMove}
+                      onPointerUp={onSchedResizeEnd}
+                      onPointerCancel={onSchedResizeEnd}
+                      role="separator"
+                      aria-orientation="horizontal"
+                    />
+                  </>
                 )}
               </div>
             );

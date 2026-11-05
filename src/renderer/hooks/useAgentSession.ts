@@ -5,6 +5,7 @@ import { useSessionStore } from "../store/session-store";
 import { useWorkspaceStore } from "../store/workspace-store";
 import { useTodoStore } from "../store/todo-store";
 import { extractText, extractImages } from "../utils/content-utils";
+import { estimateTokens } from "../utils/estimate-tokens";
 import { resolveAgainstCwd } from "../utils/path-utils";
 // Extraction logic is shared with the history-reload path (session-store →
 // artifact-utils.hydrateArtifacts) so live events and reloaded sessions can
@@ -133,6 +134,14 @@ const CONTENT_EVENTS = new Set([
   "tool_execution_start",
   "tool_execution_end",
 ]);
+
+// ── 流式中的实时上下文用量估算（环形进度条）──
+// 精确 usage 要等请求结束才有，输出过程中按「上一轮总量 + 本条用户消息 + 已流出文本」
+// 估算并节流推送。只跟踪焦点会话（环形进度条只显示当前会话）；回合结束后由
+// ChatComposer 的 getContextUsage 轮询用精确值覆盖。agentic 回合里工具结果带来的
+// 增量不参与估算（事件侧拿不到完整账目），所以中途读数偏低、终值精确。
+let liveCtx: { base: number; text: string; lastPush: number } | null = null;
+const LIVE_CTX_PUSH_INTERVAL_MS = 400;
 
 /**
  * Pure reducer: apply a content event to a session's buffered Message[] and
@@ -439,6 +448,44 @@ export function useAgentSession() {
 
       if (CONTENT_EVENTS.has(ev.type)) {
         session.mutateBuffer(targetPath, (msgs) => reduceMessageEvent(msgs, ev));
+        // 实时上下文用量（仅焦点会话）：基线在用户消息 message_start 时确定，
+        // 之后随 text/thinking delta 累积估算，节流推给环形进度条。
+        if (isFocus) {
+          const cur = useAgentStore.getState().contextUsage;
+          const baseTokens = cur?.tokens;
+          if (cur && cur.contextWindow > 0 && typeof baseTokens === "number" && baseTokens > 0) {
+            const startRole = ev.message?.role ?? ev.role ?? (ev.userMessageEvent ? "user" : "assistant");
+            if (ev.type === "message_start" && startRole === "user") {
+              // 新回合：base = 上一轮总量 + 用户消息估算（附件/代码引用也在 content 里，
+              // 发送前已拼进 fullBody，这里从事件原文取，量级一致）。
+              liveCtx = {
+                base: baseTokens + estimateTokens(extractText(ev.message?.content ?? [])),
+                text: "",
+                lastPush: 0,
+              };
+            } else if (ev.type === "message_update" && liveCtx) {
+              const delta = ev.assistantMessageEvent?.delta ?? ev.delta;
+              const subType = ev.assistantMessageEvent?.type ?? ev.type;
+              if (
+                typeof delta === "string" &&
+                delta.length > 0 &&
+                (subType === "text_delta" || subType === "thinking_delta")
+              ) {
+                liveCtx.text += delta;
+                const now = Date.now();
+                if (now - liveCtx.lastPush >= LIVE_CTX_PUSH_INTERVAL_MS) {
+                  liveCtx.lastPush = now;
+                  const tokens = liveCtx.base + estimateTokens(liveCtx.text);
+                  useAgentStore.getState().setContextUsage({
+                    tokens,
+                    contextWindow: cur.contextWindow,
+                    percent: Math.min(100, (tokens / cur.contextWindow) * 100),
+                  });
+                }
+              }
+            }
+          }
+        }
         // The SDK may fork a continuation session file (a brand-new path) in
         // the middle of a long task, or a background session may start
         // streaming. When content flows into a session that is NOT the one the
@@ -559,6 +606,9 @@ export function useAgentSession() {
 
         case "agent_end":
           store.setStreaming(false);
+          // 实时估算结束：此后不再推估算值，等 ChatComposer 的 300ms 轮询
+          // 用精确 usage 覆盖。
+          liveCtx = null;
           // 兜底清掉重试状态条（正常由 auto_retry_end 清理；中止等路径可能不到）。
           store.setRetryInfo(null);
           // 空回合兜底：本轮既无正文、无思考、无工具、也无错误 → 明确告知
