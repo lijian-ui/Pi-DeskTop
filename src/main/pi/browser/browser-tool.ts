@@ -691,7 +691,7 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
             "click/type/fill/press_key/navigate return post-action signals: navigated (URL changed) / newRequests (new requests fired) / effective (whether the action really took effect); " +
             "fill/type also return valueChanged (whether the control's value/checked/selectedIndex actually changed), and batch fill returns fieldsChanged. " +
             "effective=false means the action produced no visible effect — do not blindly retry. Add waitFor:{url|selector,timeout} to wait for an outcome before returning. " +
-            "Advanced: evaluate (run JS) / drag / upload (upload a file) / get_cookie (export cookies for a given site, including HttpOnly). " +
+            "Advanced: evaluate (run JS) / network (list the page's recent requests with headers) / drag / upload (upload a file) / get_cookie (export cookies for a given site, including HttpOnly). " +
             "Window: window show pops a visible window so the user can complete a CAPTCHA/QR login themselves; window hide returns to the background afterwards. " +
             "The browser is launched by this app itself (separate profile, hidden by default, login state persists across sessions) — **no browser extension is required**.",
           promptSnippet:
@@ -710,6 +710,7 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
             'For API automation (HTTP calls that need the login state), use browser({action:"get_cookie", url:"<business site URL>"}) to get the full Cookie string (including HttpOnly); only the specified site is exported per call, bound by the allowlist. The return includes valid=yes/no/unknown session probing: valid=no (401/403 or redirect to login) means the login state has expired — **do not blindly retry**; immediately browser({action:"window", windowAction:"show"}) to pop the window and ask the user to log in again via QR/captcha, then hide to switch back; when valid=unknown, do the real work first and take the API\'s 401 as the source of truth. A full Cookie is equivalent to account session credentials: use it only for automation within the authorized scope, and never leak it to third parties or write it to public files.',
             'When you hit a login page: the system only auto-pops the window for **captcha/QR/SMS login**; a pure username/password login page will not auto-pop, leaving you to snapshot → fill → submit yourself. Three cases: ① the account and password from the user are already in the conversation history → first snapshot to locate the form fields (the password box showing value=[masked] is **normal secure masking**, not an empty box or an anomaly; after filling the system keeps masking it and will not echo the password, **and do not repeat the password in the conversation**), then fill with browser({action:"fill", uid:<password box uid>, text:<password>}); after submitting, snapshot again to see whether login succeeded (URL changed / login box gone / business page elements appeared). ② If a captcha/QR/SMS/password-error prompt appears → immediately browser({action:"window", windowAction:"show"}) to pop the window and let the user take over. ③ If you do not yet have credentials → prompt the user for account/password, then go to ①. Do not call window again when the auto-pop notice appears; after the user finishes logging in, browser({action:"window", windowAction:"hide"}) to switch back to the background.',
             'Three high-risk actions are denied by the guard by default: upload (upload a local file) / evaluate (run arbitrary JS) / press_key with ctrl·meta·alt combos. When denied, the error message explains why and points to which item to enable in the guard section of browser-config.json — **leave that decision to the user; do not find your own way around it** (e.g. using evaluate instead of upload).',
+            'If a token is NOT in cookie/localStorage (memory-only, sent as a request header such as "token:"), use browser({action:"network", header:"token"}) to read it from the page\'s own recent requests. Trigger one page request first if nothing is captured (e.g. click a refresh control). Never reload/navigate that page to fetch it — a memory-only token dies on refresh. network returns full URLs, method, status, and a top-level "tokens" array with the raw header value; static/telemetry noise is filtered out by default. Narrow it with urlRegex / urlIncludes / method / resourceType ("xhr,fetch") / limit (1-100); status 401/403 means the token expired. It is read-only and needs no guard switch.',
             'When other browser calls error or misbehave, first browser({action:"status"}) to check the connection and config.',
           ],
           parameters: Type.Object(
@@ -730,6 +731,7 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
                   Type.Literal("hover"),
                   Type.Literal("scroll"),
                   Type.Literal("evaluate"),
+                  Type.Literal("network"),
                   Type.Literal("drag"),
                   Type.Literal("upload"),
                   Type.Literal("window"),
@@ -832,6 +834,38 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
               ),
               // 求值
               expression: Type.Optional(Type.String({ maxLength: 4000, description: "JS expression for evaluate." })),
+              // 网络请求抓取（取内存态 token 等）
+              urlIncludes: Type.Optional(
+                Type.String({ description: "Only for action=network: return only requests whose URL contains this substring." }),
+              ),
+              urlRegex: Type.Optional(
+                Type.String({ description: "Only for action=network: return only requests whose URL matches this regular expression (case-insensitive)." }),
+              ),
+              resourceType: Type.Optional(
+                Type.String({ description: 'Only for action=network: comma-separated resource types to keep, e.g. "xhr,fetch".' }),
+              ),
+              includeStatic: Type.Optional(
+                Type.Boolean({
+                  description:
+                    "Only for action=network: include noisy resource types (image/font/stylesheet/script/media/other). Default false.",
+                }),
+              ),
+              tokenHeader: Type.Optional(
+                Type.String({
+                  description: 'Only for action=network: header name to extract as the token (default "token"; use "authorization" for Bearer).',
+                }),
+              ),
+              header: Type.Optional(
+                Type.String({
+                  description: 'Only for action=network: return only requests carrying this header (e.g. "token", "authorization").',
+                }),
+              ),
+              limit: Type.Optional(
+                Type.Number({ minimum: 1, maximum: 100, description: "Only for action=network: how many recent requests to return (default 20)." }),
+              ),
+              includeHeaders: Type.Optional(
+                Type.Boolean({ description: "Only for action=network: include request headers (default true)." }),
+              ),
               // get_cookie 会话探活
               probe: Type.Optional(
                 Type.Boolean({
@@ -903,6 +937,8 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
                 return asText(await send("page.scroll", rest, signal, cfg));
               case "evaluate":
                 return asText(await send("page.evaluate", rest, signal, cfg));
+              case "network":
+                return asText(await send("page.network", rest, signal, cfg));
               case "drag":
                 return asText(await send("page.drag", rest, signal, cfg));
               case "upload":
@@ -912,7 +948,7 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
               default:
                 throw new Error(
                   `未知 action: ${action}。可选：status / tabs / snapshot / screenshot / navigate / click / type / ` +
-                    "fill / press_key / hover / scroll / evaluate / drag / upload / window。",
+                    "fill / press_key / hover / scroll / evaluate / network / drag / upload / window。",
                 );
             }
           },

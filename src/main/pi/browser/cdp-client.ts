@@ -43,6 +43,27 @@ const SETTLE_BUDGET_MS = 600;
 const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
 
 /**
+ * 每个页面保留的最近请求条数（`network` 动作的数据源）。
+ * 有些平台把 token 只放在**内存**里、随每个请求的 `token:` 头发出去，
+ * 落不到 storage/cookie —— 只能从这里抓。
+ */
+const MAX_CAPTURED_REQUESTS = 120;
+
+/** 默认视为"噪音"的资源类型（图片/字体/样式/脚本/媒体），默认不返回。 */
+const NOISY_RESOURCE_TYPES = new Set(["image", "font", "stylesheet", "script", "media", "other"]);
+
+/** 一条被捕获的页面请求（headers 含凭据，仅回给同一会话的模型）。 */
+interface CapturedRequest {
+  ts: number;
+  method: string;
+  url: string;
+  resourceType: string;
+  headers: Record<string, string>;
+  /** 响应状态码（响应到达前/失败时为 null）。 */
+  status: number | null;
+}
+
+/**
  * 动作前采样的目标元素：句柄 + 写值类动作的控件状态指纹。
  * watchState=false 的动作（如 click）只借它判断元素是否还在 DOM 里。
  */
@@ -77,6 +98,10 @@ export class ManagedCdp {
   private pinned?: Page;
   /** 每个 page 的请求计数（用于判断动作是否真的触发了网络）。 */
   private readonly requestCounts = new WeakMap<Page, number>();
+  /** 每个 page 最近的请求记录（network 动作的数据源，环形缓冲）。 */
+  private readonly captured = new WeakMap<Page, CapturedRequest[]>();
+  /** request → 记录：响应到达时用它回填状态码。 */
+  private readonly capturedByRequest = new WeakMap<object, CapturedRequest>();
   /** 已挂上 request 监听的 page（避免重复挂载）。 */
   private readonly observed = new WeakSet<Page>();
 
@@ -151,6 +176,8 @@ export class ManagedCdp {
           return this.doScroll(page, params);
         case "evaluate":
           return this.doEvaluate(page, params);
+        case "network":
+          return this.doNetwork(page, params);
         case "drag":
           return this.doDrag(page, params);
         case "upload":
@@ -626,14 +653,150 @@ export class ManagedCdp {
     return { ctx, page };
   }
 
-  /** 给 page 挂一次 request 监听，累计请求数——动作后验（是否真的发起了网络请求）依赖它。 */
+  /** 给 page 挂一次 request 监听，累计请求数——动作后验（是否真的发起了网络请求）依赖它。
+   *  同时把最近的请求（含请求头）存进环形缓冲，供 `network` 动作读取。 */
   private observe(page: Page): void {
     if (this.observed.has(page)) return;
     this.observed.add(page);
     this.requestCounts.set(page, 0);
-    page.on("request", () => {
+    page.on("request", (request) => {
       this.requestCounts.set(page, (this.requestCounts.get(page) ?? 0) + 1);
+      let headers: Record<string, string> = {};
+      try {
+        headers = request.headers();
+      } catch {
+        // 请求已销毁：拿不到头也不影响其余记录
+      }
+      const record: CapturedRequest = {
+        ts: Date.now(),
+        method: request.method(),
+        url: request.url(),
+        resourceType: request.resourceType(),
+        headers,
+        status: null,
+      };
+      this.capturedByRequest.set(request, record);
+      const list = this.captured.get(page) ?? [];
+      list.push(record);
+      if (list.length > MAX_CAPTURED_REQUESTS) {
+        list.splice(0, list.length - MAX_CAPTURED_REQUESTS);
+      }
+      this.captured.set(page, list);
     });
+    // 响应到达时回填状态码：模型据此判断 token 是否已过期（401/403）。
+    page.on("response", (response) => {
+      const record = this.capturedByRequest.get(response.request());
+      if (record) record.status = response.status();
+    });
+  }
+
+  /**
+   * 列出最近捕获的网络请求。
+   *
+   * 用途：取那些**不落 storage/cookie** 的凭据 —— 例如只存在内存里、随每个请求
+   * 以 `token:` 头发出的平台 token。数据来自 observe 时挂的 request/response 监听，
+   * 因此页面必须先发生过请求（模型通常先 snapshot / click 触发一次列表刷新）。
+   *
+   * 过滤：urlRegex（正则）/ urlIncludes（子串）/ method / resourceType /
+   * includeStatic（默认 false，滤掉图片·字体·样式·脚本·埋点等噪音）/ header /
+   * limit（默认 20）。返回值额外给出每条请求的 `token`（命中的那个头的原值）、
+   * 顶层 `tokens` 汇总（方便模型一眼挑出可直接落盘的值）与 `status`（判断 401 过期）。
+   */
+  private doNetwork(page: Page, params: Record<string, unknown>): unknown {
+    const limit = Math.min(Math.max(Math.trunc(Number(params.limit)) || 20, 1), MAX_CAPTURED_REQUESTS);
+    const urlIncludes =
+      typeof params.urlIncludes === "string" ? params.urlIncludes.trim().toLowerCase() : "";
+    const method = typeof params.method === "string" ? params.method.trim().toUpperCase() : "";
+    const header = typeof params.header === "string" ? params.header.trim().toLowerCase() : "";
+    const includeHeaders = params.includeHeaders !== false;
+    const includeStatic = params.includeStatic === true;
+    // token 头的名字：默认 "token"（很多内网平台就用这个），可改成 authorization。
+    const tokenHeader =
+      typeof params.tokenHeader === "string" && params.tokenHeader.trim()
+        ? params.tokenHeader.trim().toLowerCase()
+        : "token";
+
+    let urlRegex: RegExp | null = null;
+    if (typeof params.urlRegex === "string" && params.urlRegex.trim()) {
+      try {
+        urlRegex = new RegExp(params.urlRegex.trim(), "i");
+      } catch {
+        throw new Error(`urlRegex 不是合法的正则表达式：${String(params.urlRegex)}`);
+      }
+    }
+    const resourceTypes = new Set(
+      (typeof params.resourceType === "string" ? params.resourceType : "")
+        .split(",")
+        .map((item) => item.trim().toLowerCase())
+        .filter(Boolean),
+    );
+
+    const headerValue = (record: CapturedRequest, name: string): string => {
+      for (const [key, value] of Object.entries(record.headers)) {
+        if (key.toLowerCase() === name) return value;
+      }
+      return "";
+    };
+
+    const all = this.captured.get(page) ?? [];
+    const matched = all.filter((record) => {
+      if (urlIncludes && !record.url.toLowerCase().includes(urlIncludes)) return false;
+      if (urlRegex && !urlRegex.test(record.url)) return false;
+      if (method && record.method.toUpperCase() !== method) return false;
+      if (resourceTypes.size > 0) {
+        if (!resourceTypes.has(record.resourceType)) return false;
+      } else if (!includeStatic && NOISY_RESOURCE_TYPES.has(record.resourceType)) {
+        // 默认滤掉噪音：图片 / 字体 / 样式 / 脚本 / 媒体 / 埋点等
+        return false;
+      }
+      if (header && !headerValue(record, header)) return false;
+      return true;
+    });
+    const picked = matched.slice(-limit);
+
+    const requests = picked.map((record) => {
+      const token = headerValue(record, tokenHeader);
+      return {
+        time: new Date(record.ts).toISOString(),
+        method: record.method,
+        url: record.url,
+        resourceType: record.resourceType,
+        status: record.status,
+        ...(token ? { [tokenHeader]: token } : {}),
+        ...(includeHeaders ? { headers: record.headers } : {}),
+      };
+    });
+    // 顶层汇总：命中 token 头的请求单列出来（新的在前），方便直接拿来用。
+    const tokens = picked
+      .map((record) => ({
+        header: tokenHeader,
+        value: headerValue(record, tokenHeader),
+        url: record.url,
+        method: record.method,
+        status: record.status,
+        time: new Date(record.ts).toISOString(),
+      }))
+      .filter((entry) => entry.value !== "")
+      .reverse();
+
+    return {
+      page: page.url(),
+      capturedTotal: all.length,
+      matched: matched.length,
+      requests,
+      ...(tokens.length > 0 ? { tokens } : {}),
+      ...(all.length === 0
+        ? {
+            hint:
+              "还没有捕获到任何请求。先 snapshot 或 click 触发页面自己的请求（如刷新列表、翻页、等它的轮询），再调一次 network。",
+          }
+        : matched.length === 0
+          ? {
+              hint:
+                "有请求被捕获但都不满足过滤条件。试试放宽 urlRegex / 传 includeStatic:true / 指定 resourceType（如 \"xhr,fetch\"）。",
+            }
+          : {}),
+    };
   }
 
   /** 列出当前所有标签页（id/url/title），用于歧义报错与 tab.list。 */
