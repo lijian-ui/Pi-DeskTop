@@ -123,7 +123,7 @@
    overscroll-behavior 阻止滚到底后把滚动继续甩给外层聊天列表。 */
 .body {
   padding: var(--spacer-12) 0;
-  max-height: min(40vh, 320px);
+  max-height: min(60vh, 560px);
   overflow-y: auto;
   overscroll-behavior: contain;
   /* 让本滚动容器成为内部绝对定位后代的包含块。
