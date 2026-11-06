@@ -29,7 +29,7 @@ export type ThinkingLevelValue =
   | "xhigh"
   | "max";
 
-import { readFile, writeFile, mkdir, unlink, readdir, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir, unlink, readdir, rm, mkdtemp, rename, stat } from "node:fs/promises";
 import { existsSync, statSync, watch, mkdirSync, readdirSync, readFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
@@ -94,6 +94,97 @@ import {
 // sessions/, skills/, soul.md — follow the new location.
 if (process.platform === "darwin" && !process.env.PI_CODING_AGENT_DIR) {
   process.env.PI_CODING_AGENT_DIR = join(homedir(), "Documents", "PiAgent");
+}
+
+// ── 技能包导入的目录规范化 ─────────────────────────────────────────────
+// SDK 的 loadSkills 在某个目录根层看到 SKILL.md 就**不再递归**子目录。所以技能包
+// 不能直接解压到技能根（zip 根层直接是技能时，会把根层铺成 SKILL.md，吞掉该目录下
+// 所有子目录技能）。导入先落到隐藏暂存目录，再按"一个技能一个目录"归位。
+
+/** 技能目录名白名单：字母数字开头，禁止 `..`、分隔符、隐藏目录。 */
+const SKILL_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** 取 SKILL.md frontmatter 的 name（没有/解析不到返回空串）。 */
+function skillFrontmatterName(raw: string): string {
+  const block = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
+  if (!block) return "";
+  const hit = /^\s*name\s*:\s*(.+)$/m.exec(block[1] ?? "");
+  return hit ? (hit[1] ?? "").trim().replace(/^["']|["']$/g, "") : "";
+}
+
+/** 从上传的 zip 文件名派生技能目录名（去 `.zip`；不合法返回空串）。 */
+function archiveSkillName(fileName: string): string {
+  const stem = fileName.replace(/\.zip$/i, "").trim();
+  return SKILL_DIR_NAME.test(stem) ? stem : "";
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await stat(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 在解压结果里找技能根：zip 根目录直接是技能，或恰好一层子目录是技能。 */
+async function findSkillDirs(root: string): Promise<string[]> {
+  if (await pathExists(join(root, "SKILL.md"))) return [root];
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const dirs: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name.startsWith(".") || entry.name === "__MACOSX") continue;
+    const abs = join(root, entry.name);
+    if (await pathExists(join(abs, "SKILL.md"))) dirs.push(abs);
+  }
+  return dirs;
+}
+
+/**
+ * 自愈：技能根层若存在游离的 SKILL.md（历史导入直接铺在根上的产物），按
+ * frontmatter name 建子目录收进去，恢复"一个技能一个目录"结构。幂等。
+ */
+async function repairSkillsRootLayout(skillsDir: string): Promise<void> {
+  const mdPath = join(skillsDir, "SKILL.md");
+  if (!(await pathExists(mdPath))) return;
+
+  let declared = "";
+  try {
+    declared = skillFrontmatterName(await readFile(mdPath, "utf-8"));
+  } catch {
+    return;
+  }
+  const base = SKILL_DIR_NAME.test(declared) ? declared : "imported-skill";
+  let target = join(skillsDir, base);
+  let index = 2;
+  while (await pathExists(join(target, "SKILL.md"))) {
+    target = join(skillsDir, `${base}-${index}`);
+    index += 1;
+    if (index > 50) return; // 同名目录过多：放弃，别乱动
+  }
+
+  let entries;
+  try {
+    entries = await readdir(skillsDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  await mkdir(target, { recursive: true });
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || entry.isDirectory()) continue;
+    try {
+      await rename(join(skillsDir, entry.name), join(target, entry.name));
+    } catch {
+      // 单个文件失败不影响其余
+    }
+  }
+  console.warn(`[piwork] 技能根目录发现游离的 SKILL.md，已归位到 ${basename(target)}/`);
 }
 
 /** A skill as surfaced to the renderer (stable subset of SDK Skill). */
@@ -3777,19 +3868,60 @@ export class PiDeskSessionManager {
    * Extract a skill .zip into the user skills directory (~/.pi/skills) and
    * best-effort reload the running session so the new skill is immediately
    * invokable via /skill:name.
+   *
+   * 不能直接解压到技能根：SDK 的 loadSkills 一在某目录根层看到 SKILL.md 就
+   * **不再递归**子目录 —— zip 根层直接是技能时，SKILL.md 会铺在技能根上，
+   * 之后该目录里的所有子目录技能在列表和 /命令里全部消失（文件还在）。
+   * 所以先解压到隐藏暂存目录，找到技能根后再逐个落到 <skills>/<name>/。
    */
   async importSkillZip(zipPath: string): Promise<{ name?: string; error?: string }> {
     try {
       const skillsDir = join(getAgentDir(), "skills");
       await mkdir(skillsDir, { recursive: true });
-      await extract(zipPath, { dir: skillsDir });
-      // The cached services hold a resourceLoader that scanned skills BEFORE
-      // this import — drop the cache so the next new session re-scans and
-      // picks up the new skill(s).
-      this.servicesByCwd.clear();
-      // Make the running session pick up the newly added skill(s).
-      this.reloadAllSessions("Skill import");
-      return { name: basename(zipPath) };
+      // 先把历史污染（根层游离的 SKILL.md）收走，否则新导入的技能也排在它后面看不见。
+      await repairSkillsRootLayout(skillsDir);
+
+      const stage = await mkdtemp(join(skillsDir, ".import-"));
+      try {
+        await extract(zipPath, { dir: stage });
+        const sources = await findSkillDirs(stage);
+        if (sources.length === 0) {
+          return { error: "压缩包里没有找到技能：需要包含 SKILL.md（可带一层同名目录）" };
+        }
+        const names: string[] = [];
+        for (const src of sources) {
+          let declared = "";
+          try {
+            declared = skillFrontmatterName(await readFile(join(src, "SKILL.md"), "utf-8"));
+          } catch {
+            declared = "";
+          }
+          const isStageRoot = resolve(src) === resolve(stage);
+          // 根层就是技能时 basename 是 ".import-xxx"（不合法）—— 用**上传的包名**
+          // （如 quality_spot_audit.zip → quality_spot_audit/），包名也不合法才退固定名。
+          const name = SKILL_DIR_NAME.test(declared)
+            ? declared
+            : isStageRoot
+              ? archiveSkillName(basename(zipPath)) || "imported-skill"
+              : basename(src);
+          if (!SKILL_DIR_NAME.test(name)) {
+            return { error: `技能目录名不合法：${name}（只允许字母数字开头，含 . _ -，最长 64）` };
+          }
+          const dst = join(skillsDir, name);
+          await rm(dst, { recursive: true, force: true });
+          await rename(src, dst);
+          names.push(name);
+        }
+        // The cached services hold a resourceLoader that scanned skills BEFORE
+        // this import — drop the cache so the next new session re-scans and
+        // picks up the new skill(s).
+        this.servicesByCwd.clear();
+        // Make the running session pick up the newly added skill(s).
+        this.reloadAllSessions("Skill import");
+        return { name: names.join(", ") || basename(zipPath) };
+      } finally {
+        await rm(stage, { recursive: true, force: true });
+      }
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
