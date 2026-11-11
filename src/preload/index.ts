@@ -61,6 +61,14 @@ const piAPI = {
   }) => ipcRenderer.invoke("pi:saveCompactionConfig", config),
   getSoul: () => ipcRenderer.invoke("pi:getSoul"),
   saveSoul: (text: string) => ipcRenderer.invoke("pi:saveSoul", text),
+  listSoulEntries: () => ipcRenderer.invoke("pi:listSoulEntries"),
+  saveSoulEntry: (name: string, text: string) => ipcRenderer.invoke("pi:saveSoulEntry", name, text),
+  deleteSoulEntry: (name: string) => ipcRenderer.invoke("pi:deleteSoulEntry", name),
+  getPreamble: () => ipcRenderer.invoke("pi:getPreamble"),
+  savePreamble: (text: string) => ipcRenderer.invoke("pi:savePreamble", text),
+  listPreambleEntries: () => ipcRenderer.invoke("pi:listPreambleEntries"),
+  savePreambleEntry: (name: string, text: string) => ipcRenderer.invoke("pi:savePreambleEntry", name, text),
+  deletePreambleEntry: (name: string) => ipcRenderer.invoke("pi:deletePreambleEntry", name),
 
   setModel: (provider: string, modelId: string, cwd?: string) =>
     ipcRenderer.invoke("pi:setModel", { provider, modelId, cwd }),

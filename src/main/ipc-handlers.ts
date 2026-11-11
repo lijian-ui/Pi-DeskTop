@@ -3,6 +3,18 @@ import { basename, extname, join } from "node:path";
 import { readFile, readdir, stat } from "node:fs/promises";
 import type { PiDeskSessionManager } from "./pi/session-manager";
 import type { TerminalManager } from "./pi/terminal-manager";
+import {
+  deleteSoulEntry,
+  listSoulEntries,
+  saveSoulEntry,
+} from "./pi/soul";
+import {
+  deletePreambleEntry,
+  listPreambleEntries,
+  readPreamble,
+  savePreambleEntry,
+  writePreamble,
+} from "./pi/preamble";
 import { getImGateway } from "./index";
 import { readImConfig, writeImConfig, type ImConfig } from "./im/im-config";
 import {
@@ -172,6 +184,43 @@ export function registerIpcHandlers(
   ipcMain.handle("pi:saveSoul", async (_, text) => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
     await pmgr.saveSoul(text);
+  });
+
+  // ── Soul / preamble entry libraries (multiple entries + apply) ──
+  // Entry CRUD is plain file ops (no session reload needed). "Apply" routes
+  // through pi:saveSoul / pi:savePreamble above — the active file is the only
+  // thing the injection hooks read.
+  ipcMain.handle("pi:listSoulEntries", async () => {
+    return listSoulEntries();
+  });
+
+  ipcMain.handle("pi:saveSoulEntry", async (_, name, text) => {
+    await saveSoulEntry(name, text);
+  });
+
+  ipcMain.handle("pi:deleteSoulEntry", async (_, name) => {
+    await deleteSoulEntry(name);
+  });
+
+  // ── Preamble (assistant settings) — hook re-reads every turn, no reload ──
+  ipcMain.handle("pi:getPreamble", async () => {
+    return readPreamble();
+  });
+
+  ipcMain.handle("pi:savePreamble", async (_, text) => {
+    await writePreamble(text);
+  });
+
+  ipcMain.handle("pi:listPreambleEntries", async () => {
+    return listPreambleEntries();
+  });
+
+  ipcMain.handle("pi:savePreambleEntry", async (_, name, text) => {
+    await savePreambleEntry(name, text);
+  });
+
+  ipcMain.handle("pi:deletePreambleEntry", async (_, name) => {
+    await deletePreambleEntry(name);
   });
 
   // ── Web 搜索（web_search / web_fetch 工具配置）──

@@ -44,6 +44,7 @@ import { computeCacheWaste, CACHE_TTL_MS } from "./cache-stats";
 import { readRules, writeRules, deleteRulesFile } from "./rules";
 import { rulesExtension } from "./rules-extension";
 import { docsStripExtension } from "./docs-strip-extension";
+import { preambleExtension } from "./preamble-extension";
 import { loadConfig } from "./memory/config";
 import { readJsonFileSync } from "../json-file";
 import { scanMemoryContent } from "./memory/guard";
@@ -1529,7 +1530,7 @@ export class PiDeskSessionManager {
         resourceLoaderOptions: {
           // deferred 试点：桌面普通/空间会话走 deferred（tool_search 按需装载），
           // IM 默认工作区（chat/im/<channel>）保持常驻 direct。browser / schedule 同机制。
-          extensionFactories: [soulExtension, rulesExtension, docsStripExtension, webSearchExtension, isImSessionCwd(servicesKey) ? browserTool : browserToolDeferred, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), createSendFileExtension(), createScheduleExtension({ runNow: (taskId) => this.runScheduledTaskNow(taskId), deferred: !isImSessionCwd(servicesKey) }), hermesMemoryExtension, createMcpMount()],
+          extensionFactories: [soulExtension, rulesExtension, docsStripExtension, preambleExtension, webSearchExtension, isImSessionCwd(servicesKey) ? browserTool : browserToolDeferred, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), createSendFileExtension(), createScheduleExtension({ runNow: (taskId) => this.runScheduledTaskNow(taskId), deferred: !isImSessionCwd(servicesKey) }), hermesMemoryExtension, createMcpMount()],
           agentsFilesOverride: createContextFilesOverride(),
           skillsOverride: createSkillsCompactOverride(),
         },
@@ -3630,7 +3631,7 @@ export class PiDeskSessionManager {
       cwd,
       modelRuntime: this.modelRuntime,
       resourceLoaderOptions: {
-        extensionFactories: [createScheduledTaskExtension(task), rulesExtension, docsStripExtension, webSearchExtension, browserToolUnattended, createSubagentExtension(() => this.webContents, () => this.modelRuntime), createMcpMount({ unattended: true })],
+        extensionFactories: [createScheduledTaskExtension(task), rulesExtension, docsStripExtension, preambleExtension, webSearchExtension, browserToolUnattended, createSubagentExtension(() => this.webContents, () => this.modelRuntime), createMcpMount({ unattended: true })],
         agentsFilesOverride: createContextFilesOverride(),
         skillsOverride: createSkillsCompactOverride(),
       },

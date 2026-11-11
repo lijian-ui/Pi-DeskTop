@@ -1,3 +1,9 @@
+/** One persona-library entry (shared by Soul / Preamble): name = .md file name, content = file body. */
+export interface PersonaEntry {
+  name: string;
+  content: string;
+}
+
 export interface PiDeskAPI {
   prompt(text: string, images?: any[], cwd?: string, sessionPath?: string): Promise<void>;
   steer(text: string, cwd?: string, sessionPath?: string): Promise<void>;
@@ -24,6 +30,14 @@ export interface PiDeskAPI {
   saveCompactionConfig(config: { keepRecentTokens: number; reserveTokens: number; enabled: boolean }): Promise<void>;
   getSoul(): Promise<string>;
   saveSoul(text: string): Promise<void>;
+  listSoulEntries(): Promise<PersonaEntry[]>;
+  saveSoulEntry(name: string, text: string): Promise<void>;
+  deleteSoulEntry(name: string): Promise<void>;
+  getPreamble(): Promise<string>;
+  savePreamble(text: string): Promise<void>;
+  listPreambleEntries(): Promise<PersonaEntry[]>;
+  savePreambleEntry(name: string, text: string): Promise<void>;
+  deletePreambleEntry(name: string): Promise<void>;
 
   // ── Scheduled tasks ──
   getScheduledTasks(): Promise<ScheduledTasksData>;
