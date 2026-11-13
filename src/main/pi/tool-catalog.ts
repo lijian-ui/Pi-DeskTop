@@ -17,6 +17,7 @@ import { readTodoConfigSync, writeTodoConfig } from "./todo/todo-config";
 import { readAskUserConfigSync, writeAskUserConfig } from "./ask-user/ask-user-config";
 import { readBrowserConfigSync, writeBrowserConfig } from "./browser/browser-config";
 import { readScheduleConfigSync, writeScheduleConfig } from "./schedule/schedule-config";
+import { readCompressConfigSync, writeCompressConfig } from "./compress/piwork-compress";
 import {
   mcpServerCapabilities,
   readMcpFeatureConfig,
@@ -55,13 +56,13 @@ export const TOOL_MODES: Record<ToolMode, { builtins: readonly string[]; feature
   // listed too).
   standard: {
     builtins: BUILTIN_TOOL_NAMES,
-    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file", "schedule", "mcp"],
+    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file", "schedule", "mcp", "compress"],
   },
   // Standard + the planned office-operation feature set (registered later as
   // FEATURES key "office"; harmless while the feature does not exist yet).
   office: {
     builtins: BUILTIN_TOOL_NAMES,
-    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file", "schedule", "mcp"],
+    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file", "schedule", "mcp", "compress"],
   },
 };
 
@@ -187,6 +188,14 @@ const FEATURES: ReadonlyArray<FeatureDef> = [
     configFile: "",
   },
   {
+    // 自研上下文压缩（compress 工具 + 视图改写）。挂载在普通会话与定时任务两个数组。
+    // 缺省关（灰度）；关 → 扩展工厂直接 return，不注册工具也不挂事件。
+    key: "compress",
+    toolNames: ["compress"],
+    switchable: true,
+    configFile: "compress-config.json",
+  },
+  {
     key: "send-file",
     toolNames: ["send_file"],
     switchable: true,
@@ -240,6 +249,8 @@ function readFeatureEnabled(key: string): boolean {
       return readBrowserConfigSync().enabled;
     case "schedule":
       return readScheduleConfigSync().enabled;
+    case "compress":
+      return readCompressConfigSync().enabled;
     case "mcp":
       return readMcpFeatureConfigSync().enabled;
     default:
@@ -303,6 +314,10 @@ export async function setExtensionToolFeatureEnabled(
     }
     case "schedule":
       await writeScheduleConfig({ enabled });
+      return;
+    case "compress":
+      // 读-改-写整对象，保留 doctrineOverride。
+      await writeCompressConfig({ enabled });
       return;
     case "mcp": {
       // 读-改-写整对象，保留 autoApproveServers / unattendedServers 白名单。

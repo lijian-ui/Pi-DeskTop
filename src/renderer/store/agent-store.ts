@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { CodeAttachment, ImageAttachment } from "./ui-store";
+import type { ContextBreakdown } from "../../shared/context-breakdown";
 
 export interface ToolExecution {
   id: string;
@@ -101,6 +102,7 @@ interface AgentState {
     tokens: number | null;
     contextWindow: number;
     percent: number | null;
+    breakdown?: ContextBreakdown;
   } | null;
   error: string | null;
 

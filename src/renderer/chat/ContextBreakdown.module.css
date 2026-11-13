@@ -1,0 +1,67 @@
+/* 上下文用量明细面板：挂在环形用量上方，点击开合。底色/描边照 CacheHitBadge
+   的 .popover 先例。 */
+
+.popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: 210;
+  min-width: 200px;
+  /* 窄屏（<992px）也不溢出：宽度随视口收，最宽 360px。 */
+  max-width: min(360px, 92vw);
+  padding: 10px 12px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-md);
+  background: var(--bg-base-default);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--text-default);
+  text-align: left;
+}
+
+.popTitle {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-neutral-l2);
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+}
+
+.rowKey {
+  color: var(--text-secondary);
+}
+
+.rowVal {
+  color: var(--text-default);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rowStrong {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-neutral-l2);
+}
+
+.rowStrong .rowVal {
+  font-weight: 600;
+}
+
+.note {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-neutral-l2);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-tertiary);
+}

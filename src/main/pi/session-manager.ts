@@ -45,6 +45,7 @@ import { readRules, writeRules, deleteRulesFile } from "./rules";
 import { rulesExtension } from "./rules-extension";
 import { docsStripExtension } from "./docs-strip-extension";
 import { preambleExtension } from "./preamble-extension";
+import { compressExtension } from "./compress/piwork-compress";
 import { loadConfig } from "./memory/config";
 import { readJsonFileSync } from "../json-file";
 import { scanMemoryContent } from "./memory/guard";
@@ -66,6 +67,8 @@ import {
 } from "./tool-catalog";
 import type { ToolMode } from "../../shared/tool-catalog-types";
 import { SCHEDULED_TRIGGER_MESSAGE } from "../../shared/schedule";
+import { countTokens, computeContextBreakdown } from "../../shared/context-breakdown";
+import type { BreakdownMessage, ContextBreakdown } from "../../shared/context-breakdown";
 // Pure helper (mirrors the SDK's cwd → sessions-dir encoding). im-session-map
 // only imports this module as a *type*, so there is no runtime import cycle.
 import { sessionDirFor, IM_CHAT_SUBDIR } from "../im/im-session-map";
@@ -487,27 +490,12 @@ async function writeBashGuardConfig(cfg: BashGuardConfig): Promise<void> {
   await writeJsonFile(bashGuardPath(), cfg);
 }
 
-// ── Compaction config (subset of ~/.pi/agent/settings.json) ──
-// Pi SDK reads compaction.* from settings.json; we expose keepRecentTokens so
-// the desktop user can tune how much recent raw history survives a /compact.
-// Small value ⇒ aggressive compaction (less raw history kept); large value ⇒
-// only the oldest history is summarized.
-interface CompactionConfig {
-  keepRecentTokens: number;
-  reserveTokens: number;
-  enabled: boolean;
-}
-
-const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
-  keepRecentTokens: 20000,
-  reserveTokens: 16384,
-  enabled: true,
-};
-
 // After a compaction with no subsequent assistant reply, the SDK returns
 // tokens:null (it only trusts real LLM-reported usage). For display we
-// approximate the post-compaction context as keepRecentTokens plus a small
-// overhead for the synthetic compaction-summary entry.
+// approximate the post-compaction context as the SDK's default keep window
+// plus a small overhead for the synthetic compaction-summary entry.
+// 不再读用户配置（设置页已移除），仅作用量环最后兜底。
+const KEEP_RECENT_FALLBACK_TOKENS = 20000;
 const COMPACTION_SUMMARY_OVERHEAD_TOKENS = 500;
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1041,33 +1029,6 @@ function createSkillsCompactOverride() {
   });
 }
 
-async function readCompactionConfig(): Promise<CompactionConfig> {
-  const settings = await readSettingsJson();
-  const c = settings.compaction ?? {};
-  return {
-    keepRecentTokens:
-      typeof c.keepRecentTokens === "number" && c.keepRecentTokens > 0
-        ? c.keepRecentTokens
-        : DEFAULT_COMPACTION_CONFIG.keepRecentTokens,
-    reserveTokens:
-      typeof c.reserveTokens === "number" && c.reserveTokens > 0
-        ? c.reserveTokens
-        : DEFAULT_COMPACTION_CONFIG.reserveTokens,
-    enabled: typeof c.enabled === "boolean" ? c.enabled : DEFAULT_COMPACTION_CONFIG.enabled,
-  };
-}
-
-async function writeCompactionConfig(cfg: CompactionConfig): Promise<void> {
-  const settings = await readSettingsJson();
-  settings.compaction = {
-    ...(settings.compaction ?? {}),
-    keepRecentTokens: cfg.keepRecentTokens,
-    reserveTokens: cfg.reserveTokens,
-    enabled: cfg.enabled,
-  };
-  await writeJsonFile(settingsJsonPath(), settings);
-}
-
 async function readCustomModelsJson(): Promise<Record<string, any>> {
   try {
     const content = await readFile(customModelsPath(), "utf-8");
@@ -1155,6 +1116,188 @@ interface RuntimeUnit {
    * count, the file write is skipped.
    */
   lastPersistedTokens: number | undefined;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 上下文用量明细（点击环形用量看面板）
+//
+// 分桶口径全在 src/shared/context-breakdown.ts（纯函数，renderer 也用同一份）。
+// 这里只负责「原料投影」：把 SDK 的发送视图投成分类输入，再估 system prompt 与
+// 工具定义这两坨不在消息里的固定开销。
+// ─────────────────────────────────────────────────────────────────────────
+
+/** 超过这个条数只统计最近 N 条并置 estimated（5MB 会话全量跑也不过几 ms）。 */
+const BREAKDOWN_MAX_MESSAGES = 5000;
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** 拼 content 里的文本块（image 块不计——估算口径不猜多模态价目）。 */
+function textFromContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  let text = "";
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as { type?: string; text?: string };
+    if (p.type === "text" && typeof p.text === "string") text += text ? `\n${p.text}` : p.text;
+  }
+  return text;
+}
+
+function projectMessageForBreakdown(msg: unknown): BreakdownMessage | null {
+  if (!msg || typeof msg !== "object") return null;
+  const m = msg as { role?: unknown; content?: unknown; summary?: unknown };
+  const role = typeof m.role === "string" ? m.role : "";
+  if (role === "assistant") {
+    const blocks = Array.isArray(m.content) ? m.content : [];
+    let text = "";
+    let thinking = "";
+    let calls = 0;
+    for (const block of blocks) {
+      if (!block || typeof block !== "object") continue;
+      const b = block as { type?: string; text?: string; thinking?: string; name?: string; arguments?: unknown };
+      if (b.type === "text" && typeof b.text === "string") text += text ? `\n${b.text}` : b.text;
+      else if (b.type === "thinking" && typeof b.thinking === "string")
+        thinking += thinking ? `\n${b.thinking}` : b.thinking;
+      else if (b.type === "toolCall") {
+        // 工具名 + 入参同样占上下文；这条 contentType=tool-call，整条落 tool 桶。
+        calls += 1;
+        const call = `${b.name ?? ""}${safeStringify(b.arguments)}`;
+        text += text ? `\n${call}` : call;
+      }
+    }
+    return { role, text, contentType: calls > 0 ? "tool-call" : "text", thinkingTokens: countTokens(thinking) };
+  }
+  if (role === "toolResult") {
+    return { role, text: textFromContent(m.content), contentType: "tool-result" };
+  }
+  if (role === "compactionSummary" || role === "branchSummary") {
+    return {
+      role,
+      text: typeof m.summary === "string" ? m.summary : "",
+      contentType: "text",
+      summary: true,
+    };
+  }
+  // user / system / custom 及未知 role：一律按文本进后续判定（扩展注入的 wc-summary
+  // 是 custom，正文带 SUMMARY_HEADER，靠前缀落进 summaries 桶）。
+  return { role, text: textFromContent(m.content), contentType: "text" };
+}
+
+/**
+ * 发送视图 → 分类输入。用 buildSessionProjection() 而不是 getEntries()：它就是
+ * 「真正发给模型的那份」——压缩边界之前的条目已被摘要替掉、context_edit 已生效，
+ * 所以被跳过的条目不会在这里被算进去。
+ */
+function projectBreakdownMessages(session: any): { messages: BreakdownMessage[]; estimated: boolean } {
+  const projection = session?.sessionManager?.buildSessionProjection?.();
+  const projected: any[] = Array.isArray(projection?.entries) ? projection.entries : [];
+  const out: BreakdownMessage[] = [];
+  for (const pe of projected) {
+    const sourceType = (pe?.sourceEntry as { type?: string } | undefined)?.type;
+    const isBoundary = sourceType === "compaction" || sourceType === "branch_summary";
+    const msgs: unknown[] = Array.isArray(pe?.messages) ? pe.messages : [];
+    for (const raw of msgs) {
+      const pm = projectMessageForBreakdown(raw);
+      if (!pm) continue;
+      // 边界条目带出的 systemMessage 仍算 system 开销，其余就是摘要本体。
+      if (isBoundary && pm.role !== "system") pm.summary = true;
+      out.push(pm);
+    }
+  }
+  if (out.length <= BREAKDOWN_MAX_MESSAGES) return { messages: out, estimated: false };
+  // 只保最近 N 条 ⇒ 最老的一段没算进去，合计是下界，故标 estimated。
+  return { messages: out.slice(out.length - BREAKDOWN_MAX_MESSAGES), estimated: true };
+}
+
+function estimateSystemPromptTokens(session: any): number | null {
+  try {
+    const sp = session?.systemPrompt;
+    return typeof sp === "string" ? countTokens(sp) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 工具定义的估算：只有声明给模型（active）的工具才随请求占上下文，所以先用
+ * getActiveToolNames() 过滤；拿不到 active 清单才退回全量。单条按
+ * `name\ndescription\n<参数 JSON schema>` 计，拿不到 schema 就只有 name+description；
+ * 整个 getAllTools() 都拿不到才给 null（UI 显示 n/a，不按 0 算）。
+ */
+function estimateToolDefTokens(session: any): number | null {
+  try {
+    const all: unknown[] | undefined = session?.getAllTools?.();
+    if (!Array.isArray(all) || all.length === 0) return null;
+    let list: unknown[] = all;
+    const activeNames: unknown = session?.getActiveToolNames?.();
+    if (Array.isArray(activeNames)) {
+      const set = new Set(activeNames.filter((n): n is string => typeof n === "string"));
+      list = all.filter((t) => set.has((t as { name?: string } | undefined)?.name ?? ""));
+      // 明明配了工具却一个都没匹配上 ⇒ 名字对不上（命名空间之类），别拿空集报 0。
+      if (list.length === 0) return null;
+    }
+    let sum = 0;
+    for (const tool of list) {
+      if (!tool || typeof tool !== "object") return null;
+      const t = tool as { name?: unknown; description?: unknown; parameters?: unknown };
+      if (typeof t.name !== "string") return null;
+      const desc = typeof t.description === "string" ? t.description : "";
+      const schema = safeStringify(t.parameters);
+      sum += countTokens(schema ? `${t.name}\n${desc}\n${schema}` : `${t.name}\n${desc}`);
+    }
+    return sum;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 组装明细。合计取「桶和 + system prompt + 工具定义」与 provider 真实读数的较大值
+ * （地板）——估算只会低估、不会虚高。两套读数分行展示，永不互相换算或相减。
+ */
+function buildContextBreakdown(session: any, providerTokens: number | null): ContextBreakdown {
+  try {
+    const { messages, estimated } = projectBreakdownMessages(session);
+    const systemPrompt = estimateSystemPromptTokens(session);
+    const toolDefs = estimateToolDefTokens(session);
+    const buckets = computeContextBreakdown(messages, providerTokens);
+    const withOverhead =
+      buckets.system +
+      buckets.tool +
+      buckets.summaries +
+      buckets.code +
+      buckets.text +
+      (systemPrompt ?? 0) +
+      (toolDefs ?? 0);
+    return {
+      systemPrompt,
+      toolDefs,
+      ...buckets,
+      total: Math.max(buckets.total, withOverhead),
+      providerTokens,
+      estimated,
+    };
+  } catch {
+    return {
+      systemPrompt: null,
+      toolDefs: null,
+      system: 0,
+      tool: 0,
+      summaries: 0,
+      code: 0,
+      text: 0,
+      total: providerTokens ?? 0,
+      providerTokens,
+      estimated: true,
+    };
+  }
 }
 
 export class PiDeskSessionManager {
@@ -1530,7 +1673,7 @@ export class PiDeskSessionManager {
         resourceLoaderOptions: {
           // deferred 试点：桌面普通/空间会话走 deferred（tool_search 按需装载），
           // IM 默认工作区（chat/im/<channel>）保持常驻 direct。browser / schedule 同机制。
-          extensionFactories: [soulExtension, rulesExtension, docsStripExtension, preambleExtension, webSearchExtension, isImSessionCwd(servicesKey) ? browserTool : browserToolDeferred, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), createSendFileExtension(), createScheduleExtension({ runNow: (taskId) => this.runScheduledTaskNow(taskId), deferred: !isImSessionCwd(servicesKey) }), hermesMemoryExtension, createMcpMount()],
+          extensionFactories: [soulExtension, rulesExtension, docsStripExtension, preambleExtension, webSearchExtension, isImSessionCwd(servicesKey) ? browserTool : browserToolDeferred, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), createSendFileExtension(), createScheduleExtension({ runNow: (taskId) => this.runScheduledTaskNow(taskId), deferred: !isImSessionCwd(servicesKey) }), hermesMemoryExtension, createMcpMount(), compressExtension],
           agentsFilesOverride: createContextFilesOverride(),
           skillsOverride: createSkillsCompactOverride(),
         },
@@ -2316,23 +2459,6 @@ export class PiDeskSessionManager {
     this.guardConfig = cfg;
     this.compileBashPatterns();
     await writeBashGuardConfig(cfg);
-  }
-
-  async getCompactionConfig(): Promise<CompactionConfig> {
-    return readCompactionConfig();
-  }
-
-  async saveCompactionConfig(cfg: CompactionConfig): Promise<void> {
-    await writeCompactionConfig(cfg);
-    // Refresh the SDK's in-memory settings so the new value takes effect on the
-    // next compaction without an app restart. settingsManager.reload() only
-    // re-reads the settings file (no runtime rebuild, no session drop).
-    try {
-      const session = this.session as any;
-      await session?.settingsManager?.reload?.();
-    } catch {
-      // Non-fatal: file is saved; it will apply on next launch regardless.
-    }
   }
 
   /**
@@ -3631,7 +3757,7 @@ export class PiDeskSessionManager {
       cwd,
       modelRuntime: this.modelRuntime,
       resourceLoaderOptions: {
-        extensionFactories: [createScheduledTaskExtension(task), rulesExtension, docsStripExtension, preambleExtension, webSearchExtension, browserToolUnattended, createSubagentExtension(() => this.webContents, () => this.modelRuntime), createMcpMount({ unattended: true })],
+        extensionFactories: [createScheduledTaskExtension(task), rulesExtension, docsStripExtension, preambleExtension, webSearchExtension, browserToolUnattended, createSubagentExtension(() => this.webContents, () => this.modelRuntime), createMcpMount({ unattended: true }), compressExtension],
         agentsFilesOverride: createContextFilesOverride(),
         skillsOverride: createSkillsCompactOverride(),
       },
@@ -4018,7 +4144,8 @@ export class PiDeskSessionManager {
   }
 
   /**
-   * Return current context usage (tokens / contextWindow / percent).
+   * Return current context usage (tokens / contextWindow / percent) plus a
+   * token breakdown for the click-to-open detail panel.
    * Delegates to SDK AgentSession.getContextUsage().
    * Returns undefined if no model is set or contextWindow is unknown.
    */
@@ -4027,6 +4154,7 @@ export class PiDeskSessionManager {
         tokens: number | null;
         contextWindow: number;
         percent: number | null;
+        breakdown?: ContextBreakdown;
       }
     | undefined
   > {
@@ -4039,12 +4167,14 @@ export class PiDeskSessionManager {
     const sdk = session?.getContextUsage();
     if (!sdk) return undefined;
     const sid = session?.sessionId;
+    // 明细是锦上添花：投影/估算全失败也只是没有面板，不影响主读数。
+    const breakdown = buildContextBreakdown(session, sdk.tokens ?? null);
 
     // Real computed value — persist it (idempotent; overwrites any prior
     // approximation/estimate for this session) and return as-is.
     if (sdk.tokens != null) {
       if (sid) await saveContextUsage(sid, sdk.tokens, sdk.contextWindow).catch(() => {});
-      return sdk;
+      return { ...sdk, breakdown };
     }
 
     // tokens:null → SDK can't estimate (compaction entry, no assistant reply
@@ -4058,6 +4188,7 @@ export class PiDeskSessionManager {
         tokens,
         contextWindow: sdk.contextWindow,
         percent: Math.min(100, (tokens / sdk.contextWindow) * 100),
+        breakdown,
       };
     }
 
@@ -4065,14 +4196,13 @@ export class PiDeskSessionManager {
     // tokensBefore > keepRecentTokens, and the retained window is cut at
     // keepRecentTokens, so the post-compaction context ≈ keepRecentTokens
     // (+ a small summary overhead). Clamped to contextWindow.
-    const cfg = await readCompactionConfig().catch(() => DEFAULT_COMPACTION_CONFIG);
-    const kr =
-      cfg && cfg.keepRecentTokens > 0
-        ? cfg.keepRecentTokens
-        : DEFAULT_COMPACTION_CONFIG.keepRecentTokens;
-    const approx = Math.min(kr + COMPACTION_SUMMARY_OVERHEAD_TOKENS, sdk.contextWindow);
+    // 不再读用户配置（设置页已移除），仅作用量环最后兜底。
+    const approx = Math.min(
+      KEEP_RECENT_FALLBACK_TOKENS + COMPACTION_SUMMARY_OVERHEAD_TOKENS,
+      sdk.contextWindow,
+    );
     const percent = Math.min(100, (approx / sdk.contextWindow) * 100);
-    return { tokens: approx, contextWindow: sdk.contextWindow, percent };
+    return { tokens: approx, contextWindow: sdk.contextWindow, percent, breakdown };
   }
 
   /**

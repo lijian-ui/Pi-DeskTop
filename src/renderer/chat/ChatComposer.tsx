@@ -38,6 +38,8 @@ import ToolModePicker from "./ToolModePicker";
 import AtFilePicker, { toRelative } from "./AtFilePicker";
 import { preloadDir } from "./atFileCache";
 import CacheHitBadge from "./CacheHitBadge";
+import ContextBreakdownPanel from "./ContextBreakdown";
+import type { ContextBreakdown } from "../../shared/context-breakdown";
 import styles from "./ChatComposer.module.css";
 
 interface ModelItem {
@@ -96,12 +98,19 @@ interface ContextRingProps {
     tokens: number | null;
     contextWindow: number;
     percent: number | null;
+    breakdown?: ContextBreakdown;
   };
 }
 
-/** Small circular progress ring showing current context-window usage. */
+/**
+ * Small circular progress ring showing current context-window usage.
+ * Clicking it opens the token-breakdown panel (the hover one-liner stays put).
+ */
 function ContextRing({ usage }: ContextRingProps) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const breakdown = usage.breakdown ?? null;
   const R = 15.5;
   const C = 2 * Math.PI * R;
   const pct = usage.percent;
@@ -124,33 +133,64 @@ function ContextRing({ usage }: ContextRingProps) {
           usage.contextWindow
         )} ${t("chat.contextUsed")}`;
 
+  // 面板没有自带关闭按钮：点环开合，点外部或 Esc 收起。
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
   return (
-    <div className={styles.contextRing}>
-      <svg className={styles.contextRingSvg} viewBox="0 0 36 36">
-        <circle
-          className={styles.contextRingTrack}
-          cx="18"
-          cy="18"
-          r={R}
-        />
-        <circle
-          className={styles.contextRingFill}
-          cx="18"
-          cy="18"
-          r={R}
-          style={{
-            strokeDasharray: C,
-            strokeDashoffset: offset,
-            stroke: color,
-          }}
-        />
-      </svg>
-      <span className={styles.contextRingText}>
-        {pct != null ? `${Math.round(pct)}%` : "—"}
-      </span>
+    <div
+      ref={wrapRef}
+      className={`${styles.contextRing} ${open ? styles.contextRingOpen : ""}`}
+    >
+      <button
+        type="button"
+        className={styles.contextRingButton}
+        onClick={() => setOpen((v) => !v)}
+        disabled={!breakdown}
+        aria-haspopup="dialog"
+        aria-expanded={breakdown ? open : undefined}
+        aria-label={title}
+      >
+        <svg className={styles.contextRingSvg} viewBox="0 0 36 36">
+          <circle
+            className={styles.contextRingTrack}
+            cx="18"
+            cy="18"
+            r={R}
+          />
+          <circle
+            className={styles.contextRingFill}
+            cx="18"
+            cy="18"
+            r={R}
+            style={{
+              strokeDasharray: C,
+              strokeDashoffset: offset,
+              stroke: color,
+            }}
+          />
+        </svg>
+        <span className={styles.contextRingText}>
+          {pct != null ? `${Math.round(pct)}%` : "—"}
+        </span>
+      </button>
       <span className={styles.contextRingTooltip} role="tooltip">
         {title}
       </span>
+      {breakdown && open && <ContextBreakdownPanel breakdown={breakdown} />}
     </div>
   );
 }

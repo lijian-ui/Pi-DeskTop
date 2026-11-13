@@ -53,12 +53,6 @@ const piAPI = {
     ipcRenderer.invoke("pi:getBashGuardConfig"),
   saveBashGuardConfig: (config: { blacklist: string[]; whitelist: string[] }) =>
     ipcRenderer.invoke("pi:saveBashGuardConfig", config),
-  getCompactionConfig: () => ipcRenderer.invoke("pi:getCompactionConfig"),
-  saveCompactionConfig: (config: {
-    keepRecentTokens: number;
-    reserveTokens: number;
-    enabled: boolean;
-  }) => ipcRenderer.invoke("pi:saveCompactionConfig", config),
   getSoul: () => ipcRenderer.invoke("pi:getSoul"),
   saveSoul: (text: string) => ipcRenderer.invoke("pi:saveSoul", text),
   listSoulEntries: () => ipcRenderer.invoke("pi:listSoulEntries"),

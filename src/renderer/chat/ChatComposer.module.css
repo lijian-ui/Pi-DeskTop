@@ -913,6 +913,30 @@
   user-select: none;
 }
 
+.contextRingButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* 没有明细可看（老会话 / 主进程取不到原料）时环只是只读指示器。 */
+.contextRingButton:disabled {
+  cursor: default;
+}
+
+.contextRingButton:focus-visible {
+  outline: 2px solid var(--bg-brand);
+  outline-offset: 1px;
+}
+
 .contextRingSvg {
   width: 26px;
   height: 26px;
@@ -965,6 +989,11 @@
 
 .contextRing:hover .contextRingTooltip {
   opacity: 1;
+}
+
+/* 明细面板展开时收起悬停单行 tooltip，别和面板叠成两层浮层。 */
+.contextRing.contextRingOpen:hover .contextRingTooltip {
+  opacity: 0;
 }
 
 /* ── Code-reference attachments (from the file-preview panel) ── */

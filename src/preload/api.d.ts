@@ -26,8 +26,6 @@ export interface PiDeskAPI {
   setBashGuardMode(mode: "yolo" | "ask"): Promise<void>;
   getBashGuardConfig(): Promise<{ blacklist: string[]; whitelist: string[] }>;
   saveBashGuardConfig(config: { blacklist: string[]; whitelist: string[] }): Promise<void>;
-  getCompactionConfig(): Promise<{ keepRecentTokens: number; reserveTokens: number; enabled: boolean }>;
-  saveCompactionConfig(config: { keepRecentTokens: number; reserveTokens: number; enabled: boolean }): Promise<void>;
   getSoul(): Promise<string>;
   saveSoul(text: string): Promise<void>;
   listSoulEntries(): Promise<PersonaEntry[]>;
@@ -83,6 +81,7 @@ export interface PiDeskAPI {
         tokens: number | null;
         contextWindow: number;
         percent: number | null;
+        breakdown?: ContextBreakdown;
       }
     | undefined
   >;
@@ -409,6 +408,7 @@ import type {
   McpServerPatch,
   McpServerUpsert,
 } from "../shared/mcp-types";
+import type { ContextBreakdown } from "../shared/context-breakdown";
 
 export interface ScheduledTask {
   id: string;

@@ -165,16 +165,6 @@ export function registerIpcHandlers(
     await pmgr.saveBashGuardConfig(config);
   });
 
-  ipcMain.handle("pi:getCompactionConfig", async () => {
-    if (!pmgr) throw new Error("Pi SDK not initialized");
-    return pmgr.getCompactionConfig();
-  });
-
-  ipcMain.handle("pi:saveCompactionConfig", async (_, config) => {
-    if (!pmgr) throw new Error("Pi SDK not initialized");
-    await pmgr.saveCompactionConfig(config);
-  });
-
   // ── Soul / persona (assistant settings) ──
   ipcMain.handle("pi:getSoul", async () => {
     if (!pmgr) throw new Error("Pi SDK not initialized");
