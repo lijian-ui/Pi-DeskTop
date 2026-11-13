@@ -1,11 +1,12 @@
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
-import { DEFAULT_PREAMBLE_RE, readPreambleSync } from "./preamble";
+import { DEFAULT_PREAMBLE_RES, readPreambleSync } from "./preamble";
 
 /**
  * Replaces the SDK-hardcoded default preamble with the user's own.
  *
  * What it is: the identity sentence pi writes at the very start of the
- * assembled system prompt ("You are an expert coding assistant operating
+ * assembled system prompt (SDK ≤1.4: "You are an expert coding assistant
+ * operating inside pi, …"; SDK ≥1.5: "You are a coding assistant running
  * inside pi, …"). The user configures their own text in Assistant Settings →
  * Preamble; it is stored at `~/.pi/agent/preamble.md`.
  *
@@ -28,8 +29,13 @@ export const preambleExtension: InlineExtension = {
     pi.on("before_agent_start", (event) => {
       const preamble = readPreambleSync();
       if (!preamble) return;
-      if (!DEFAULT_PREAMBLE_RE.test(event.systemPrompt)) return;
-      return { systemPrompt: event.systemPrompt.replace(DEFAULT_PREAMBLE_RE, () => preamble) };
+      // Match any known wording (see DEFAULT_PREAMBLES) — a mismatch leaves the
+      // prompt untouched; the function callback keeps `$` in user text literal.
+      for (const re of DEFAULT_PREAMBLE_RES) {
+        if (re.test(event.systemPrompt)) {
+          return { systemPrompt: event.systemPrompt.replace(re, () => preamble) };
+        }
+      }
     });
   },
 };

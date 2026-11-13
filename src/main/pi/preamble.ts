@@ -14,8 +14,9 @@ import {
  * Preamble module (main process).
  *
  * The preamble is the identity sentence pi hardcodes at the VERY START of the
- * assembled system prompt ("You are an expert coding assistant operating
- * inside pi, …", bare text right before the `<tools>` section). The SDK offers
+ * assembled system prompt (SDK ≤1.4: "You are an expert coding assistant
+ * operating inside pi, …"; SDK ≥1.5: "You are a coding assistant running
+ * inside pi, …" — bare text right before the `<tools>` section). The SDK offers
  * no toggle for replacing just it — `customPrompt` would also drop the
  * tools/rules sections — so the replacement is done by `preamble-extension.ts`
  * (before_agent_start hook): it re-reads `~/.pi/agent/preamble.md` on every
@@ -25,17 +26,29 @@ import {
  * An empty string / missing file = "not replaced" (keep pi's default preamble).
  */
 
-/** The exact default preamble sentence pi hardcodes (system-prompt.js). */
-export const DEFAULT_PREAMBLE =
-  "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
+/**
+ * The default preamble sentence pi hardcodes (system-prompt.js), **both
+ * known wordings**:
+ *  - SDK ≤1.4: "You are an expert coding assistant operating inside pi, …"
+ *  - SDK ≥1.5: "You are a coding assistant running inside pi, …"
+ * When the SDK rewords again, append one line here — a mismatch simply means
+ * "leave the prompt untouched" (zero side effects), never a false replace.
+ */
+export const DEFAULT_PREAMBLES = [
+  // SDK ≤1.4
+  "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.",
+  // SDK ≥1.5 (dist/core/system-prompt.js)
+  "You are a coding assistant running inside pi, a coding agent harness. Help users inspect files, run commands, and modify code.",
+];
 
 /**
- * Anchored matcher for the default preamble. Precise on purpose: if a SDK
- * upgrade rewords the sentence the match simply fails and the hook leaves the
- * prompt untouched (zero side effects, same failure mode as the docs strip).
+ * Anchored matchers for the default preamble (one per known wording).
+ * Precise on purpose: if a SDK upgrade rewords the sentence the match simply
+ * fails and the hook leaves the prompt untouched (zero side effects, same
+ * failure mode as the docs strip).
  */
-export const DEFAULT_PREAMBLE_RE = new RegExp(
-  `^${DEFAULT_PREAMBLE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+export const DEFAULT_PREAMBLE_RES = DEFAULT_PREAMBLES.map(
+  (p) => new RegExp(`^${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
 );
 
 /** Absolute path to the preamble markdown file (next to soul.md). */

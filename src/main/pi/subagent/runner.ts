@@ -13,6 +13,8 @@ export interface SubagentTaskSpec {
   /** Ids of other tasks that must finish (done) before this one starts. A task
    *  whose dependency errors/skips is itself marked skipped — no wasted work. */
   dependsOn?: string[];
+  /** Per-task acceptance criteria; overrides the top-level `acceptance`. */
+  acceptance?: string;
 }
 
 /** Parameters the model passes to the `subagent` tool. */
@@ -23,7 +25,14 @@ export interface SubagentParams {
   tasks?: SubagentTaskSpec[];
   /** Sequential chain: each step depends on the previous one and receives its
    *  output. Internally normalized into a linear dependency DAG. */
-  chain?: { agent: string; task: string }[];
+  chain?: { agent: string; task: string; acceptance?: string }[];
+  /**
+   * Acceptance criteria applied to every launched task (a per-task
+   * `acceptance` overrides it). Injected into the task text as a hard
+   * requirement: the subagent must self-verify against each item before
+   * delivery and confirm them item-by-item with evidence in its final reply.
+   */
+  acceptance?: string;
 }
 
 export type SubagentRunStatus =
@@ -172,7 +181,11 @@ async function runOne(
     modelRuntime: modelRuntime ?? undefined,
     model,
     thinkingLevel: (def.thinking as any) ?? ctx.thinkingLevel,
-    noTools: "builtin",
+    // 只在角色显式声明 tools 白名单时才置空默认集再做 allowlist 限定。
+    // 不能无条件传 noTools：SDK（sdk.js `defaultToolNames = options.noTools ? [] : …`）
+    // 会把任何 noTools 都当作"默认工具集为空"，导致未写 tools: 的角色零工具，
+    // 与 agent-discovery 注释的 "omitted => all built-ins" 相反。
+    noTools: def.tools ? ("builtin" as const) : undefined,
     tools: def.tools ?? undefined,
     excludeTools: def.excludeTools.length ? def.excludeTools : undefined,
   });
@@ -185,18 +198,6 @@ async function runOne(
     (ctx as any)?.sessionManager?.getSessionFile?.() ?? ctx?.cwd ?? "";
   activeSessions.set(runId, { session, parentPath });
   sendEvent({ type: "subagent_start", runId, agent: def.name });
-
-  // TEMP DIAGNOSTIC — remove after root cause is confirmed.
-  const DEBUG = process.env.PI_SUBAGENT_DEBUG === "1";
-  if (DEBUG)
-    console.log(
-      "[SUBAGENT] runOne start:",
-      def.name,
-      "| agent?",
-      !!session.agent,
-      "| has beforeToolCall?",
-      typeof session.agent?.beforeToolCall
-    );
 
   // Realtime path: hook the Agent's beforeToolCall/afterToolCall (the same
   // intercept points the SDK uses internally for extensions). We count whether
@@ -216,7 +217,6 @@ async function runOne(
       }
       hookFired++;
       const toolName = p?.toolCall?.name ?? p?.toolName;
-      if (DEBUG) console.log("[SUBAGENT] >> beforeToolCall fired:", toolName);
       sendEvent({
         type: "subagent_step",
         runId,
@@ -236,7 +236,6 @@ async function runOne(
       }
       hookFired++;
       const toolName = p?.toolCall?.name ?? p?.toolName;
-      if (DEBUG) console.log("[SUBAGENT] << afterToolCall fired:", toolName, "| isError:", !!p?.isError);
       sendEvent({
         type: "subagent_step",
         runId,
@@ -296,20 +295,6 @@ async function runOne(
       }
     }
 
-    if (DEBUG) {
-      console.log(
-        "[SUBAGENT] hookFired:",
-        hookFired,
-        "| roles:",
-        (msgs as any[]).map((m) => m?.role).join(",")
-      );
-      for (const m of msgs as any[]) {
-        const types = Array.isArray(m?.content)
-          ? m.content.map((b: any) => b?.type).join(",")
-          : "(none)";
-        console.log("[SUBAGENT] msg role=", m?.role, "blocks=", types);
-      }
-    }
     const text = extractText(msgs[msgs.length - 1]);
     sendEvent({ type: "subagent_done", runId, agent: def.name, ok: true });
     return { text, ok: true };
@@ -339,6 +324,16 @@ interface PlannedTask {
   task: string;
   dependsOn: string[]; // runIds that must be `done` before this starts
   isChainStep: boolean; // feeds the previous step's output forward
+  acceptance?: string; // self-verify-against-each-item requirement (借鉴 dsh-agent-teams 验收合同)
+}
+
+/** 把验收标准包成任务级硬要求：交付前逐条自验、最终答复逐条带证据确认。 */
+function withAcceptance(task: string, acceptance: string): string {
+  return (
+    `${task}\n\n<acceptance>\n验收标准（硬要求）：\n${acceptance}\n\n` +
+    "交付前必须逐条自我验证，并在最终答复末尾以清单形式逐条确认：已满足的给出可核查证据（file:line / 命令与输出 / 测试结果）；" +
+    "未满足或无法验证的必须如实说明，禁止未经验证就宣称完成。\n</acceptance>"
+  );
 }
 
 function parentModelLabel(ctx: any): string | undefined {
@@ -443,9 +438,10 @@ async function runDag(
         next.isChainStep && next.dependsOn.length
           ? outputs.get(indexOfRunId(next.dependsOn[0])) ?? ""
           : "";
-      const taskText = prevOut
+      let taskText = prevOut
         ? `${next.task}\n\nPrevious step result:\n${prevOut}`
         : next.task;
+      if (next.acceptance) taskText = withAcceptance(taskText, next.acceptance);
       runOne(def, taskText, ctx, sendEvent, next.runId, modelRuntime)
         .then(({ text, ok }) => {
           outputs.set(next.index, text);
@@ -480,16 +476,23 @@ export async function runSubagent(
   modelRuntime: any
 ): Promise<any> {
   // Normalize into intermediate specs, then assign runIds + resolve deps.
-  type Spec = { agent: string; task: string; id?: string; depKeys: string[]; isChain: boolean };
+  type Spec = {
+    agent: string;
+    task: string;
+    id?: string;
+    depKeys: string[];
+    isChain: boolean;
+    acceptance?: string;
+  };
   const specs: Spec[] = [];
   const isChain = Array.isArray(params.chain) && params.chain.length > 0;
   const isTasks = Array.isArray(params.tasks) && params.tasks.length > 0;
 
   if (params.agent && params.task && !isTasks && !isChain) {
-    specs.push({ agent: params.agent, task: params.task, depKeys: [], isChain: false });
+    specs.push({ agent: params.agent, task: params.task, depKeys: [], isChain: false, acceptance: params.acceptance });
   } else if (isChain) {
     for (const s of params.chain!) {
-      specs.push({ agent: s.agent, task: s.task, depKeys: [], isChain: true });
+      specs.push({ agent: s.agent, task: s.task, depKeys: [], isChain: true, acceptance: s.acceptance ?? params.acceptance });
     }
   } else if (isTasks) {
     for (const s of params.tasks!) {
@@ -499,6 +502,7 @@ export async function runSubagent(
         id: s.id,
         depKeys: s.dependsOn ?? [],
         isChain: false,
+        acceptance: s.acceptance ?? params.acceptance,
       });
     }
   } else {
@@ -521,6 +525,7 @@ export async function runSubagent(
     task: s.task,
     dependsOn: [],
     isChainStep: s.isChain,
+    acceptance: s.acceptance,
   }));
   const idToRunId = new Map<string, string>();
   specs.forEach((s, i) => {

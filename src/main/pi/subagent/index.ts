@@ -50,7 +50,7 @@ export function createSubagentExtension(
       "以下角色可通过 subagent 工具委派，让专门的子代理在隔离会话中完成任务，而非你自己 inline 处理：\n" +
       lines.join("\n") +
       "\n\n委派准则：为了节省当前上下文窗口，遇到 侦察 / 探索 / 调研 / 摘要 / 总结 / 可并行处理 类任务时，务必优先调用 subagent 工具委派，不要自己 inline 完成。" +
-      "示例：用户说“侦察一下这个项目” → 调用 subagent({ agent: \"scout\", task: \"...\" })。" +
+      "示例：用户说“侦察一下这个项目” → 调用 subagent({ agent: \"researcher\", task: \"...\" })。" +
       "若不确定有哪些角色，先用无参 subagent 列出。" +
       "\n</available_subagents>"
     );
@@ -108,8 +108,9 @@ export function createSubagentExtension(
           "When to use: to conserve the current context window, always prefer delegating reconnaissance / exploration / research / summarization / parallelizable tasks instead of doing them inline. " +
           "Modes: single { agent, task }; parallel { tasks: [{agent, task}] } (declare dependencies to form a DAG); chain { chain: [{agent, task}] } (sequential, each step's result feeds the next; equivalent to linear dependencies). " +
           "DAG: give a task in tasks an id, then another task uses dependsOn: [that id] to wait for it; if an upstream task fails, the downstream one is skipped automatically (skipped tasks no longer consume model calls). " +
+          "Acceptance: pass `acceptance` (top level, or per task/step) with the checkable done-conditions — it is injected into the subagent as a hard requirement to self-verify and confirm each item with evidence before delivering. " +
           "Roles come from Markdown files: ~/.pi/agent/agents and <cwd>/.pi/agents (frontmatter: name, description, tools, thinking, model; body = role instructions, prepended to the subagent's first user message). " +
-          "Example: the user says \"scout this project\" → call subagent({ agent: \"scout\", task: \"Scout the structure of E:\\\\Project\\\\pi-desktop\" }). " +
+          "Example: the user says \"scout this project\" → call subagent({ agent: \"researcher\", task: \"Scout the structure of E:\\\\Project\\\\pi-desktop\" }). " +
           "If unsure which roles exist, call it with no arguments to list them.",
         promptSnippet:
           "Delegate a task to a specialized subagent running in an isolated session (single / parallel / chain). Use for reconnaissance / exploration / research / summarization / parallelizable work.",
@@ -138,6 +139,10 @@ export function createSubagentExtension(
                     items: { type: "string" },
                     description: "Ids of tasks that must finish before this one starts.",
                   },
+                  acceptance: {
+                    type: "string",
+                    description: "Per-task acceptance criteria; overrides the top-level acceptance.",
+                  },
                 },
                 required: ["agent", "task"],
               },
@@ -148,9 +153,18 @@ export function createSubagentExtension(
                 "Sequential chain: each step depends on the previous one and receives its output (a linear dependency DAG).",
               items: {
                 type: "object",
-                properties: { agent: { type: "string" }, task: { type: "string" } },
+                properties: {
+                  agent: { type: "string" },
+                  task: { type: "string" },
+                  acceptance: { type: "string", description: "Per-step acceptance criteria; overrides the top-level acceptance." },
+                },
                 required: ["agent", "task"],
               },
+            },
+            acceptance: {
+              type: "string",
+              description:
+                "Acceptance criteria for the delegated work, applied to every task (items may override per task). The subagent must self-verify against each item before delivery and confirm them item-by-item with evidence in its final reply — use it whenever the task has checkable done-conditions (commands to pass, files to produce, behaviors to hold).",
             },
           },
           required: [],
