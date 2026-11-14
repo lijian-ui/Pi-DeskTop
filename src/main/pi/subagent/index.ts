@@ -107,7 +107,7 @@ export function createSubagentExtension(
           "Delegate a task to a specialized subagent (runs in an isolated session; does not inherit the main session's context). " +
           "When to use: to conserve the current context window, always prefer delegating reconnaissance / exploration / research / summarization / parallelizable tasks instead of doing them inline. " +
           "Modes: single { agent, task }; parallel { tasks: [{agent, task}] } (declare dependencies to form a DAG); chain { chain: [{agent, task}] } (sequential, each step's result feeds the next; equivalent to linear dependencies). " +
-          "DAG: give a task in tasks an id, then another task uses dependsOn: [that id] to wait for it; if an upstream task fails, the downstream one is skipped automatically (skipped tasks no longer consume model calls). " +
+          "DAG: give a task in tasks an id, then another task uses dependsOn: [that id] to wait for it — once its dependencies finish, their outputs are injected into it as Upstream results; if an upstream task fails, the downstream one is skipped automatically (skipped tasks no longer consume model calls). " +
           "Acceptance: pass `acceptance` (top level, or per task/step) with the checkable done-conditions — it is injected into the subagent as a hard requirement to self-verify and confirm each item with evidence before delivering. " +
           "Roles come from Markdown files: ~/.pi/agent/agents and <cwd>/.pi/agents (frontmatter: name, description, tools, thinking, model; body = role instructions, prepended to the subagent's first user message). " +
           "Example: the user says \"scout this project\" → call subagent({ agent: \"researcher\", task: \"Scout the structure of E:\\\\Project\\\\pi-desktop\" }). " +
@@ -124,7 +124,7 @@ export function createSubagentExtension(
             tasks: {
               type: "array",
               description:
-                "Parallel / DAG fanout: run multiple agents concurrently. Each item may carry `id` and `dependsOn: [otherId]` to form a dependency graph — a task only starts after its dependencies finish; if a dependency fails/skips, the dependent is auto-skipped.",
+                "Parallel / DAG fanout: run multiple agents concurrently. Each item may carry `id` and `dependsOn: [otherId]` to form a dependency graph — a task only starts after its dependencies finish, then receives their outputs as Upstream results; if a dependency fails/skips, the dependent is auto-skipped.",
               items: {
                 type: "object",
                 properties: {

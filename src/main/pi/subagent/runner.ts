@@ -541,13 +541,17 @@ async function runDag(
       status.set(next.runId, "running");
       active++;
       const def = defs.get(next.index)!;
-      const prevOut =
-        next.isChainStep && next.dependsOn.length
-          ? outputs.get(indexOfRunId(next.dependsOn[0])) ?? ""
-          : "";
-      let taskText = prevOut
-        ? `${next.task}\n\nPrevious step result:\n${prevOut}`
-        : next.task;
+      // 上游结果注入：chain 步骤与 DAG dependents 统一生效（此前只喂 chain）。
+      // DAG 汇聚任务的价值正是拿到全部上游输出 —— 逐个带上游角色名拼接。
+      const prevOut = next.dependsOn
+        .map((d) => {
+          const i = indexOfRunId(d);
+          const t = i >= 0 ? outputs.get(i) ?? "" : "";
+          return t ? `[${planned[i]?.agent ?? "upstream"}]\n${t}` : "";
+        })
+        .filter(Boolean)
+        .join("\n\n---\n\n");
+      let taskText = prevOut ? `${next.task}\n\nUpstream results:\n${prevOut}` : next.task;
       if (next.acceptance) taskText = withAcceptance(taskText, next.acceptance);
       runOne(def, taskText, ctx, sendEvent, next.runId, modelRuntime, sessionPath)
         .then(({ text, ok }) => {
