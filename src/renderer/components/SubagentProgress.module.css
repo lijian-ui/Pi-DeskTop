@@ -1,14 +1,13 @@
-/* Subagent progress — embedded right-rail block (chat area), same family as
-   the Todo panel. No floating overlay, no entry animation; hover feedback is
-   shadow-only (no transform). Status colors: running = brand green (pulse dot
-   kept as functional state), done = success, error = danger. */
+/* Subagent progress — right-rail panel (chat area), redesign per
+   subagent-panel-design.html 右栏：legend counts + segment overview +
+   depth-column DAG + one-line status cards. Colors ride the repo tokens
+   (--bg-* / --text-* / --status-* / --border-*); the design's raw hex
+   values are only a mapping reference. Panel stays shrink-wrapped so the
+   right rail collapses with it. */
 .panel {
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
-  /* No max-height here — the panel must shrink-wrap its content so the
-     right-rail (height:fit-content) collapses to exactly the panel size,
-     leaving zero dead space below. Scrolling lives inside .list only. */
   min-height: 0;
   overflow: hidden;
   font-size: var(--body-sm-font-size);
@@ -16,6 +15,7 @@
   user-select: none;
 }
 
+/* ---------- header：标题 + 图例计数 + 隐藏 ---------- */
 .header {
   display: flex;
   align-items: center;
@@ -28,33 +28,60 @@
 .headerIcon {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   color: var(--text-brand);
-  flex-shrink: 0;
+  flex: none;
 }
 
 .headerTitle {
-  color: var(--text-default);
   font-size: var(--body-sm-font-size);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-strong);
   white-space: nowrap;
 }
 
-.spacer {
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  overflow: hidden;
   flex: 1;
 }
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacer-4);
+  font-size: var(--body-xs-font-size);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition: opacity 0.18s ease;
+}
+
+.legend i {
+  font-style: normal;
+  font-size: var(--body-xs-font-size);
+  line-height: 1;
+}
+
+.legend [data-k="running"] i { color: var(--text-brand); }
+.legend [data-k="pending"] i { color: var(--text-tertiary); }
+.legend [data-k="done"] i { color: var(--status-success-default); }
+.legend [data-k="error"] i { color: var(--status-error-default); }
+.legend [data-k="skipped"] i { color: var(--text-tertiary); }
+.legend span[data-zero] { opacity: 0.32; }
 
 .iconBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 2px;
+  width: 22px;
+  height: 22px;
   border: none;
   border-radius: var(--radius-4);
   background: transparent;
-  color: var(--icon-secondary, var(--text-tertiary));
+  color: var(--icon-secondary);
   cursor: pointer;
-  flex-shrink: 0;
+  flex: none;
 }
 
 .iconBtn:hover {
@@ -62,193 +89,352 @@
   color: var(--text-default);
 }
 
-/* Scrollable stream of run cards. Fixed max-height so the expanded panel has
-   a bounded, stable height; older runs (beyond the recent 6) are reachable by
-   scrolling up. The panel itself stays shrink-wrapped so the right-rail never
-   shows dead space below it. */
-.list {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 50vh;
-  overflow-y: auto;
-  padding: var(--spacer-8) var(--spacer-10) var(--spacer-10);
+/* ---------- ProgressOverview：段条 + 一句汇总 ---------- */
+.ov {
+  padding: 10px var(--spacer-12) 9px;
+  border-bottom: 1px solid var(--border-neutral-l1);
+}
+
+.segs {
+  display: flex;
+  gap: 3px;
+  height: 5px;
+}
+
+.segs b {
+  flex: 1;
+  min-width: 3px;
+  border-radius: 2px;
+  background: var(--text-tertiary);
+  opacity: 0.45;
+  cursor: pointer;
+  transition: opacity 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
+}
+
+.segs b[data-s="running"] { background: var(--text-brand); opacity: 1; }
+.segs b[data-s="done"] { background: var(--status-success-default); opacity: 1; }
+.segs b[data-s="error"] { background: var(--status-error-default); opacity: 1; }
+.segs b[data-s="skipped"] {
+  background: var(--text-tertiary);
+  opacity: 0.55;
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--bg-overlay-l3) 0 2px,
+    transparent 2px 4px
+  );
+}
+.segs b[data-focus="1"] { transform: scaleY(1.6); }
+
+.sum {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacer-6);
+  margin-top: 7px;
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+  min-height: 16px;
+}
+
+.sum i {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-brand);
+  transform: translateY(-2px);
+}
+
+.sum[data-tone="warn"] i { background: var(--status-warning-default); }
+.sum[data-tone="err"] i { background: var(--status-error-default); }
+.sum[data-tone="ok"] i { background: var(--status-success-default); }
+.sum[data-tone="idle"] i { background: var(--text-tertiary); }
+
+.sumText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sumFocus {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* ---------- DAG：depth 分列 + 贝塞尔连线（viewBox 响应式） ---------- */
+.dag {
+  padding: 10px var(--spacer-12);
+  border-bottom: 1px solid var(--border-neutral-l1);
+  overflow-x: auto;
+}
+
+.dagSvg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.dagEdge {
+  fill: none;
+  stroke: var(--border-neutral-l3);
+  stroke-width: 1.2;
+  transition: opacity 0.18s ease, stroke 0.18s ease;
+}
+
+.dagEdge[data-active="1"] { stroke: var(--text-brand); }
+.dagEdge[data-dim="1"] { opacity: 0.3; }
+
+.dagNode {
+  cursor: pointer;
+  transition: opacity 0.18s ease;
+}
+
+.dagNode rect {
+  fill: var(--bg-base-secondary);
+  stroke: var(--border-neutral-l3);
+  stroke-width: 1.2;
+  transition: stroke 0.18s ease, fill 0.18s ease;
+}
+
+.dagNode text {
+  fill: var(--text-default);
+  font-size: 10.5px;
+  dominant-baseline: middle;
+  user-select: none;
+}
+
+.dagNode[data-s="running"] rect {
+  stroke: var(--text-brand);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+.dagNode[data-s="done"] rect { stroke: var(--status-success-default); }
+.dagNode[data-s="error"] rect {
+  stroke: var(--status-error-default);
+  fill: var(--status-error-surface-l1);
+}
+.dagNode[data-s="skipped"] rect { fill: transparent; }
+.dagNode[data-s="skipped"] text { fill: var(--text-tertiary); }
+.dagNode[data-dim="1"] { opacity: 0.3; }
+.dagNode[data-pinned="1"] rect { stroke-width: 1.8; }
+.dagNode[data-focus="1"] rect { fill: var(--bg-base-tertiary); }
+.dagNode:focus { outline: none; }
+.dagNode:focus-visible rect { stroke: var(--text-brand); stroke-width: 1.8; }
+
+.dagDot {
+  transition: fill 0.18s ease;
+}
+
+.dagDot[data-s="pending"] { fill: var(--text-tertiary); }
+.dagDot[data-s="running"] { fill: var(--text-brand); }
+.dagDot[data-s="done"] { fill: var(--status-success-default); }
+.dagDot[data-s="error"] { fill: var(--status-error-default); }
+.dagDot[data-s="skipped"] { fill: var(--text-tertiary); fill-opacity: 0.6; }
+
+@keyframes breathe {
+  0%, 100% { stroke-opacity: 1; }
+  50% { stroke-opacity: 0.35; }
+}
+
+/* ---------- run 卡列表 ---------- */
+.cards {
   display: flex;
   flex-direction: column;
   gap: var(--spacer-6);
+  padding: 10px var(--spacer-12) var(--spacer-12);
 }
 
-/* Shown at the top of the list when there are more than 6 runs, hinting the
-   user can scroll up to reveal the older ones. */
-.moreHint {
-  flex-shrink: 0;
-  padding: 2px var(--spacer-8);
-  font-size: 10px;
-  color: var(--text-tertiary);
-  text-align: center;
-  border-bottom: 1px dashed var(--border-neutral-l1);
-  margin-bottom: var(--spacer-2);
-}
-
-/* Collapse chevron inside a run card's title row. */
-.chevron {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--icon-secondary, var(--text-tertiary));
-}
-
-/* One child agent = one card. */
-.run {
-  background: var(--bg-base-secondary);
+.card {
   border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-6);
-  padding: var(--spacer-6) var(--spacer-8);
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  background: var(--bg-base-secondary);
+  padding: var(--spacer-8) 10px;
+  transition: opacity 0.18s ease, border-color 0.18s ease;
 }
 
-.run:hover {
-  border-color: var(--border-neutral-l2);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.06);
+.card[data-s="error"] {
+  border-color: color-mix(in srgb, var(--status-error-default) 62%, transparent);
 }
 
-.row {
+.card[data-s="skipped"] {
+  background: var(--bg-base-default);
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--bg-overlay-l2) 0 5px,
+    transparent 5px 10px
+  );
+}
+
+.card[data-dim="1"] { opacity: 0.42; }
+
+.cardRow1 {
   display: flex;
   align-items: center;
-  gap: var(--spacer-6);
+  gap: 7px;
   min-width: 0;
   cursor: default;
 }
 
-.row[role="button"] {
-  cursor: pointer;
+.cardRow1[role="button"] { cursor: pointer; }
+
+.cardRow2 {
+  display: flex;
+  align-items: center;
+  gap: var(--spacer-6);
+  margin: 5px 0 0 25px;
+  min-width: 0;
 }
 
-.agent {
-  flex: 1;
+.avatar {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--body-xs-font-size);
+  font-weight: var(--font-weight-strong);
+  color: var(--text-onbrand);
+}
+
+.name {
+  font-weight: var(--font-weight-strong);
+  font-size: var(--body-sm-font-size);
+  white-space: nowrap;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-default);
-  font-weight: var(--font-weight-medium);
 }
 
-/* Shared subtle status pill. */
+.modelChip {
+  flex: none;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 var(--spacer-6);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-full);
+  font-size: var(--body-xs-font-size);
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
   gap: var(--spacer-4);
-  flex-shrink: 0;
-  min-width: 0;
-  max-width: 150px;
-  padding: 1px var(--spacer-6);
+  flex: none;
+  padding: 1px 7px;
   border-radius: var(--radius-full);
   background: var(--bg-overlay-l1);
   font-size: var(--body-xs-font-size);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.pill svg {
-  flex-shrink: 0;
-}
+.pill[data-s="running"] { color: var(--text-brand); }
+.pill[data-s="done"] { color: var(--status-success-default); }
+.pill[data-s="error"] { color: var(--status-error-default); }
+.pill[data-s="pending"],
+.pill[data-s="skipped"] { color: var(--text-tertiary); }
 
-.pillRunning {
-  color: var(--text-brand);
-}
-
-.pillDone {
-  color: var(--status-success-default);
-}
-
-.pillError {
-  color: var(--status-error-default);
-}
-
-.pillPending {
-  color: var(--text-tertiary);
-}
-
-.pillSkipped {
-  color: var(--text-tertiary);
-}
-
-/* Tiny chip showing the model a run resolves to (role override or default). */
-.modelChip {
-  flex: none;
-  max-width: 38%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 0 var(--spacer-4);
-  border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-full);
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--text-tertiary);
-  background: transparent;
-}
-
-/* Dependency edge annotation: "依赖 A · B" under the card title. */
-.depLine {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--spacer-4);
-  margin-top: var(--spacer-4);
-  font-size: 10px;
-  color: var(--text-tertiary);
-}
-
-.depGlyph {
-  flex: none;
-  color: var(--icon-secondary, var(--text-tertiary));
-}
-
-.depLabel {
-  flex: none;
-  color: var(--text-tertiary);
-}
-
-.depName {
-  flex: none;
-  padding: 0 var(--spacer-4);
-  border-radius: var(--radius-4);
-  background: var(--bg-overlay-l1);
-  color: var(--text-secondary);
-  font-weight: var(--font-weight-medium);
-}
-
-/* Functional status dots only (pulse kept for running). */
-.liveDot,
-.errDot {
-  width: 6px;
-  height: 6px;
+.pillDot {
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.liveDot {
-  background: var(--bg-brand);
+  background: currentColor;
+  flex: none;
   animation: pulse 1.4s ease-in-out infinite;
 }
 
-.errDot {
-  background: var(--status-error-default);
-}
-
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.8); }
 }
 
-/* Step stream inside a card. */
+.cardRight {
+  margin-left: auto;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.stepsCount {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.elapsed {
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: right;
+}
+
+.toggle {
+  flex: none;
+  display: inline-flex;
+  color: var(--icon-secondary);
+}
+
+.toggle svg {
+  transition: transform 0.18s ease;
+}
+
+.card[data-open="1"] .toggle svg { transform: rotate(90deg); }
+
+/* 一句话状态（五口径） */
+.msg {
+  font-size: var(--body-sm-font-size);
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg b {
+  color: var(--text-default);
+  font-weight: var(--font-weight-medium);
+}
+
+.msg[data-tone="err"] { color: var(--status-error-default); }
+
+.msgCode {
+  font-family: var(--font-family-mono);
+  font-size: var(--body-xs-font-size);
+  color: var(--text-default);
+  background: var(--bg-overlay-l1);
+  padding: 0 var(--spacer-4);
+  border-radius: var(--radius-4);
+  margin-left: var(--spacer-4);
+}
+
+/* step 流（点开贴底跟随） */
 .steps {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height 0.2s ease, opacity 0.2s ease;
+}
+
+.card[data-open="1"] .steps {
+  max-height: 190px;
+  opacity: 1;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.stepList {
   list-style: none;
-  margin: var(--spacer-6) 0 0;
-  padding: var(--spacer-6) 0 0;
+  margin: 7px 0 0;
+  padding: 7px 0 0;
   border-top: 1px solid var(--border-neutral-l1);
   display: flex;
   flex-direction: column;
@@ -258,61 +444,102 @@
 .step {
   display: flex;
   align-items: baseline;
-  gap: var(--spacer-4);
-  padding: 2px 0;
+  gap: 5px;
   font-size: var(--body-xs-font-size);
-  line-height: 1.5;
-  color: var(--text-tertiary);
+  line-height: 1.55;
   min-width: 0;
+  color: var(--text-secondary);
+  padding: 0 2px;
 }
 
-.stepError {
-  color: var(--status-error-default);
+.step[data-latest="1"] {
+  color: var(--text-default);
+  background: var(--bg-brand-popup);
+  border-radius: var(--radius-4);
 }
 
-.iconWrap {
+.step[data-err="1"] { color: var(--status-error-default); }
+
+.stepMark {
   flex: none;
-  width: 14px;
+  width: 11px;
   display: inline-flex;
   justify-content: center;
+  color: var(--text-tertiary);
   transform: translateY(1px);
 }
 
-.iconTool {
-  color: var(--icon-secondary, var(--text-tertiary));
-}
-
-.iconOk {
-  color: var(--status-success-default);
-}
-
-.iconError {
-  color: var(--status-error-default);
-}
+.step[data-ok="1"] .stepMark { color: var(--status-success-default); }
+.step[data-err="1"] .stepMark { color: var(--status-error-default); }
 
 .stepTool {
   flex: none;
-  min-width: 0;
-  max-width: 40%;
+  max-width: 66px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-secondary);
   font-weight: var(--font-weight-medium);
+  color: var(--text-secondary);
 }
 
 .stepLabel {
-  flex: 0 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-weight: var(--font-weight-code);
+}
+
+.stepDetail {
+  flex: none;
+  max-width: 38%;
+  color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.stepDetail {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* 已完成折叠 */
+.doneToggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 100%;
+  height: 26px;
+  border: 1px dashed var(--border-neutral-l2);
+  border-radius: var(--radius-6);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  cursor: pointer;
+}
+
+.doneToggle:hover {
+  color: var(--text-default);
+  border-color: var(--border-neutral-l3);
+}
+
+.doneToggle svg {
+  transition: transform 0.18s ease;
+}
+
+.doneToggle[data-open="1"] svg { transform: rotate(90deg); }
+
+.empty {
+  margin: 0;
+  padding: 2px 0 var(--spacer-4);
+  font-size: var(--body-sm-font-size);
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+/* 停止指引：面板内不做停止钮，停止走会话停止既有链路（级联 abort）。 */
+.stopHint {
+  padding: var(--spacer-8) var(--spacer-12);
+  border-top: 1px solid var(--border-neutral-l1);
+  font-size: var(--body-xs-font-size);
+  color: var(--text-tertiary);
+  text-align: center;
 }

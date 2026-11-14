@@ -42,14 +42,56 @@ export type SubagentRunStatus =
   | "error"
   | "skipped";
 
+/** Cumulative resources consumed by one run (summed over the child session's
+ *  assistant messages). `elapsedMs` is always known; token/cost fields are
+ *  omitted when the transcript carried no usage data (e.g. the run died before
+ *  the first model call). Mirrors the usage/cost shape consumed in
+ *  src/main/pi/cache-stats.ts. */
+export interface SubagentRunStats {
+  elapsedMs: number;
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  cost?: number;
+}
+
+/** Every event carries `sessionPath` (the PARENT session's file path) so the
+ *  renderer can scope panels per session instead of leaking runs across
+ *  concurrent sessions. Same field name as the Pi-Work extension's events —
+ *  do not rename. */
 export type SubagentEvent =
-  | { type: "subagent_enqueue"; runId: string; agent: string; dependsOn: string[]; model?: string }
-  | { type: "subagent_start"; runId: string; agent: string }
-  | { type: "subagent_done"; runId: string; agent: string; ok: boolean }
-  | { type: "subagent_error"; runId: string; agent: string; error: string }
-  | { type: "subagent_skip"; runId: string; agent: string }
+  | {
+      type: "subagent_enqueue";
+      sessionPath: string;
+      runId: string;
+      agent: string;
+      /** Planned task text, truncated to 120 chars. */
+      task?: string;
+      dependsOn: string[];
+      model?: string;
+    }
+  | { type: "subagent_start"; sessionPath: string; runId: string; agent: string; startedAt: number }
+  | {
+      type: "subagent_done";
+      sessionPath: string;
+      runId: string;
+      agent: string;
+      ok: boolean;
+      stats: SubagentRunStats;
+    }
+  | {
+      type: "subagent_error";
+      sessionPath: string;
+      runId: string;
+      agent: string;
+      error: string;
+      stats: SubagentRunStats;
+    }
+  | { type: "subagent_skip"; sessionPath: string; runId: string; agent: string }
   | {
       type: "subagent_step";
+      sessionPath: string;
       runId: string;
       agent: string;
       kind: "tool_call" | "tool_result";
@@ -124,6 +166,36 @@ function summarizeToolResult(content: any): string {
   return text.length > 160 ? text.slice(0, 157) + "…" : text;
 }
 
+/** Resolve the PARENT session's file path (fallback: its cwd). Tagged onto
+ *  every event as `sessionPath` so the renderer scopes panels per session. */
+function resolveSessionPath(ctx: any): string {
+  return (ctx as any)?.sessionManager?.getSessionFile?.() ?? ctx?.cwd ?? "";
+}
+
+/** Event payload for the planned task text, capped at 120 chars. */
+function truncateTask(t: string): string {
+  return t.length > 120 ? t.slice(0, 117) + "…" : t;
+}
+
+/** Sum usage/cost over the child session's assistant messages. Tolerant of a
+ *  missing/partial transcript: the result always carries `elapsedMs`, token
+ *  and cost fields appear only when at least one usage/cost was recorded. */
+function sumRunStats(msgs: unknown, startedAt: number): SubagentRunStats {
+  const stats: SubagentRunStats = { elapsedMs: Math.max(0, Date.now() - startedAt) };
+  for (const m of (Array.isArray(msgs) ? msgs : []) as any[]) {
+    if (m?.role !== "assistant") continue;
+    const u = m.usage;
+    const c = m.cost;
+    if (!u && !c) continue;
+    stats.input = (stats.input ?? 0) + (u?.input ?? 0);
+    stats.output = (stats.output ?? 0) + (u?.output ?? 0);
+    stats.cacheRead = (stats.cacheRead ?? 0) + (u?.cacheRead ?? 0);
+    stats.cacheWrite = (stats.cacheWrite ?? 0) + (u?.cacheWrite ?? 0);
+    stats.cost = (stats.cost ?? 0) + (c?.total ?? 0);
+  }
+  return stats;
+}
+
 function okResult(text: string): any {
   return {
     content: [{ type: "text", text }],
@@ -150,7 +222,8 @@ async function runOne(
   ctx: any,
   sendEvent: (e: SubagentEvent) => void,
   runId: string,
-  modelRuntime: any
+  modelRuntime: any,
+  sessionPath: string
 ): Promise<{ text: string; ok: boolean }> {
   // Resolve the role's optional model override (best-effort). Falls back to the
   // parent session's model when the override can't be resolved.
@@ -191,13 +264,11 @@ async function runOne(
   });
 
   // Bind this child to its PARENT session so a stop only kills this parent's
-  // subagents, never siblings or scheduled tasks. The parent's sessionPath
-  // comes from the tool-execution context (ctx.sessionManager.getSessionFile());
-  // fall back to the parent cwd only if that is somehow unavailable.
-  const parentPath =
-    (ctx as any)?.sessionManager?.getSessionFile?.() ?? ctx?.cwd ?? "";
-  activeSessions.set(runId, { session, parentPath });
-  sendEvent({ type: "subagent_start", runId, agent: def.name });
+  // subagents, never siblings or scheduled tasks. The parent's sessionPath was
+  // resolved once by runDag from the tool-execution context.
+  activeSessions.set(runId, { session, parentPath: sessionPath });
+  const startedAt = Date.now();
+  sendEvent({ type: "subagent_start", sessionPath, runId, agent: def.name, startedAt });
 
   // Realtime path: hook the Agent's beforeToolCall/afterToolCall (the same
   // intercept points the SDK uses internally for extensions). We count whether
@@ -219,6 +290,7 @@ async function runOne(
       const toolName = p?.toolCall?.name ?? p?.toolName;
       sendEvent({
         type: "subagent_step",
+        sessionPath,
         runId,
         agent: def.name,
         kind: "tool_call",
@@ -238,6 +310,7 @@ async function runOne(
       const toolName = p?.toolCall?.name ?? p?.toolName;
       sendEvent({
         type: "subagent_step",
+        sessionPath,
         runId,
         agent: def.name,
         kind: "tool_result",
@@ -271,6 +344,7 @@ async function runOne(
             if (b?.id) nameById.set(b.id, b?.name ?? b?.toolName);
             sendEvent({
               type: "subagent_step",
+              sessionPath,
               runId,
               agent: def.name,
               kind: "tool_call",
@@ -282,6 +356,7 @@ async function runOne(
               (b?.toolCallId && nameById.get(b.toolCallId)) || b?.name || b?.toolName;
             sendEvent({
               type: "subagent_step",
+              sessionPath,
               runId,
               agent: def.name,
               kind: "tool_result",
@@ -296,12 +371,33 @@ async function runOne(
     }
 
     const text = extractText(msgs[msgs.length - 1]);
-    sendEvent({ type: "subagent_done", runId, agent: def.name, ok: true });
+    sendEvent({
+      type: "subagent_done",
+      sessionPath,
+      runId,
+      agent: def.name,
+      ok: true,
+      stats: sumRunStats(msgs, startedAt),
+    });
     return { text, ok: true };
   } catch (err: any) {
     const aborted = (session as any)?.aborted === true;
     const msg = aborted ? "已被用户停止" : err?.message ?? String(err);
-    sendEvent({ type: "subagent_error", runId, agent: def.name, error: msg });
+    // Partial usage: whatever the child recorded before dying, best-effort.
+    let partial: unknown = [];
+    try {
+      partial = session.messages;
+    } catch {
+      /* transcript unavailable — stats degrades to elapsedMs only */
+    }
+    sendEvent({
+      type: "subagent_error",
+      sessionPath,
+      runId,
+      agent: def.name,
+      error: msg,
+      stats: sumRunStats(partial, startedAt),
+    });
     return {
       text: aborted
         ? `(agent ${def.name} 已被用户停止)`
@@ -361,6 +457,7 @@ async function runDag(
   const status = new Map<string, SubagentRunStatus>();
   const outputs = new Map<number, string>();
   const defs = new Map<number, SubagentDef | undefined>();
+  const sessionPath = resolveSessionPath(ctx);
   for (const p of planned) {
     status.set(p.runId, "pending");
     defs.set(p.index, getAgent(ctx.cwd, p.agent));
@@ -371,8 +468,10 @@ async function runDag(
     const def = defs.get(p.index);
     sendEvent({
       type: "subagent_enqueue",
+      sessionPath,
       runId: p.runId,
       agent: p.agent,
+      task: truncateTask(p.task),
       dependsOn: p.dependsOn,
       model: def?.model ?? parentModelLabel(ctx),
     });
@@ -401,7 +500,7 @@ async function runDag(
         );
         if (blocked) {
           status.set(p.runId, "skipped");
-          sendEvent({ type: "subagent_skip", runId: p.runId, agent: p.agent });
+          sendEvent({ type: "subagent_skip", sessionPath, runId: p.runId, agent: p.agent });
           finished++;
           changed = true;
         }
@@ -442,7 +541,7 @@ async function runDag(
         ? `${next.task}\n\nPrevious step result:\n${prevOut}`
         : next.task;
       if (next.acceptance) taskText = withAcceptance(taskText, next.acceptance);
-      runOne(def, taskText, ctx, sendEvent, next.runId, modelRuntime)
+      runOne(def, taskText, ctx, sendEvent, next.runId, modelRuntime, sessionPath)
         .then(({ text, ok }) => {
           outputs.set(next.index, text);
           status.set(next.runId, ok ? "done" : "error");
