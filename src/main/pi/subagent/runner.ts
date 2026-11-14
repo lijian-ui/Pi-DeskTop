@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { getAgent, SubagentDef } from "./agent-discovery";
+import { webSearchToolDefs } from "../web-search-extension";
 
 /** One unit of work delegated to a subagent role. */
 export interface SubagentTaskSpec {
@@ -261,6 +262,11 @@ async function runOne(
     noTools: def.tools ? ("builtin" as const) : undefined,
     tools: def.tools ?? undefined,
     excludeTools: def.excludeTools.length ? def.excludeTools : undefined,
+    // 角色白名单点名的 web 工具：父会话的 inline 扩展进不了子会话，
+    // 把同源定义经 customTools 注入（配置门控，未启用时自然为空）。
+    customTools: def.tools
+      ? webSearchToolDefs().filter((t) => def.tools!.includes(t.name))
+      : undefined,
   });
 
   // Bind this child to its PARENT session so a stop only kills this parent's

@@ -30,7 +30,8 @@
   align-self: flex-start;
   height: fit-content;
   max-height: 100%;
-  width: 280px;
+  /* 整栏加宽：随窗口 38vw 自适应（360–560px），DAG/run 卡要足够宽才有可读性。 */
+  width: clamp(360px, 38vw, 560px);
   min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--border-neutral-l1);

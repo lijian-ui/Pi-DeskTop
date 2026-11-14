@@ -41,20 +41,22 @@ const SCOPE_PRIORITY: Record<SubagentDef["scope"], number> = { builtin: 0, user:
  * 内置默认角色（开箱即用，最低优先级）：用户在 ~/.pi/agent/agents/ 或
  * <cwd>/.pi/agents/ 放同名 .md 即可覆盖任意一个。
  * 人设参照 billion-context 的固定花名册（reviewer/researcher/worker 三件套），
- * 只读角色限定 read/bash/grep/find/ls，worker 用全量内置工具集（tools:null）。
+ * 只读角色限定 read/bash/grep/find/ls（researcher 额外授予 web_search/web_fetch，
+ * 由 runner 经 customTools 注入、配置门控），worker 用全量内置工具集（tools:null）。
  */
 const BUILTIN_AGENTS: SubagentDef[] = [
   {
     name: "researcher",
-    description: "代码调研/侦察：探索代码库、回答问题，输出精确 file:line、签名与关键片段（只读）",
+    description: "代码/资料调研：探索代码库、联网检索外部资料，输出精确 file:line、签名与关键片段（只读）",
     aliases: ["scout", "investigate"],
-    tools: ["read", "bash", "grep", "find", "ls"],
+    tools: ["read", "bash", "grep", "find", "ls", "web_search", "web_fetch"],
     excludeTools: [],
     async: false,
     scope: "builtin",
     sourcePath: "<builtin>",
     body:
       "你是代码调研员（只读）。彻底调研代码库以回答问题：结论必须附带精确的 file:line、函数/类型签名与关键代码片段。\n" +
+      "外部资料（官方文档、库版本、报错信息、API）用 web_search 检索，再对最相关的 1-3 个 URL 用 web_fetch 读全文；引用事实必须带 [n](url)。\n" +
       "严禁修改、创建或删除任何文件——只读取和报告。报告结构：概述 → 关键证据（带引用）→ 结论。",
   },
   {
