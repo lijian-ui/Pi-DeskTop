@@ -514,7 +514,9 @@ async function runDag(
         const st = status.get(p.runId);
         const out = outputs.get(p.index) ?? "";
         if (st === "skipped") return `[${p.agent}]\n(已跳过：上游依赖失败)`;
-        if (st === "error") return `[${p.agent}]\n(任务失败)`;
+        // 失败必须把 runOne 捕获的真实错误带回主会话（outputs 里是
+        // `(agent X failed: <msg>)`），否则模型和用户只能看到「(任务失败)」四字。
+        if (st === "error") return `[${p.agent}]\n${out || "(任务失败)"}`;
         return `[${p.agent}]\n${out}`;
       })
       .join("\n\n---\n\n");
