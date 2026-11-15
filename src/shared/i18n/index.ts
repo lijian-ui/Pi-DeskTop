@@ -452,8 +452,6 @@ const zhMessages = {
   "chat.breakdownTotal": "合计",
   "chat.breakdownProviderReported": "Provider 报称",
   "chat.breakdownUnavailable": "n/a",
-  "chat.breakdownNote":
-    "当前会话的上下文 token 用量基于最近一次 LLM 回复；明细为估算口径，与 provider 计费口径不互相换算。",
   "cache.title": "缓存命中统计",
   "cache.hitRate": "命中率",
   "cache.hit": "缓存命中",
@@ -1180,8 +1178,6 @@ const enMessages: Record<string, string> = {
   "chat.breakdownTotal": "Total",
   "chat.breakdownProviderReported": "Provider-reported",
   "chat.breakdownUnavailable": "n/a",
-  "chat.breakdownNote":
-    "Current session context usage comes from the last LLM response; the breakdown is an estimate and never converts to the provider's billed count.",
   "cache.title": "Cache Hit Stats",
   "cache.hitRate": "Hit rate",
   "cache.hit": "Cache hit",

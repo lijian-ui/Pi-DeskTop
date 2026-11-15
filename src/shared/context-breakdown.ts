@@ -82,6 +82,33 @@ export function isSummaryMessage(msg: BreakdownMessage): boolean {
   return msg.summary === true || (typeof msg.text === "string" && msg.text.startsWith(SUMMARY_HEADER));
 }
 
+/** compress 工具名（与 src/main/pi/compress/piwork-compress.ts 注册名一致）。 */
+export const COMPRESS_TOOL_NAME = "compress";
+
+/**
+ * 从 compress 调用的参数重建注入发送视图的摘要文本（拼接形态与 piwork-compress.ts
+ * 的 summaryText 逐字一致）。
+ *
+ * wc-summary 摘要只在 `context` 事件逐回合注入发送视图，**从不落盘转录**，明细里
+ * 只能从转录中 compress toolCall 的 summary 参数恢复回 summaries 桶。防御式解析：
+ * 校验不通过的参数（失败的调用）返回空数组 —— 它们本来也没作为摘要生效。
+ */
+export function reconstructCompressSummaries(args: unknown): string[] {
+  if (!args || typeof args !== "object") return [];
+  const raw = args as { topic?: unknown; content?: unknown };
+  const topTopic = typeof raw.topic === "string" && raw.topic.trim() !== "" ? raw.topic : undefined;
+  if (!Array.isArray(raw.content)) return [];
+  const out: string[] = [];
+  for (const item of raw.content) {
+    if (!item || typeof item !== "object") continue;
+    const e = item as { summary?: unknown; topic?: unknown };
+    if (typeof e.summary !== "string" || e.summary === "") continue;
+    const topic = typeof e.topic === "string" && e.topic.trim() !== "" ? e.topic : topTopic;
+    out.push(topic ? `${SUMMARY_HEADER} — ${topic}\n${e.summary}` : `${SUMMARY_HEADER}\n${e.summary}`);
+  }
+  return out;
+}
+
 /**
  * 分桶。判定顺序不许改：summaries → tool(contentType) → system → code(含 ```) → text。
  * 摘要必须抢在 tool 前（摘要由 compress 工具产出，形态上是 tool 结果）；tool 必须

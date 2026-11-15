@@ -56,7 +56,6 @@ export default function ContextBreakdownPanel({
       {breakdown.providerTokens != null && (
         <Row k={t("chat.breakdownProviderReported")} v={value(breakdown.providerTokens)} />
       )}
-      <div className={styles.note}>{t("chat.breakdownNote")}</div>
     </div>
   );
 }

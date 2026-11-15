@@ -67,7 +67,12 @@ import {
 } from "./tool-catalog";
 import type { ToolMode } from "../../shared/tool-catalog-types";
 import { SCHEDULED_TRIGGER_MESSAGE } from "../../shared/schedule";
-import { countTokens, computeContextBreakdown } from "../../shared/context-breakdown";
+import {
+  COMPRESS_TOOL_NAME,
+  countTokens,
+  computeContextBreakdown,
+  reconstructCompressSummaries,
+} from "../../shared/context-breakdown";
 import type { BreakdownMessage, ContextBreakdown } from "../../shared/context-breakdown";
 // Pure helper (mirrors the SDK's cwd → sessions-dir encoding). im-session-map
 // only imports this module as a *type*, so there is no runtime import cycle.
@@ -1150,7 +1155,10 @@ function textFromContent(content: unknown): string {
   return text;
 }
 
-function projectMessageForBreakdown(msg: unknown): BreakdownMessage | null {
+function projectMessageForBreakdown(
+  msg: unknown,
+  liveCompressCallIds: ReadonlySet<string>,
+): BreakdownMessage | null {
   if (!msg || typeof msg !== "object") return null;
   const m = msg as { role?: unknown; content?: unknown; summary?: unknown };
   const role = typeof m.role === "string" ? m.role : "";
@@ -1161,14 +1169,26 @@ function projectMessageForBreakdown(msg: unknown): BreakdownMessage | null {
     let calls = 0;
     for (const block of blocks) {
       if (!block || typeof block !== "object") continue;
-      const b = block as { type?: string; text?: string; thinking?: string; name?: string; arguments?: unknown };
+      const b = block as {
+        type?: string;
+        text?: string;
+        thinking?: string;
+        id?: string;
+        name?: string;
+        arguments?: unknown;
+      };
       if (b.type === "text" && typeof b.text === "string") text += text ? `\n${b.text}` : b.text;
       else if (b.type === "thinking" && typeof b.thinking === "string")
         thinking += thinking ? `\n${b.thinking}` : b.thinking;
       else if (b.type === "toolCall") {
         // 工具名 + 入参同样占上下文；这条 contentType=tool-call，整条落 tool 桶。
         calls += 1;
-        const call = `${b.name ?? ""}${safeStringify(b.arguments)}`;
+        // 成功生效的 compress 调用在发送视图里整体隐藏（compress 扩展的 hide 规则），
+        // 其 summary 参数单独重建后落 summaries 桶 —— 这里只计工具名，免得同一段
+        // 摘要在 tool 桶再算一遍。失败调用的入参照旧计。
+        const hidden =
+          b.name === COMPRESS_TOOL_NAME && typeof b.id === "string" && liveCompressCallIds.has(b.id);
+        const call = hidden ? (b.name ?? "") : `${b.name ?? ""}${safeStringify(b.arguments)}`;
         text += text ? `\n${call}` : call;
       }
     }
@@ -1191,24 +1211,72 @@ function projectMessageForBreakdown(msg: unknown): BreakdownMessage | null {
 }
 
 /**
+ * 生效中的 compress 调用 id：有 toolResult 且未报错（ToolResultMessage.toolName /
+ * isError 直给，不用回扫 assistant）。失败的调用没产生摘要，其入参照常落 tool 桶。
+ */
+function collectLiveCompressCallIds(projected: readonly any[]): Set<string> {
+  const ok = new Set<string>();
+  const failed = new Set<string>();
+  for (const pe of projected) {
+    const msgs: unknown[] = Array.isArray(pe?.messages) ? pe.messages : [];
+    for (const raw of msgs) {
+      const m = raw as { role?: unknown; toolName?: unknown; toolCallId?: unknown; isError?: unknown };
+      if (m?.role !== "toolResult" || m.toolName !== COMPRESS_TOOL_NAME) continue;
+      if (typeof m.toolCallId !== "string") continue;
+      if (m.isError === true) failed.add(m.toolCallId);
+      else ok.add(m.toolCallId);
+    }
+  }
+  for (const id of failed) ok.delete(id);
+  return ok;
+}
+
+/** 从一条 assistant 消息里取生效 compress 调用的摘要重建文本。 */
+function liveCompressSummaries(raw: unknown, liveCompressCallIds: ReadonlySet<string>): string[] {
+  const m = raw as { role?: unknown; content?: unknown };
+  if (m?.role !== "assistant" || !Array.isArray(m.content)) return [];
+  const out: string[] = [];
+  for (const block of m.content) {
+    const b = block as { type?: string; name?: string; id?: string; arguments?: unknown } | null;
+    if (
+      b?.type === "toolCall" &&
+      b.name === COMPRESS_TOOL_NAME &&
+      typeof b.id === "string" &&
+      liveCompressCallIds.has(b.id)
+    ) {
+      out.push(...reconstructCompressSummaries(b.arguments));
+    }
+  }
+  return out;
+}
+
+/**
  * 发送视图 → 分类输入。用 buildSessionProjection() 而不是 getEntries()：它就是
  * 「真正发给模型的那份」——压缩边界之前的条目已被摘要替掉、context_edit 已生效，
  * 所以被跳过的条目不会在这里被算进去。
+ *
+ * 自研 compress 的 wc-summary 摘要不落盘（只逐回合注入 context），这里从生效
+ * compress 调用的 summary 参数重建摘要、以 summary:true 补进 summaries 桶；被摘要
+ * 覆盖的原文仍留在各自桶里（判定覆盖需要重放折叠逻辑，超出明细面板的估算精度诉求）。
  */
 function projectBreakdownMessages(session: any): { messages: BreakdownMessage[]; estimated: boolean } {
   const projection = session?.sessionManager?.buildSessionProjection?.();
   const projected: any[] = Array.isArray(projection?.entries) ? projection.entries : [];
+  const liveCompressCallIds = collectLiveCompressCallIds(projected);
   const out: BreakdownMessage[] = [];
   for (const pe of projected) {
     const sourceType = (pe?.sourceEntry as { type?: string } | undefined)?.type;
     const isBoundary = sourceType === "compaction" || sourceType === "branch_summary";
     const msgs: unknown[] = Array.isArray(pe?.messages) ? pe.messages : [];
     for (const raw of msgs) {
-      const pm = projectMessageForBreakdown(raw);
+      const pm = projectMessageForBreakdown(raw, liveCompressCallIds);
       if (!pm) continue;
       // 边界条目带出的 systemMessage 仍算 system 开销，其余就是摘要本体。
       if (isBoundary && pm.role !== "system") pm.summary = true;
       out.push(pm);
+      for (const text of liveCompressSummaries(raw, liveCompressCallIds)) {
+        out.push({ role: "compress-summary", text, contentType: "text", summary: true });
+      }
     }
   }
   if (out.length <= BREAKDOWN_MAX_MESSAGES) return { messages: out, estimated: false };

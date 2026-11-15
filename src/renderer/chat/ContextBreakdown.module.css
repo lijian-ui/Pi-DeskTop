@@ -56,12 +56,3 @@
 .rowStrong .rowVal {
   font-weight: 600;
 }
-
-.note {
-  margin-top: 8px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-neutral-l2);
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--text-tertiary);
-}
