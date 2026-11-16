@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 import type { Message } from "../store/agent-store";
 import type { CodeAttachment } from "../store/ui-store";
 import SkillInvocation from "./SkillInvocation";
@@ -7,6 +7,9 @@ import { Code2, SquareTerminal, ChevronRight, Copy, Check, ListChecks } from "lu
 import { useTranslation } from "react-i18next";
 import { toDataUrl } from "../utils/image";
 import styles from "./UserMessage.module.css";
+
+/** 正文折叠高度：超过它就把正文裁起来，气泡内给「展示更多」。 */
+const COLLAPSED_MAX_HEIGHT = 260;
 
 /** Map a file path to a (best-effort) highlight.js language id for the fence. */
 function langOf(filePath: string): string {
@@ -171,6 +174,16 @@ function UserMessage({ message, highlight, taskPrompt }: Props) {
   const [zoomed, setZoomed] = useState<string | null>(null);
   // 气泡下方 meta：发送时间 + 一键复制已发送内容
   const [copied, setCopied] = useState(false);
+  // 长正文折叠：默认收起，超长的内容靠气泡内的「展示更多」按需展开。
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const textRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    // overflow:hidden 下 scrollHeight 依然是完整内容高度，可直接判定要不要给折叠入口。
+    setOverflowing(el.scrollHeight > COLLAPSED_MAX_HEIGHT);
+  }, [message.content]);
   const time = message.timestamp
     ? new Date(message.timestamp).toLocaleString([], {
         year: "numeric",
@@ -233,9 +246,26 @@ function UserMessage({ message, highlight, taskPrompt }: Props) {
                 </div>
               )}
               {message.content.trim() && (
-                <Markdown content={message.content} linkifyPaths breaks />
+                <div
+                  ref={textRef}
+                  className={`${styles.text} ${overflowing && !expanded ? styles.textClamped : ""}`}
+                  style={overflowing && !expanded ? { maxHeight: COLLAPSED_MAX_HEIGHT } : undefined}
+                >
+                  <Markdown content={message.content} linkifyPaths breaks />
+                  {overflowing && !expanded && <div className={styles.textFade} aria-hidden />}
+                </div>
               )}
             </>
+          )}
+          {/* 超长正文的折叠入口（气泡内左下角） */}
+          {overflowing && !parsed && (
+            <button
+              type="button"
+              className={styles.expandBtn}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded ? t("chat.showLess") : t("chat.showMore")}
+            </button>
           )}
         </div>
         {/* 定时任务触发消息：气泡下方挂一个可展开的「任务详情」（真正的任务提示词） */}
