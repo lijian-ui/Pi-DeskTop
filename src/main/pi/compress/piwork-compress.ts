@@ -95,7 +95,7 @@ const MIN_RANGE_CHARS = 5000;
 const MIN_SUMMARY_CHARS = 50;
 const MAX_SUMMARY_CHARS = 20000;
 /** 增长门（ref: kernel src_config.ts:9-24）。 */
-const MIN_CONTEXT_LIMIT_PCT = 0.45;
+const MIN_CONTEXT_LIMIT_PCT = 0.3; // BC 默认 0.45，本实现下调到 30%（nudge 与手动压缩硬门共用）
 const MAX_CONTEXT_LIMIT_PCT = 0.75;
 const GROWTH_FLOOR = 50000;
 const MIN_GROWTH_RATIO = 0.45;
@@ -1017,8 +1017,9 @@ export function refreshView(state: SessionState, messages: readonly AgentMessage
     // A. 首次见面即大量可压（ref: kernel firstSightMassReady :1756-1760）
     if (usage >= MIN_CONTEXT_LIMIT_PCT * win && pendingTokens >= GROWTH_FLOOR) nudged = true;
     else state.baseline = usage; // 只是没触发，也要把基线记下来供 B 通路测增长
-  } else if (pendingTokens >= GROWTH_FLOOR) {
-    // B. 常规增长门：可压量充足时门槛降到 22.5K（ref: :1746-1751）
+  } else if (usage >= MIN_CONTEXT_LIMIT_PCT * win && pendingTokens >= GROWTH_FLOOR) {
+    // B. 常规增长门：可压量充足时门槛降到 22.5K（ref: :1746-1751）。
+    // 占用地板与 compress 工具的硬门同口径 —— 否则低占用时一边催压一边 REFUSED。
     const need = GROWTH_FLOOR * MIN_GROWTH_RATIO;
     if (growth >= need) nudged = true;
   }
@@ -1160,7 +1161,7 @@ WHEN NOT TO COMPRESS
 - Important user messages — exact intent, constraints, acceptance criteria. Exclude them from
   ranges instead of compressing them.
 - Protected tool outputs — hard-excluded, they stay visible.
-- Window usage below 45% — the tool refuses and reports the real numbers (e.g. "36% (94K/256K)").
+- Window usage below 30% — the tool refuses and reports the real numbers (e.g. "22% (56K/256K)").
   Message count is never the trigger; window pressure is.
 - After a rejected call: do not probe other ranges the same turn. One attempt per turn — take the
   reported reason, keep working, and reconsider when usage crosses the gate.
@@ -1277,14 +1278,14 @@ const compressTool = defineTool({
   label: "Compress",
   // ref: BC compress-tool.ts:52-60（acp tag → wc tag 措辞）
   description:
-    "Replace older conversation ranges with detailed summaries you write. Single range: compress({ content: [{ startId, endId, summary }] }). Batch: compress({ content: [{ topic, startId, endId, summary }, ...] }) — each entry gets its own summary. The tool reports real window usage and refuses below 45%.",
+    "Replace older conversation ranges with detailed summaries you write. Single range: compress({ content: [{ startId, endId, summary }] }). Batch: compress({ content: [{ topic, startId, endId, summary }, ...] }) — each entry gets its own summary. The tool reports real window usage and refuses below 30%.",
   promptSnippet: "compress({ content: [{ startId, endId, summary }] }) or batch multiple ranges",
   promptGuidelines: [
     "Each message has a wc tag with its mNNNNN ref, token size, and type. Compress ranges by their refs.",
     "Batch multiple unrelated ranges in one call — each gets its own topic and summary.",
     "Write dense, self-contained summaries — preserve file paths, signatures, errors, and decisions verbatim.",
     "Never compress content the current step is actively using.",
-    "Compress under window pressure only (≥45% usage); a long transcript by itself is not a reason.",
+    "Compress under window pressure only (≥30% usage); a long transcript by itself is not a reason.",
     "One failed compress per turn: do not probe other ranges — report the reason and keep working.",
   ],
   parameters: compressParams,
