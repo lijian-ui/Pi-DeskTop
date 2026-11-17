@@ -19,6 +19,7 @@ import { FeishuAdapter } from "./feishu/feishu-adapter";
 import { join, basename } from "node:path";
 import { stat } from "node:fs/promises";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { readExtensionToolFeaturesSync } from "../pi/tool-catalog";
 
 /**
  * Split "/name args" → { name, args }. Multi-slash tolerated.
@@ -41,12 +42,31 @@ const HELP_TEXT = [
   "- /workspace <路径> —— 切换工作区（需 /new 生效）",
   "- /sessions —— 列出全部会话",
   "- /continue <会话id> —— 继续已有会话",
-  "- /compact [聚焦指令] —— 压缩上下文，可指定摘要侧重点",
   "- /allow <ID> / /deny <ID> —— 允许 / 拒绝命令审批",
   "- /stop —— 停止当前正在运行的任务（含正在执行的命令）",
   "- /reset /clear /new —— 开启新会话",
   "其他内容将直接发送给 AI 处理。",
 ].join("\n");
+
+/**
+ * compress 扩展启用时，内置压缩（含手动 /compact）会被扩展的 session_before_compact
+ * 取消掉 —— 清单里再列 /compact 就是给了个死入口，所以按开关决定是否追加那一行。
+ */
+function compressToolEnabled(): boolean {
+  try {
+    return readExtensionToolFeaturesSync().some((f) => f.key === "compress" && f.enabled);
+  } catch {
+    return false;
+  }
+}
+
+function helpText(compressOn: boolean): string {
+  if (compressOn) return HELP_TEXT;
+  return HELP_TEXT.replace(
+    "- /allow",
+    "- /compact [聚焦指令] —— 压缩上下文，可指定摘要侧重点\n- /allow",
+  );
+}
 
 /**
  * Minimum interval between streaming card updates. DingTalk's AI-card
@@ -627,7 +647,7 @@ export class ImGateway {
       return true;
     }
     if (lower === "help") {
-      await ctx.adapter.sendText(ctx.peer, HELP_TEXT);
+      await ctx.adapter.sendText(ctx.peer, helpText(compressToolEnabled()));
       return true;
     }
     if (lower === "model") {
@@ -655,6 +675,14 @@ export class ImGateway {
       return true;
     }
     if (lower === "compact") {
+      // compress 扩展开着时内置压缩被 cancel，走到下面只会回一句误导性的"压缩失败"。
+      if (compressToolEnabled()) {
+        await ctx.adapter.sendText(
+          ctx.peer,
+          "上下文压缩已由 compress 工具接管（模型按消息区间自写摘要）。需要压缩时，直接告诉 AI 要压哪段即可。",
+        );
+        return true;
+      }
       try {
         // Forward any trailing text as the summary's "Additional focus"
         // (mirrors the desktop composer's /compact <instructions>).
