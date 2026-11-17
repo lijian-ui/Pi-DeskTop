@@ -644,6 +644,26 @@ export default function ChatComposer() {
   const slashQuery = slashMatch && !text.includes(" ") ? slashMatch[1].toLowerCase() : null;
   const showSlash = slashQuery !== null;
 
+  // compress 扩展开启后，内置压缩（含手动 /compact）会被扩展的 session_before_compact
+  // 取消掉 —— 面板里再摆一个 /compact 就是点了没反应的死入口。打开面板时现取开关状态，
+  // 设置页刚切换完也能立刻反映。
+  const [compressOn, setCompressOn] = useState(false);
+  useEffect(() => {
+    if (!showSlash) return;
+    let alive = true;
+    window.piDesk
+      .getExtensionTools()
+      .then((feats) => {
+        if (alive) setCompressOn(feats.some((f) => f.key === "compress" && f.enabled));
+      })
+      .catch(() => {
+        if (alive) setCompressOn(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [showSlash]);
+
   type CommandEntry = { kind: "command"; name: string; description: string };
   type SkillEntry = { kind: "skill"; info: SkillInfo };
   type SlashEntry = CommandEntry | SkillEntry;
@@ -663,7 +683,7 @@ export default function ChatComposer() {
     };
   };
   const COMMANDS: { name: string; description: string }[] = [
-    { name: "compact", description: t("slash.compactDesc") },
+    ...(compressOn ? [] : [{ name: "compact", description: t("slash.compactDesc") }]),
     ...extensionCommands
       .filter((c) => c.name && c.name !== "compact")
       .map(localizeCommand),
