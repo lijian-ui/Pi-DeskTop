@@ -18,9 +18,6 @@ import { listAgents } from "./agent-discovery";
  *     prompt via the `before_agent_start` hook, so the model knows the roles
  *     exist and is nudged to delegate exploratory/parallelizable tasks.
  *  2. Registers the `subagent` TOOL with a trigger-rich description.
- *  3. Registers a `/subagent` SLASH COMMAND that lists available roles (a
- *     human-readable reference). Delegation itself is done by the LLM via the
- *     `subagent` tool (nudged by ① + ②), not by this command.
  */
 export function createSubagentExtension(
   getWebContents: () => WebContents | null,
@@ -68,36 +65,6 @@ export function createSubagentExtension(
         if (!guidance) return;
         return { systemPrompt: `${event.systemPrompt}\n${guidance}` };
       });
-
-      // ③ Slash command: /subagent (no args) lists available roles — a
-      // human-readable reference. Delegation is done by the LLM via the
-      // subagent TOOL (nudged by ① + ②); this command no longer executes.
-      pi.registerCommand("subagent", {
-        description: "列出可用子代理角色。要委派任务，直接让 AI 调用 subagent 工具即可。",
-        handler: async (_args: string, ctx: any) => {
-          const agents = listAgents(ctx?.cwd ?? "");
-          const body = agents.length
-            ? "可用子代理角色：\n" + agents.map((a) => `- ${a.name}: ${a.description}`).join("\n")
-            : "暂无子代理角色。在 ~/.pi/agent/agents/ 或 <cwd>/.pi/agents/ 放 <name>.md 即可定义。";
-          try {
-            ctx?.ui?.notify(body, "info");
-          } catch {
-            /* ui may be unavailable outside interactive mode */
-          }
-          try {
-            (ctx?.sessionManager as any)?.appendMessage({
-              role: "custom",
-              customType: "subagent-roles",
-              content: body,
-              display: true,
-              details: { kind: "roles" },
-              timestamp: Date.now(),
-            });
-          } catch {
-            /* ignore persistence failure */
-          }
-        },
-      } as any);
 
       // ② Tool: delegate to a subagent (single / parallel / chain).
       pi.registerTool({
