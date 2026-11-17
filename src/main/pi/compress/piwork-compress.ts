@@ -539,7 +539,7 @@ export function resolveAndValidateBatch(opts: {
     }
     if (keptSet.size === 0) {
       throw new CompressValidationError(
-        `Range is entirely within the protected zone (the last 5 messages and/or the most recent user message): ${protectedRefsInRange.join(", ")}. Adjust startId/endId to older messages.`,
+        `Range is entirely within the protected zone (the last 5 messages and/or the most recent user message): ${protectedRefsInRange.join(", ")}. Protected refs are hard-excluded — retargeting them in another call cannot succeed.`,
       );
     }
     if (excludedRefs.length > 0) {
@@ -614,7 +614,7 @@ export function resolveAndValidateBatch(opts: {
   const totalChars = accepted.reduce((n, r) => n + r.chars, 0);
   if (totalChars < MIN_RANGE_CHARS) {
     throw new CompressValidationError(
-      `Total compressible content too small (${totalChars} chars across ${accepted.length} range(s), min ${MIN_RANGE_CHARS}). Combine more messages into your range(s).`,
+      `Total compressible content too small (${totalChars} chars across ${accepted.length} range(s), min ${MIN_RANGE_CHARS}). Nothing here is worth reclaiming yet — do not split it into another call.`,
     );
   }
 
@@ -854,6 +854,8 @@ export interface SessionState {
   protectedRefs: Set<string>;
   blocks: FoldBlock[];
   usage: number;
+  /** 窗口大小（低占用硬门 + 用量回显用），0 = 未知。 */
+  contextWindow: number;
   userCount: number;
   /** 增长门基线；0 = 尚未记录。 */
   baseline: number;
@@ -872,6 +874,7 @@ export function createSessionState(): SessionState {
     protectedRefs: new Set<string>(),
     blocks: [],
     usage: 0,
+    contextWindow: 0,
     userCount: 0,
     baseline: 0,
     lastNudge: 0,
@@ -1079,6 +1082,7 @@ export function refreshView(state: SessionState, messages: readonly AgentMessage
   state.protectedRefs = protectedRefs;
   state.blocks = blocks;
   state.usage = finalUsage;
+  state.contextWindow = win;
   const userCount = core.filter((m) => m.role === "user").length;
   if (userCount > state.userCount) {
     state.userCount = userCount;
@@ -1156,6 +1160,10 @@ WHEN NOT TO COMPRESS
 - Important user messages — exact intent, constraints, acceptance criteria. Exclude them from
   ranges instead of compressing them.
 - Protected tool outputs — hard-excluded, they stay visible.
+- Window usage below 45% — the tool refuses and reports the real numbers (e.g. "36% (94K/256K)").
+  Message count is never the trigger; window pressure is.
+- After a rejected call: do not probe other ranges the same turn. One attempt per turn — take the
+  reported reason, keep working, and reconsider when usage crosses the gate.
 
 HOW TO COMPRESS
 The summary you write becomes the ONLY record of the replaced range. Make it self-contained: a
@@ -1188,7 +1196,8 @@ authoritative record; the original text remains in the session transcript for th
 
 // ── compress 工具 ──────────────────────────────────────────────────────────
 const DEAD_REPEAT_REJECT = 2;
-const MAX_COMPRESS_ATTEMPTS = 3;
+/** 一轮内累计失败上限：超过就硬停，绝不让模型换个范围接着试。 */
+const MAX_COMPRESS_ATTEMPTS = 2;
 
 const compressRangeSpec = Type.Object({
   startId: Type.String({ description: 'Start ref "m00005" (from the wc tag).' }),
@@ -1223,7 +1232,13 @@ function renderSuccess(state: SessionState, created: FoldBlock[], warnings: stri
   const before = state.usage > 0 ? state.usage : state.core.reduce((n, m) => n + m.tokens, 0);
   const after = Math.max(0, before - reclaimed);
   const spans = created.map((b) => `${b.blockId}=${b.startRef}–${b.endRef}`).join(", ");
-  const lines = [`▣ wc | ${fmtK(before)} → ${fmtK(after)} tokens (~${fmtK(reclaimed)} reclaimed, blocks: ${spans})`];
+  // 用量回显：模型自己看不见窗口占用，成功/失败都得把真实数字给它。
+  const win = state.contextWindow;
+  const head =
+    win > 0
+      ? `▣ wc | ${fmtK(before)} → ${fmtK(after)} tokens (${pctOf(before, win)} → ${pctOf(after, win)} of ${fmtK(win)} window; ~${fmtK(reclaimed)} reclaimed, blocks: ${spans})`
+      : `▣ wc | ${fmtK(before)} → ${fmtK(after)} tokens (~${fmtK(reclaimed)} reclaimed, blocks: ${spans})`;
+  const lines = [head];
   for (const b of created) {
     lines.push(
       ` · ${b.blockId} summary ${b.summary.length}ch · head "${headTail(b.summary, 60, false)}" … tail "${headTail(b.summary, 40, true)}"`,
@@ -1262,13 +1277,15 @@ const compressTool = defineTool({
   label: "Compress",
   // ref: BC compress-tool.ts:52-60（acp tag → wc tag 措辞）
   description:
-    "Replace older conversation ranges with detailed summaries you write. Single range: compress({ content: [{ startId, endId, summary }] }). Batch: compress({ content: [{ topic, startId, endId, summary }, ...] }) — each entry gets its own summary.",
+    "Replace older conversation ranges with detailed summaries you write. Single range: compress({ content: [{ startId, endId, summary }] }). Batch: compress({ content: [{ topic, startId, endId, summary }, ...] }) — each entry gets its own summary. The tool reports real window usage and refuses below 45%.",
   promptSnippet: "compress({ content: [{ startId, endId, summary }] }) or batch multiple ranges",
   promptGuidelines: [
     "Each message has a wc tag with its mNNNNN ref, token size, and type. Compress ranges by their refs.",
     "Batch multiple unrelated ranges in one call — each gets its own topic and summary.",
     "Write dense, self-contained summaries — preserve file paths, signatures, errors, and decisions verbatim.",
     "Never compress content the current step is actively using.",
+    "Compress under window pressure only (≥45% usage); a long transcript by itself is not a reason.",
+    "One failed compress per turn: do not probe other ranges — report the reason and keep working.",
   ],
   parameters: compressParams,
   executionMode: "sequential",
@@ -1284,6 +1301,35 @@ const compressTool = defineTool({
   },
 });
 
+/** 占用百分比（整数），用于把窗口余量如实回给模型。 */
+function pctOf(used: number, win: number): string {
+  if (win <= 0) return "?";
+  return `${Math.round((used / win) * 100)}%`;
+}
+
+/**
+ * 低占用硬门（解决"36% 就去压缩"）：模型看不见自己的窗口占用，只凭"会话很长"的
+ * 错觉激进压缩。占用没到增长门（与 §5.7 A 通路同口径）就直接拒，并把真实数字回给它。
+ */
+function contextGateMessage(state: SessionState): string {
+  const win = state.contextWindow;
+  const used = state.usage;
+  if (win <= 0 || used <= 0) return ""; // 探测不到就不猜测，放行给常规校验
+  const pct = used / win;
+  if (pct >= MIN_CONTEXT_LIMIT_PCT) return "";
+  return (
+    `REFUSED — context usage is only ${pctOf(used, win)} (${fmtK(used)}/${fmtK(win)}). ` +
+    `Compression needs at least ${Math.round(MIN_CONTEXT_LIMIT_PCT * 100)}% of the window; ` +
+    "there is nothing to reclaim yet. A long message count is not the trigger — window pressure is.\n" +
+    `Do NOT call compress again this turn. Continue the task; reconsider only once usage passes ${Math.round(MIN_CONTEXT_LIMIT_PCT * 100)}%.`
+  );
+}
+
+/** 一次失败就劝退：不把模型引到"再换个范围试试"的路上。 */
+const NO_RETRY_STEER =
+  "One failed compress is enough — do not probe other ranges this turn. Continue the task; " +
+  "call compress again only when the reported usage crosses the gate or a listed range is clearly worth reclaiming.";
+
 /**
  * 工具执行（拆成函数便于冒烟脚本直接调用）。
  * 校验对象是**上一次 context 事件留下的快照** —— 模型所见即校验所据。
@@ -1296,6 +1342,8 @@ export function runCompress(
   if (state.core.length === 0) {
     throw new Error("No conversation snapshot yet — call compress on a later turn.");
   }
+  const gate = contextGateMessage(state);
+  if (gate) throw new Error(gate);
   const sig = compressInputSignature(params);
   try {
     const entries = parseCompressEntries(params);
@@ -1331,13 +1379,16 @@ export function runCompress(
       const ranges = computeRanges(state.core, state.refs, covered, state.protectedRefs);
       throw new Error(
         `REJECTED — the same range failed twice and is not compressible. ${message}\n` +
-          (ranges.length > 0 ? renderRanges(ranges) : "No compressible range (≥5000 chars) is available right now."),
+          (ranges.length > 0 ? renderRanges(ranges) : "No compressible range (≥5000 chars) is available right now.") +
+          `\n${NO_RETRY_STEER}`,
       );
     }
     if (state.failCount >= MAX_COMPRESS_ATTEMPTS) {
-      throw new Error("PAUSED — 3 compress attempts already failed this turn. Stop and continue working.");
+      throw new Error(
+        `PAUSED — ${MAX_COMPRESS_ATTEMPTS} compress attempts already failed this turn. Stop and continue working.`,
+      );
     }
-    throw new Error(message);
+    throw new Error(`${message}\n${NO_RETRY_STEER}`);
   }
 }
 
