@@ -204,5 +204,48 @@ export const todoExtension: InlineExtension = {
         },
       }),
     );
+
+    // —— 结算兜底（Stop-hook 语义）——
+    // 模型常在干完最后一步后直接写总结，清单永远停在 in_progress。提示词压不住
+    // （见 promptGuidelines 已有同义要求），所以在 agent_before_settle 上做确定
+    // 性拦截：清单还有非 completed 项时，注入一条 custom_message（会被转成
+    // user 消息进下一次请求）并 continue: true，强制模型先把状态落定。
+    // 每个用户 run 最多 nudge 一次（无条件 continue 会死循环，见 SDK 文档）。
+    let nudgedThisRun = false;
+
+    pi.on("before_agent_start", () => {
+      // 只观察不改提示词（不碰 prompt 缓存）。新 run 开始 → 重新给一次机会；
+      // nudge 触发的续跑不经过 before_agent_start，标记不会被误清。
+      nudgedThisRun = false;
+    });
+
+    pi.on("agent_before_settle", (event, ctx) => {
+      if (!readTodoConfigSync().enabled) return;
+      if (event.outcome !== "completed" || nudgedThisRun) return;
+      if (!event.context.canContinue) return;
+
+      const snapshot = replayTodoFromEntries(ctx.sessionManager.getBranch());
+      if (!snapshot) return;
+      const open = snapshot.tasks.filter((t) => t.status !== "completed" && t.status !== "deleted");
+      if (open.length === 0) return;
+
+      nudgedThisRun = true;
+      const list = open.map((t) => `#${t.id} [${t.status}] ${t.content}`).join("\n");
+      return {
+        entries: [
+          ...event.entries,
+          {
+            type: "custom_message" as const,
+            customType: "todo/settle-nudge",
+            content:
+              `Your task checklist still has ${open.length} item(s) not at a final state:\n${list}\n` +
+              "Before finishing: update each one — completed if actually done; if not applicable now, " +
+              "reopen as pending or delete. If an update errors, fix the call. Then give your final answer.",
+            display: false,
+          },
+        ],
+        continue: true,
+      };
+    });
   },
 };
