@@ -919,13 +919,12 @@ export default function MemoryPage() {
       {error && <p className={styles.error}>{error}</p>}
       {rulesSaved && <p className={switchStyles.savedMsg}>{t("rules.saved")}</p>}
 
-      {/* ── Rules editor modal ── */}
+      {/* ── Rules editor modal ──
+          点遮罩不关闭：在文本区拖选文字、松手落在遮罩上会误关弹窗丢掉未保存的编辑。
+          关闭仍走右上角 X / 取消 / 保存。 */}
       {editorOpen && (
-        <div className={switchStyles.editorOverlay} onClick={() => setEditorOpen(false)}>
-          <div
-            className={switchStyles.editorModal}
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className={switchStyles.editorOverlay}>
+          <div className={switchStyles.editorModal}>
             <div className={switchStyles.editorHeader}>
               <h3 className={switchStyles.editorTitle}>{t("rules.editorTitle")}</h3>
               <button
