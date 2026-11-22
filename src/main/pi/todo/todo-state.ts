@@ -131,7 +131,10 @@ export function applyTodoMutation(state: TodoSnapshot, mutation: TodoMutation): 
         .filter((s) => s.length > 0)
         .map((s) => s.slice(0, MAX_TODO_TEXT));
       if (subjects.length === 0) {
-        return errorResult(state, "create needs at least one non-empty task");
+        return errorResult(
+          state,
+          "create needs at least one non-empty task — pass tasks[] (array) or content (single task)",
+        );
       }
       if (state.tasks.length + subjects.length > MAX_TODOS) {
         return errorResult(

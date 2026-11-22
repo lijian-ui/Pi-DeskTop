@@ -160,7 +160,11 @@ export const todoExtension: InlineExtension = {
             | { action: "clear" };
 
           if (action === "create") {
-            mutation = { action, tasks: Array.isArray(params.tasks) ? (params.tasks as string[]) : [] };
+            const list = Array.isArray(params.tasks) ? (params.tasks as string[]) : [];
+            // schema 里 content 就是任务文本字段——create 只传 content 视作单条任务，
+            // 别让模型因为报错文案再来回试错一个回合。
+            const single = typeof params.content === "string" ? params.content.trim() : "";
+            mutation = { action, tasks: list.length > 0 ? list : single ? [single] : [] };
           } else if (action === "clear") {
             mutation = { action };
           } else {
