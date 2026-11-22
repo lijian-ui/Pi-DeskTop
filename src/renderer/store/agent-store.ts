@@ -128,6 +128,7 @@ interface AgentState {
     tokens: number | null;
     contextWindow: number;
     percent: number | null;
+    breakdown?: ContextBreakdown;
   } | null) => void;
   clearMessages: () => void;
   /** Replace the entire message list (used when switching focus to a session

@@ -480,6 +480,9 @@ export function useAgentSession() {
                     tokens,
                     contextWindow: cur.contextWindow,
                     percent: Math.min(100, (tokens / cur.contextWindow) * 100),
+                    // setContextUsage 是整对象替换：不带上快照就会把明细抹掉，
+                    // 流式期间环被误判成只读、点了没反应。明细按回合初快照展示。
+                    breakdown: cur.breakdown,
                   });
                 }
               }
@@ -664,6 +667,8 @@ export function useAgentSession() {
                     tokens: estimatedTokensAfter,
                     contextWindow: u.contextWindow,
                     percent: (estimatedTokensAfter / u.contextWindow) * 100,
+                    // u 本身就是压缩后的新明细；不带上了同样会把旧明细抹掉、环变灰点不动。
+                    breakdown: u.breakdown,
                   });
                 }
               })
