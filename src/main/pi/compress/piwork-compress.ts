@@ -295,27 +295,30 @@ function isHardBlocked(m: CoreMsg): boolean {
   return false;
 }
 
+/** 从 carry.refs 现有状态接着往下分配（P4 续段用；只处理 core 的 [fromIdx, end) 段）。 */
+function assignRefsTail(core: CoreMsg[], fromIdx: number, carry: { refs: RefMap; nextRef: number }): void {
+  for (let i = fromIdx; i < core.length; i += 1) {
+    const m = core[i];
+    if (isHardBlocked(m)) {
+      carry.refs.blocked.add(m.id);
+      continue;
+    }
+    carry.nextRef += 1;
+    const ref = `m${String(carry.nextRef).padStart(5, "0")}`;
+    carry.refs.byId.set(m.id, ref);
+    carry.refs.indexByRef.set(ref, m.idx);
+  }
+}
+
 /**
  * 单调递增分配。序列 append-only ⇒ 同一条目历次分配结果一致，无需持久化。
  * 已知边界：分支 / rewind 会重排序列 ⇒ 整段 ref 变化 ⇒ 旧 compress 调用在
  * derive 重放里校验失败而整条跳过（宁漏不错，文档 §3 / §5.6）。
  */
 export function assignRefs(core: CoreMsg[]): RefMap {
-  const byId = new Map<string, string>();
-  const indexByRef = new Map<string, number>();
-  const blocked = new Set<string>();
-  let i = 0;
-  for (const m of core) {
-    if (isHardBlocked(m)) {
-      blocked.add(m.id);
-      continue;
-    }
-    i += 1;
-    const ref = `m${String(i).padStart(5, "0")}`;
-    byId.set(m.id, ref);
-    indexByRef.set(ref, m.idx);
-  }
-  return { byId, indexByRef, blocked };
+  const carry = { refs: { byId: new Map<string, string>(), indexByRef: new Map<string, number>(), blocked: new Set<string>() }, nextRef: 0 };
+  assignRefsTail(core, 0, carry);
+  return carry.refs;
 }
 
 /** mNNNNN（允许前导零缺位）→ 序号；非法返回 null。 */
@@ -1028,11 +1031,13 @@ export function resolveAndValidateBatch(opts: {
   protectedRefs: ReadonlySet<string>;
   blockIdOffset: number;
   callId: string;
+  /** 同一份 core 的配对表（derive 一次算好逐条复用；省略则自建，结果一致）。 */
+  pairs?: PairMaps;
 }): BatchResult {
   const { entries, core, refs, existing, protectedRefs, blockIdOffset, callId } = opts;
   const activeExisting = deriveActiveBlocks(existing);
   const covered = coveredIndexMap(activeExisting);
-  const pairs = buildPairMaps(core);
+  const pairs = opts.pairs ?? buildPairMaps(core);
   const warnings: string[] = [];
   const resolved: ResolvedRange[] = [];
   const blockPlans: BlockPlan[] = [];
@@ -1334,16 +1339,51 @@ export function resolveAndValidateBatch(opts: {
  * (4) 抛错 / 0 块 → 整条调用跳过，state 不动。
  */
 export function deriveBlocks(core: CoreMsg[], refs: RefMap, protectedRefs: ReadonlySet<string>): FoldBlock[] {
+  return deriveBlocksReplay(core, refs, protectedRefs, [], {
+    skipCallIds: new Set<string>(),
+    markCallIds: new Set<string>(),
+    bailOnPending: false,
+  })!;
+}
+
+/**
+ * derive 的可续段版本（会话文件膨胀防护 P4）。
+ * · seed：上一拍已成的块，作为续段重放的 existing（blockId 序号接着往后编）。
+ * · skipCallIds：已经重放过的 compress 调用，这次不再校验（它们的结论在前缀稳定时
+ *   是确定的：保护区没变、更早的 blocks 也没变）。
+ * · markCallIds：这次真正校验过的调用 id（成活与抛错都算；结果没落盘的不算）。
+ * · bailOnPending：续段模式下碰到「结果还没落盘」的调用返回 null —— 它晚点才成活，
+ *   补进 blocks 会排在更晚的调用后面，seq / blockId 就跟一次性全量重放不一致。
+ * 返回 null 只可能出现在 bailOnPending 模式，调用方据此回退全量重放。
+ */
+function deriveBlocksReplay(
+  core: CoreMsg[],
+  refs: RefMap,
+  protectedRefs: ReadonlySet<string>,
+  seed: readonly FoldBlock[],
+  opts: { skipCallIds: ReadonlySet<string>; markCallIds: Set<string>; bailOnPending: boolean },
+): FoldBlock[] | null {
+  const { skipCallIds, markCallIds, bailOnPending } = opts;
   const succeeded = new Set<string>();
+  const answered = new Set<string>();
   for (const m of core) {
     if (m.contentType !== "tool-result" || !m.toolCallId) continue;
+    answered.add(m.toolCallId);
     if (!m.isError) succeeded.add(m.toolCallId);
   }
-  const blocks: FoldBlock[] = [];
+  // 配对表只跟 core 有关：一趟 derive 算一遍，别每条调用都重算（原来是 O(调用数 × N)）。
+  const pairs = buildPairMaps(core);
+  const blocks: FoldBlock[] = seed.slice();
   for (const m of core) {
     if (m.role !== "assistant") continue;
     for (const call of m.toolCalls) {
-      if (call.name !== "compress" || !succeeded.has(call.id)) continue;
+      if (call.name !== "compress") continue;
+      if (!answered.has(call.id)) {
+        if (bailOnPending && !skipCallIds.has(call.id)) return null;
+        continue;
+      }
+      if (!succeeded.has(call.id)) continue;
+      if (skipCallIds.has(call.id)) continue;
       try {
         const entries = parseCompressEntries(call.arguments);
         const r = resolveAndValidateBatch({
@@ -1354,10 +1394,13 @@ export function deriveBlocks(core: CoreMsg[], refs: RefMap, protectedRefs: Reado
           protectedRefs,
           blockIdOffset: blocks.length,
           callId: call.id,
+          pairs,
         });
+        markCallIds.add(call.id);
         if (r.blocks.length === 0) continue;
         blocks.push(...r.blocks);
       } catch {
+        markCallIds.add(call.id);
         // 区间失效不炸账本：整条调用跳过（宁漏不错）。
         continue;
       }
@@ -1578,6 +1621,11 @@ export interface SessionState {
   refs: RefMap;
   protectedRefs: Set<string>;
   blocks: FoldBlock[];
+  /**
+   * 投影增量缓存（会话文件膨胀防护 P4）：append-only 前缀的 core / refs / blocks 快照。
+   * 纯派生态，任何时刻都能从 messages 全量重建，所以可缺省；作废即回退全量路径。
+   */
+  projCache?: ProjectionCache;
   usage: number;
   /** 窗口大小（低占用硬门 + 用量回显用），0 = 未知。 */
   contextWindow: number;
@@ -1594,6 +1642,8 @@ export interface SessionState {
   repeatCount: number;
   /** 连续 stuck 轮数（高压带 + 无可压范围 + 截断 0 收益），terminal escape 计数。 */
   stuckStreak: number;
+  /** 「压无可压」一次性提示是否已发（出现候选即重武装；分支/rewind 新建 state 自然重置）。 */
+  idleNoticeShown: boolean;
 }
 
 export function createSessionState(): SessionState {
@@ -1613,6 +1663,7 @@ export function createSessionState(): SessionState {
     repeatSig: "",
     repeatCount: 0,
     stuckStreak: 0,
+    idleNoticeShown: false,
   };
 }
 
@@ -1678,16 +1729,143 @@ function adjustAnchor(view: readonly ViewItem[], pos: number): number {
   return p;
 }
 
+// ── 投影增量缓存（会话文件膨胀防护 P4）────────────────────────────────────
+/**
+ * 每拍都要 projectMessages（逐条 estimateTokens）+ assignRefs + deriveBlocks 全量重跑，
+ * 而转录是 append-only、AgentMessage 对象身份稳定 ⇒ 前缀本来可以续用。这里缓存
+ * 「续用无损」的前缀，每拍只做增量：
+ *   · core / refs：前缀按引用身份逐条 === 校验（纯引用比较，微秒级）；序列变短或对象
+ *     换了（分支 / rewind / 重建）⇒ 整份作废，回退全量重建；
+ *   · blocks：保护区是尾部窗口、每拍都在往前挪，只有「前缀内的保护归属没变」且
+ *     「没有等结果的 compress 调用」才续段重放；不满足就用缓存的 core / refs 全量
+ *     derive（仍省掉最贵的投影）。
+ * 保守优先：拿不准的边界一律回退，全量重算永远是缺省路径。
+ */
+interface ProjectionCache {
+  /** 已投影消息的引用快照，前缀校验的基准。 */
+  msgs: AgentMessage[];
+  core: CoreMsg[];
+  refs: RefMap;
+  /** assignRefs 的续段游标：已经分配出去的最大 ref 序号。 */
+  nextRef: number;
+  blocks: FoldBlock[];
+  /** 已重放过的 compress 调用 id（成活与校验失败都算；结果没落盘的不算）。 */
+  replayedCallIds: Set<string>;
+  /** 生成 blocks 时用的保护区，用来判断前缀内的保护归属有没有变。 */
+  protectedRefs: ReadonlySet<string>;
+  /** 走了「blocks 续段重放」的拍数（冒烟断言用它证明增量路径真的生效过）。 */
+  incrementalReplays: number;
+}
+
+/** append-only 准入检查：长度不减 + 前缀逐条引用相同。 */
+function isAppendOnlyPrefix(prev: readonly AgentMessage[], next: readonly AgentMessage[]): boolean {
+  if (next.length < prev.length) return false;
+  for (let i = 0; i < prev.length; i += 1) if (prev[i] !== next[i]) return false;
+  return true;
+}
+
+/**
+ * 从 offset 起投影尾段：projectMessages 按下标定 idx / id，尾段自己从 0 数起，这里把
+ * 偏移加回去 ⇒ 与整体投影逐字段一致。
+ */
+function projectMessagesFrom(messages: readonly AgentMessage[], offset: number): CoreMsg[] {
+  const part = projectMessages(messages);
+  if (offset <= 0) return part;
+  return part.map((m) => ({ ...m, id: `e${m.idx + offset}`, idx: m.idx + offset }));
+}
+
+/**
+ * 前缀内的保护归属是否没变（blocks 续段的准入条件之一）。序号超过前缀上限的 ref 属于
+ * 新尾段，本来就不在前缀范围内，不参与比较。
+ */
+function protectedPrefixStable(prev: ReadonlySet<string>, next: ReadonlySet<string>, prefixRefBound: number): boolean {
+  const withinPrefix = (ref: string): boolean => {
+    const n = parseRefOrdinal(ref);
+    return n !== null && n <= prefixRefBound;
+  };
+  for (const ref of prev) if (withinPrefix(ref) && !next.has(ref)) return false;
+  for (const ref of next) if (withinPrefix(ref) && !prev.has(ref)) return false;
+  return true;
+}
+
+/**
+ * 取这一拍的 core / refs / protectedRefs / blocks：前缀能续用就续用，否则整条管线重来。
+ * 四条产物必须与「从头全量跑一遍」逐字段相等（冒烟 §11 逐拍核对）。
+ */
+function replayProjection(
+  state: SessionState,
+  messages: readonly AgentMessage[],
+): { core: CoreMsg[]; refs: RefMap; protectedRefs: Set<string>; blocks: FoldBlock[] } {
+  const cache = state.projCache;
+  if (!cache || !isAppendOnlyPrefix(cache.msgs, messages)) {
+    const core = projectMessages(messages);
+    const refs = assignRefs(core);
+    const protectedRefs = computeProtectedRefs(core, refs);
+    const replayedCallIds = new Set<string>();
+    const blocks = deriveBlocksReplay(core, refs, protectedRefs, [], {
+      skipCallIds: new Set<string>(),
+      markCallIds: replayedCallIds,
+      bailOnPending: false,
+    })!;
+    state.projCache = { msgs: messages.slice(), core, refs, nextRef: refs.byId.size, blocks, replayedCallIds, protectedRefs, incrementalReplays: 0 };
+    return { core, refs, protectedRefs, blocks };
+  }
+  const msgsLen = cache.msgs.length;
+  // concat 而不是就地 push：上一拍的 state.core 可能还被工具执行校验攥着。
+  const core = msgsLen === messages.length ? cache.core : cache.core.concat(projectMessagesFrom(messages.slice(msgsLen), msgsLen));
+  const prefixRefBound = cache.nextRef;
+  if (core.length > cache.core.length) {
+    // 三条 ref 表都是「只追加、旧值永不变」，就地续填即可（消费方只会查已有 ref）。
+    const carry = { refs: cache.refs, nextRef: cache.nextRef };
+    assignRefsTail(core, cache.core.length, carry);
+    cache.nextRef = carry.nextRef;
+  }
+  const refs = cache.refs;
+  const protectedRefs = computeProtectedRefs(core, refs);
+  let blocks: FoldBlock[] | null = null;
+  if (protectedPrefixStable(cache.protectedRefs, protectedRefs, prefixRefBound)) {
+    const markCallIds = new Set<string>();
+    const replayed = deriveBlocksReplay(core, refs, protectedRefs, cache.blocks, {
+      skipCallIds: cache.replayedCallIds,
+      markCallIds,
+      bailOnPending: true,
+    });
+    if (replayed) {
+      for (const id of markCallIds) cache.replayedCallIds.add(id);
+      blocks = replayed;
+      cache.incrementalReplays += 1;
+    }
+  }
+  if (!blocks) {
+    // 保护区挪了 / 有等结果的调用 ⇒ blocks 整段重放，core / refs 仍用缓存的。
+    const replayedCallIds = new Set<string>();
+    blocks = deriveBlocksReplay(core, refs, protectedRefs, [], {
+      skipCallIds: new Set<string>(),
+      markCallIds: replayedCallIds,
+      bailOnPending: false,
+    })!;
+    cache.replayedCallIds = replayedCallIds;
+  }
+  cache.msgs = messages.slice();
+  cache.core = core;
+  cache.blocks = blocks;
+  cache.protectedRefs = protectedRefs;
+  return { core, refs, protectedRefs, blocks };
+}
+
 /**
  * 视图主管线（文档 §5）：project → assignRefs → derive → hide → 折叠 + 摘要注入 →
  * 标签 → nudge → 应急截断。返回发送视图，同时把快照写回 state（工具执行据此校验：
  * 模型所见 = 校验所据）。
  */
 export function refreshView(state: SessionState, messages: readonly AgentMessage[], probe: UsageProbe): ViewResult {
-  const core = projectMessages(messages);
-  const refs = assignRefs(core);
-  const protectedRefs = computeProtectedRefs(core, refs);
-  const blocks = deriveBlocks(core, refs, protectedRefs);
+  // 会话文件膨胀防护（P4）：前缀能续用就别重投影 —— projectMessages 逐条
+  // estimateTokens 是整条管线最贵的一步，而 event.messages 是 append-only 的。
+  const proj = replayProjection(state, messages);
+  const core = proj.core;
+  const refs = proj.refs;
+  const protectedRefs = proj.protectedRefs;
+  const blocks = proj.blocks;
   // 视图侧只认 active 块：被蒸馏吞掉的子块不再折叠、不再注入摘要（总纪要接管它们的位置）。
   // blocks（含被吞块）仍是编号与谱系的依据，故 state.blocks 存全量。
   const activeBlocks = deriveActiveBlocks(blocks);
@@ -1780,15 +1958,30 @@ export function refreshView(state: SessionState, messages: readonly AgentMessage
     const need = GROWTH_FLOOR * MIN_GROWTH_RATIO;
     if (growth >= need) nudged = true;
   }
-  if (!nudged && usage >= MAX_CONTEXT_LIMIT_PCT * win) {
+  if (!nudged && pendingTokens > 0 && usage >= MAX_CONTEXT_LIMIT_PCT * win) {
     // C. 高压带：额外要求可回收 ≥ max(5000, 1% 窗口)（ref: :1797）
     const benefit = Math.max(5000, win * 0.01);
     if (pendingTokens >= benefit && growth >= PRESSURE_GROWTH_TOKENS) nudged = true;
+  }
+  // 碎屑抑制 + 「压无可压」状态机（用户实测：BC 式 nudge 曾拿 2K 碎屑每回合催压、
+  // 又被 compress 5000 门槛连拒 25 回合）。可回收不足 max(8000, 3% 窗口) 且候选 <2
+  // 条 → 不催；候选归零且占用过地板 → 发一次性的「等着就行」状态行（出现候选即重
+  // 武装），模型对着高压不用猜处境。
+  let idleNotice = false;
+  if (pendingTokens === 0) {
+    // 真正推出去才算「已提示」（D 通路抢占这一拍时不空耗武装），见下方 push 分支。
+    idleNotice = usage >= MIN_CONTEXT_LIMIT_PCT * win && !state.idleNoticeShown;
+  } else {
+    state.idleNoticeShown = false;
+    const threshold = Math.max(NUDGE_MIN_RECLAIM_TOKENS, 0.03 * win);
+    if (pendingTokens < threshold && ranges.length < NUDGE_SILENT_BELOW) nudged = false;
   }
   // D. 蒸馏通路（文档 compress-block-boundary-distillation）：active 块的摘要残留堆到
   //    阈值 → 提议把最老的非热区块合成一条总纪要。热区（最近 HOT_BLOCK_COUNT 块）不进
   //    自动提议；抑制 = 距上次提议至少新增过块 + A/B/C 已发时不叠发。
   const mergeable = Math.max(0, activeBlocks.length - HOT_BLOCK_COUNT);
+  // 注意：蒸馏场景下 pendingTokens 往往就是 0（老段落已全折叠），这里绝不能加
+  // pendingTokens>0 守卫，否则 D 通路在「纯蒸馏」态被整条掐死。
   const digestReady = digestPending >= DIGEST_PENDING_TOKENS || mergeable >= DIGEST_PENDING_BLOCKS;
   if (
     !nudged &&
@@ -1809,6 +2002,24 @@ export function refreshView(state: SessionState, messages: readonly AgentMessage
       msg: {
         role: "user",
         content: [{ type: "text", text: renderNudge(activeBlocks, ranges, digestHint) }],
+        timestamp: Date.now(),
+      } as AgentMessage,
+    });
+  } else if (idleNotice) {
+    state.idleNoticeShown = true;
+    view.push({
+      core: null,
+      msg: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text:
+              "[wc-context] No compressible ranges right now — everything older is already folded " +
+              "or in the protected zone. Just continue with the task; compress again once enough " +
+              "new history accumulates.",
+          },
+        ],
         timestamp: Date.now(),
       } as AgentMessage,
     });
@@ -2020,6 +2231,11 @@ const KEEP_LAST_FAILED_CALLS = 2;
 /** 连续多少轮 stuck（高压带且无可压范围、应急截断也切不动）就放行 pi 内置压缩兜底。
  *  ref: kernel compress.ts:1073-1090 + config truncate.terminalEscapeAfter=3。 */
 const TERMINAL_ESCAPE_AFTER = 3;
+/** nudge 最低可回收量：低于 max(此值, 3% 窗口) 一律沉默。BC 实测教训是 2K 碎屑
+ *  每回合催压、compress 又被 5000 字符门槛拒（一次会话被同一条碎屑骚扰 25 回）。 */
+const NUDGE_MIN_RECLAIM_TOKENS = 8000;
+/** 候选少于这个条数时连碎屑阈值都不给过：一两个小范围不值得打断干活。 */
+const NUDGE_SILENT_BELOW = 2;
 /** 一轮内累计失败上限（熔断分级 ref: BC 回合级上限 3；新一轮 user 消息清零，
  *  与 BC 按 user entry id 计数等价，见 derive 的 userCount 判定）。BC 的教训是 2 太脆：
  *  一次误报 + 一次修正失败就把整轮压缩机会烧掉。 */
