@@ -108,6 +108,7 @@ export default function MessageList() {
   // 定时任务触发消息的「任务详情」：靠 sessionPath 找到该会话对应的执行记录，再取它
   // 所属任务的提示词（真正的任务内容在系统提示词里，聊天只看得到固定那句触发语）。
   const currentPath = useSessionStore((s) => s.currentPath);
+
   const scheduledTasks = useSessionStore((s) => s.scheduledRuns.tasks);
   const scheduledRuns = useSessionStore((s) => s.scheduledRuns.runs);
   const taskPromptOf = useCallback(
@@ -142,19 +143,19 @@ export default function MessageList() {
   // leave this latched at `true` and permanently disabled loading more history.
   const loadingMoreRef = useRef(false);
 
-  // Reset the visible window whenever a different session is loaded
-  // (detected by the first message's id changing). Reset via revealEarlier's
-  // bookkeeping refs too, so no stale latch survives the session swap.
-  const firstId = messages[0]?.id;
-  const firstIdRef = useRef(firstId);
+  // Reset the visible window whenever a different session is loaded (keyed by
+  // path — message churn inside one session must not collapse the window).
+  // Reset via revealEarlier's bookkeeping refs too, so no stale latch survives
+  // the swap.
+  const pathRef = useRef(currentPath);
   useEffect(() => {
-    if (firstId !== firstIdRef.current) {
-      firstIdRef.current = firstId;
+    if (currentPath !== pathRef.current) {
+      pathRef.current = currentPath;
       pendingRestoreRef.current = 0;
       loadingMoreRef.current = false;
       setVisibleCount(BATCH_SIZE);
     }
-  }, [firstId]);
+  }, [currentPath]);
 
   useEffect(() => {
     if (!searchOpen && visibleCount > BATCH_SIZE) {
@@ -168,6 +169,10 @@ export default function MessageList() {
   // virtual-scrolling so an assistant's turn (avatar + collapsible bubble)
   // never gets split across page boundaries.
   const renderItems = useMemo(() => buildRenderItems(messages), [messages]);
+
+
+
+
 
   const isNearBottom = () => {
     const list = listRef.current;

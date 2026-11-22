@@ -1250,21 +1250,15 @@ function liveCompressSummaries(raw: unknown, liveCompressCallIds: ReadonlySet<st
   return out;
 }
 
-/**
- * 发送视图 → 分类输入。用 buildSessionProjection() 而不是 getEntries()：它就是
- * 「真正发给模型的那份」——压缩边界之前的条目已被摘要替掉、context_edit 已生效，
- * 所以被跳过的条目不会在这里被算进去。
- *
- * 自研 compress 的 wc-summary 摘要不落盘（只逐回合注入 context），这里从生效
- * compress 调用的 summary 参数重建摘要、以 summary:true 补进 summaries 桶；被摘要
- * 覆盖的原文仍留在各自桶里（判定覆盖需要重放折叠逻辑，超出明细面板的估算精度诉求）。
- */
-function projectBreakdownMessages(session: any): { messages: BreakdownMessage[]; estimated: boolean } {
-  const projection = session?.sessionManager?.buildSessionProjection?.();
-  const projected: any[] = Array.isArray(projection?.entries) ? projection.entries : [];
-  const liveCompressCallIds = collectLiveCompressCallIds(projected);
+/** 把 projected 条目从 fromIdx 起投成分类输入（含生效 compress 摘要重建）。 */
+function projectProjectedFrom(
+  projected: readonly any[],
+  liveCompressCallIds: Set<string>,
+  fromIdx: number,
+): BreakdownMessage[] {
   const out: BreakdownMessage[] = [];
-  for (const pe of projected) {
+  for (let i = fromIdx; i < projected.length; i += 1) {
+    const pe = projected[i];
     const sourceType = (pe?.sourceEntry as { type?: string } | undefined)?.type;
     const isBoundary = sourceType === "compaction" || sourceType === "branch_summary";
     const msgs: unknown[] = Array.isArray(pe?.messages) ? pe.messages : [];
@@ -1279,9 +1273,54 @@ function projectBreakdownMessages(session: any): { messages: BreakdownMessage[];
       }
     }
   }
-  if (out.length <= BREAKDOWN_MAX_MESSAGES) return { messages: out, estimated: false };
-  // 只保最近 N 条 ⇒ 最老的一段没算进去，合计是下界，故标 estimated。
-  return { messages: out.slice(out.length - BREAKDOWN_MAX_MESSAGES), estimated: true };
+  return out;
+}
+
+/**
+ * 发送视图 → 分类输入。用 buildSessionProjection() 而不是 getEntries()：它就是
+ * 「真正发给模型的那份」——压缩边界之前的条目已被摘要替掉、context_edit 已生效，
+ * 所以被跳过的条目不会在这里被算进去。
+ *
+ * 自研 compress 的 wc-summary 摘要不落盘（只逐回合注入 context），这里从生效
+ * compress 调用的 summary 参数重建摘要、以 summary:true 补进 summaries 桶；被摘要
+ * 覆盖的原文仍留在各自桶里（判定覆盖需要重放折叠逻辑，超出明细面板的估算精度诉求）。
+ */
+function projectBreakdownMessages(session: any): { messages: BreakdownMessage[]; estimated: boolean } {
+  const projection = session?.sessionManager?.buildSessionProjection?.();
+  const projected: any[] = Array.isArray(projection?.entries) ? projection.entries : [];
+  // 生效 compress 调用必须全量扫：隐藏判定会影响**保留下来的**尾部消息怎么计文，
+  // 预裁只能裁投影条目，不能裁这个集合。
+  const liveCompressCallIds = collectLiveCompressCallIds(projected);
+  // 预裁（会话文件膨胀防护 P2）：旧写法是全量投完再 slice 尾部，贵的
+  // safeStringify + countTokens 白跑在最终会被丢掉的老条目上。这里先倒着按
+  // 「每条带出几条消息」粗数到 N 条，凑够才进投影；最终输出仍是尾部 N 条，
+  // 与裁前逐字节一致。
+  let start = 0;
+  let acc = 0;
+  for (let i = projected.length - 1; i >= 0; i -= 1) {
+    const msgs: unknown[] = Array.isArray(projected[i]?.messages) ? projected[i].messages : [];
+    acc += msgs.length;
+    if (acc >= BREAKDOWN_MAX_MESSAGES) {
+      start = i;
+      break;
+    }
+  }
+  for (;;) {
+    const out = projectProjectedFrom(projected, liveCompressCallIds, start);
+    // start===0 ⇒ 已经全量投过，结果就是准的（不裁或整段都是保留集）。
+    if (start === 0) {
+      if (out.length <= BREAKDOWN_MAX_MESSAGES) return { messages: out, estimated: false };
+      // 只保最近 N 条 ⇒ 最老的一段没算进去，合计是下界，故标 estimated。
+      return { messages: out.slice(out.length - BREAKDOWN_MAX_MESSAGES), estimated: true };
+    }
+    // 尾部这段已经有 N+ 条 ⇒ 全量必然也有，且最后 N 条一定落在这段里 ⇒ 直接返回。
+    if (out.length > BREAKDOWN_MAX_MESSAGES) {
+      return { messages: out.slice(out.length - BREAKDOWN_MAX_MESSAGES), estimated: true };
+    }
+    // 数少了（空条目 / 重建摘要没计入 ⇒ 下界偏小）⇒ 窗口翻倍重来，最多退化成
+    // 上面 start===0 的全量分支。
+    start = Math.max(0, start - (projected.length - start));
+  }
 }
 
 function estimateSystemPromptTokens(session: any): number | null {
@@ -1366,6 +1405,154 @@ function buildContextBreakdown(session: any, providerTokens: number | null): Con
       estimated: true,
     };
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 会话列表的进程内缓存（会话文件膨胀防护 P1）
+//
+// SDK 的 SessionManager.listAll() 没有缓存：每个 .jsonl 都 createReadStream 全文
+// 逐行 parse（要拼 firstMessage / allMessagesText 给侧栏与搜索用）。渲染层每回合
+// message_end 都会 debounce 重扫全库 ⇒ 会话越多越贵。这里在 pi-desktop 这一层补
+// (path → mtimeMs + size) 缓存：指纹没变的文件直接复用上次的 SessionInfo，只有
+// 变化/新增文件所在的目录才交给 SDK 全文构建（SDK 在 node_modules 里，不改）。
+// ─────────────────────────────────────────────────────────────────────────
+
+interface SessionInfoCacheEntry {
+  mtimeMs: number;
+  size: number;
+  info: any;
+}
+
+/** 条数上限：超了按「最久没被读写」淘汰，防长跑进程无界增长。 */
+const SESSION_INFO_CACHE_LIMIT = 2000;
+const sessionInfoCache = new Map<string, SessionInfoCacheEntry>();
+
+/** 读也挪到 Map 尾部 ⇒ Map 头部始终是最久没碰的那条，淘汰直接删头。 */
+function sessionInfoCacheTouch(path: string, entry: SessionInfoCacheEntry): void {
+  sessionInfoCache.delete(path);
+  sessionInfoCache.set(path, entry);
+  while (sessionInfoCache.size > SESSION_INFO_CACHE_LIMIT) {
+    const oldest = sessionInfoCache.keys().next();
+    if (oldest.done) break;
+    sessionInfoCache.delete(oldest.value);
+  }
+}
+
+interface ScannedSessionFile {
+  path: string;
+  mtimeMs: number;
+  size: number;
+}
+
+/**
+ * 枚举 `<agentDir>/sessions/` 下每个会话目录里的 .jsonl 并逐个 stat。目录整体
+ * 消失 / 单文件读不到，与 SDK 一样宽容跳过；stat 失败（权限、竞态删除）用 -1
+ * 指纹 ⇒ 必然算「变了」，交给 SDK 重新构建，宁可多算不可少算。
+ */
+async function scanSessionFiles(): Promise<{ dir: string; files: ScannedSessionFile[] }[]> {
+  const sessionsRoot = join(getAgentDir(), "sessions");
+  let dirNames: string[];
+  try {
+    dirNames = await readdir(sessionsRoot);
+  } catch {
+    return [];
+  }
+  const groups: { dir: string; files: ScannedSessionFile[] }[] = [];
+  // 目录串行、目录内文件并发：并发度天然被「单目录文件数」限住，不会一次张开
+  // 上千个 fd（会话目录可能上百个，每个几条到几十条）。
+  for (const name of dirNames) {
+    const dir = join(sessionsRoot, name);
+    let files: string[];
+    try {
+      files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+    } catch {
+      continue;
+    }
+    const scanned = await Promise.all(
+      files.map(async (f) => {
+        const path = join(dir, f);
+        try {
+          const st = await stat(path);
+          return { path, mtimeMs: st.mtimeMs, size: st.size };
+        } catch {
+          return { path, mtimeMs: -1, size: -1 };
+        }
+      }),
+    );
+    if (scanned.length > 0) groups.push({ dir, files: scanned });
+  }
+  return groups;
+}
+
+/**
+ * 带缓存的全库会话列表。返回顺序照 SDK：modified 倒序，同值时按 mtime 倒序、
+ * 再按文件名倒序（SDK 是先按 mtime/文件名排候选再做稳定 sort，等价于这个比较器）。
+ * 返回的是缓存对象的浅拷贝 —— 调用方（IPC 的 IM 前缀、taskCwdBySessionDir 修 cwd）
+ * 会就地改字段，不能把缓存本体交出去。
+ */
+async function listSessionInfosCached(): Promise<any[]> {
+  const groups = await scanSessionFiles();
+  const infos: any[] = [];
+  const seen = new Set<string>();
+  const mtimeByPath = new Map<string, number>();
+  for (const { dir, files } of groups) {
+    const fresh = new Map<string, any>();
+    const staleNames = new Set<string>();
+    for (const f of files) {
+      seen.add(f.path);
+      mtimeByPath.set(f.path, f.mtimeMs);
+      const hit = sessionInfoCache.get(f.path);
+      if (hit && hit.mtimeMs === f.mtimeMs && hit.size === f.size) {
+        sessionInfoCacheTouch(f.path, hit);
+        fresh.set(basename(f.path), hit.info);
+      } else {
+        staleNames.add(basename(f.path));
+      }
+    }
+    if (staleNames.size > 0) {
+      // 交给 SDK 的是整个目录（buildSessionInfo 没导出，逐文件构建只能整目录重算）。
+      // 典型场景只有当前会话所在的 1~2 个目录落进来，其余目录整目录命中缓存。
+      let built: any[] = [];
+      try {
+        built = await PiSessionManager.listAll(dir);
+      } catch {
+        built = [];
+      }
+      const byName = new Map<string, any>();
+      for (const s of built) {
+        const p = typeof s?.path === "string" ? s.path : "";
+        if (p) byName.set(basename(p), s);
+      }
+      for (const f of files) {
+        const info = byName.get(basename(f.path));
+        if (!info) continue; // 解析失败 / 不是 pi 会话：与 SDK 一样丢弃
+        fresh.set(basename(f.path), info);
+        sessionInfoCacheTouch(f.path, { mtimeMs: f.mtimeMs, size: f.size, info });
+      }
+    }
+    for (const f of files) {
+      const info = fresh.get(basename(f.path));
+      if (info) infos.push({ ...info });
+    }
+  }
+  // 枚举结果就是当前真相：目录/文件已经没了的缓存条目一并清掉。
+  for (const key of [...sessionInfoCache.keys()]) {
+    if (!seen.has(key)) sessionInfoCache.delete(key);
+  }
+  const modifiedOf = (s: any): number => {
+    const m = s?.modified;
+    if (m instanceof Date) return m.getTime();
+    const t = Date.parse(String(m ?? ""));
+    return Number.isNaN(t) ? 0 : t;
+  };
+  infos.sort((a, b) => {
+    const byModified = modifiedOf(b) - modifiedOf(a);
+    if (byModified !== 0) return byModified;
+    const byMtime = (mtimeByPath.get(b?.path) ?? 0) - (mtimeByPath.get(a?.path) ?? 0);
+    if (byMtime !== 0) return byMtime;
+    return basename(String(b?.path ?? "")).localeCompare(basename(String(a?.path ?? "")));
+  });
+  return infos;
 }
 
 export class PiDeskSessionManager {
@@ -3666,6 +3853,12 @@ export class PiDeskSessionManager {
    * List persisted sessions across every known workspace (focused cwd first,
    * then recents) so the sidebar can show the multi-cwd task tree. Uses a
    * lightweight PiSessionManager per cwd — no runtime/services are built.
+   *
+   * 会话文件膨胀防护（P1）：SDK 的 listAll() 会把每个 .jsonl 全文逐行 parse
+   * 一遍（为了 firstMessage / allMessagesText），而渲染层每回合都会 debounce 重扫
+   * 全库。这里按 (path → mtimeMs + size) 做进程内缓存：没变的文件直接复用上次的
+   * SessionInfo，只有变化/新增文件所在的目录才交给 SDK 全文构建。SDK 是
+   * node_modules 供应商代码，不能改，所以枚举与 stat 在这一层自己走。
    */
   async listSessions(): Promise<any[]> {
     // Enumerate sessions across ALL workspaces (including the chat-only
@@ -3676,7 +3869,7 @@ export class PiDeskSessionManager {
     // The renderer groups them afterwards by cwd (chat dir → "任务", anything
     // else → "空间").
     try {
-      const sessions = await PiSessionManager.listAll();
+      const sessions = await listSessionInfosCached();
       // Repair the reported cwd of task-mode sessions. listAll() returns the
       // header cwd, which is the SHARED chat root for every task; the renderer
       // routes prompt/abort/switchSession by it, so leaving it as-is collapses
@@ -4530,21 +4723,28 @@ export class PiDeskSessionManager {
    * compaction-aware LLM context and therefore omits pre-compaction history;
    * the raw `.jsonl` still holds everything, so we rebuild the display list
    * straight from the persisted entries. Used by the renderer's history reload.
+   *
+   * 返回保持 { messages, total, hidden } 形状（渲染层对两种返回都兼容）。曾试验过
+   * 「尾部展示窗口 + 翻页」来裁小 IPC 回传量，但翻页定位在占位工作区等场景不可靠，
+   * 已整体撤销 —— 恒为全量、hidden=0。
    */
-  getFullMessages(cwd?: string): any[] {
+  getFullMessages(cwd?: string): { messages: any[]; total: number; hidden: number } {
+    const empty = { messages: [] as any[], total: 0, hidden: 0 };
     const key = cwd && cwd.trim().length > 0 ? cwd : this.cwd ?? chatOnlyCwd();
     const unit = this.units.get(key);
     const session = unit?.runtime.session;
-    if (!session) return [];
+    if (!session) return empty;
     try {
       const entries: any[] = session.sessionManager?.getEntries?.() ?? [];
-      return entries
+      const all = entries
         .filter((e) => e && e.type === "message" && e.message)
         .map((e) => e.message);
+      return { messages: all, total: all.length, hidden: 0 };
     } catch {
       // Fall back to the in-memory (possibly compacted) context if the file
       // can't be read — better to show part of the history than nothing.
-      return session.messages ?? [];
+      const all: any[] = session.messages ?? [];
+      return { messages: all, total: all.length, hidden: 0 };
     }
   }
 

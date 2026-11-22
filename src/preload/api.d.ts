@@ -155,8 +155,9 @@ export interface PiDeskAPI {
   getState(cwd?: string): Promise<AgentState | null>;
   /** Full transcript for a session (pre-compaction history included), for the
    *  chat panel history reload. Unlike getState().messages, this is NOT the
-   *  compaction-aware LLM context and therefore retains the earliest messages. */
-  getFullMessages(cwd?: string): Promise<any[]>;
+   *  compaction-aware LLM context and therefore retains the earliest messages.
+   *  恒为全量、hidden=0（「尾部展示窗口 + 翻页」试验已撤销）。 */
+  getFullMessages(cwd?: string): Promise<{ messages: any[]; total: number; hidden: number }>;
   onEvent(callback: (event: any) => void): () => void;
   onRunningState(callback: (state: { running: string[]; cwds: string[] }) => void): () => void;
   onRejected(callback: (info: { reason: string; cwd: string; sessionPath?: string }) => void): () => void;

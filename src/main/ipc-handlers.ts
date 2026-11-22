@@ -580,7 +580,7 @@ export function registerIpcHandlers(
 
   // Full transcript (pre-compaction included) for the chat panel history reload.
   ipcMain.handle("pi:getFullMessages", async (_, { cwd }) => {
-    if (!pmgr) return [];
+    if (!pmgr) return { messages: [], total: 0, hidden: 0 };
     return pmgr.getFullMessages(cwd);
   });
 

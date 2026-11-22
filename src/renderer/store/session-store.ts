@@ -189,8 +189,11 @@ async function reloadMessages(cwd?: string): Promise<void> {
   // is the SDK's compaction-aware LLM context and omits everything before the
   // compaction point — which is exactly the user's first question in a long
   // session, so it must never be the source for the chat panel's history.
-  const rawMessages = await window.piDesk.getFullMessages(cwd);
-  let msgs = rawMessages?.length ? convertMessages(rawMessages) : [];
+  // 会话文件膨胀防护（P3）：主进程默认只回尾部展示窗口，hidden 是它没回传的更早
+  // 条数，聊天面板据此显示提示条。
+  const history = await window.piDesk.getFullMessages(cwd);
+  const rawMessages = Array.isArray(history) ? history : history?.messages ?? [];
+  let msgs = rawMessages.length ? convertMessages(rawMessages) : [];
   if (msgs.length) {
     // Artifacts are NOT persisted separately — live turns derive them from
     // tool events, so a reload must REPLAY them from the same source
@@ -203,7 +206,8 @@ async function reloadMessages(cwd?: string): Promise<void> {
   const sess = useSessionStore.getState();
   const path = sess.currentPath;
   if (path) {
-    sess.setBuffer(path, msgs);
+    const hidden = Array.isArray(history) ? 0 : Math.max(0, Number(history?.hidden) || 0);
+    sess.setBuffer(path, msgs, hidden);
     sess.syncFocus(path);
   }
   const agent = useAgentStore.getState();
@@ -278,6 +282,11 @@ interface SessionStoreState {
    * in a long time.
    */
   messagesByPath: Map<string, Message[]>;
+  /**
+   * path → 主进程没回传的更早消息条数。「尾部展示窗口 + 翻页」试验已撤销，
+   * 主进程恒回 0；字段与 setBuffer 形参保留是为了不再动这条多级回传签名。
+   */
+  historyHidden: Record<string, number>;
   /** Transient message shown when a prompt is rejected (e.g. cwd busy). */
   rejectedMessage: string | null;
   /** Scheduled tasks + their run history, surfaced in the sidebar. */
@@ -329,8 +338,9 @@ interface SessionStoreState {
   graduateDraft: (path: string) => void;
   /** Clear a transient rejection notice. */
   clearRejected: () => void;
-  /** Store a session's full message list into its buffer. */
-  setBuffer: (path: string, messages: Message[]) => void;
+  /** Store a session's full message list into its buffer. `hidden` 记的是这段
+   * 历史之外还有多少条更老的消息没回传（P3 展示窗口），省略 = 全量在手。 */
+  setBuffer: (path: string, messages: Message[], hidden?: number) => void;
   /** Apply a pure transform to a session's buffered messages; if the session
    * is focused, the result is mirrored into agent-store automatically. */
   mutateBuffer: (path: string, fn: (msgs: Message[]) => Message[]) => void;
@@ -379,6 +389,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   pendingPath: null,
   runningPaths: new Set<string>(),
   messagesByPath: new Map<string, Message[]>(),
+  historyHidden: {},
   rejectedMessage: null,
   scheduledRuns: { tasks: [], runs: [], states: {} },
 
@@ -727,7 +738,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     set({ rejectedMessage: null });
   },
 
-  setBuffer: (path, messages) => {
+  setBuffer: (path, messages, hidden) => {
     if (!path) return;
     set((state) => {
       // Mutate in-place then create a new reference for Zustand.
@@ -738,7 +749,10 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           if (k !== cur) { state.messagesByPath.delete(k); break; }
         }
       }
-      return { messagesByPath: new Map(state.messagesByPath) };
+      return {
+        messagesByPath: new Map(state.messagesByPath),
+        historyHidden: { ...state.historyHidden, [path]: Math.max(0, hidden ?? 0) },
+      };
     });
   },
 
@@ -776,10 +790,11 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
   clearBuffer: (path) => {
     set((state) => {
-      if (!path) return { messagesByPath: new Map<string, Message[]>() };
+      if (!path) return { messagesByPath: new Map<string, Message[]>(), historyHidden: {} };
       const map = new Map(state.messagesByPath);
       map.delete(path);
-      return { messagesByPath: map };
+      const { [path]: _hidden, ...restHidden } = state.historyHidden;
+      return { messagesByPath: map, historyHidden: restHidden };
     });
   },
 }));
