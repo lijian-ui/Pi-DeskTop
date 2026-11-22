@@ -175,7 +175,10 @@ Returns bounded conversation snippets with session dates and project context. La
         maximum: MAX_LEGACY_SNIPPET_CHARS,
       })),
     }),
-    execute: async (_id: string, args: { query: string; project?: string; role?: string; limit?: number; snippetChars?: number }) => {
+    // pi 1.6.0：Optional(StringEnum) 的推断退化成 unknown，手写窄标注按参数逆变
+    // 会直接编译失败；同 skill-tool —— 让 pi 推断，进来后 as 回真实形状。
+    execute: async (_id: string, params: unknown) => {
+      const args = params as { query: string; project?: string; role?: string; limit?: number; snippetChars?: number };
       const query = args.query;
       const project = args.project;
       const role = args.role;

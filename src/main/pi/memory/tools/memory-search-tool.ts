@@ -58,7 +58,10 @@ Returns matching memory entries with their mutation target, scope, and dates. Th
       category: Type.Optional(StringEnum(['failure', 'correction', 'insight', 'preference', 'convention', 'tool-quirk'] as const, { description: 'Filter by memory category.' })),
       limit: Type.Optional(Type.Number({ description: 'Maximum results to return (default: 10, max: 20).' })),
     }),
-    execute: async (_id: string, args: { query?: string; project?: string; target?: 'memory' | 'user' | 'failure' | 'project'; category?: string; limit?: number }) => {
+    // pi 1.6.0：Optional(StringEnum) 的推断退化成 unknown，手写窄标注按参数逆变
+    // 会直接编译失败；同 skill-tool —— 让 pi 推断，进来后 as 回真实形状。
+    execute: async (_id: string, params: unknown) => {
+      const args = params as { query?: string; project?: string; target?: 'memory' | 'user' | 'failure' | 'project'; category?: string; limit?: number };
       const query = (args.query ?? '').trim();
       const project = args.project;
       const target = args.target;
