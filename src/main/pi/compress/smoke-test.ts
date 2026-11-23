@@ -741,7 +741,7 @@ function transcriptWithBlocks(blocksCount: number, pairCount: number, summary: s
 const HUGE = "x".repeat(20_000); // ≈5000 token/条
 {
   // A. 首次见面即大量可压
-  const a = freshState(transcript(24, HUGE));
+  const a = freshState(transcript(32, HUGE));
   const aText = textOf(a.view.messages[a.view.messages.length - 1] as Msg);
   check("nudge-A 触发", a.view.nudged === true && aText.includes("efficiency nudge"), `pending=${a.view.pendingTokens} usage=${a.view.usage}`);
   check("nudge-A 附候选清单", aText.includes("Compressible ranges (") && aText.includes("Example: compress("));
@@ -755,7 +755,7 @@ const HUGE = "x".repeat(20_000); // ≈5000 token/条
   // B. 增长门（先建基线，再长大）
   const state = createSessionState();
   refreshView(state, asMsgs(transcript(2)), probe());
-  const b = refreshView(state, asMsgs(transcript(24, HUGE)), probe());
+  const b = refreshView(state, asMsgs(transcript(32, HUGE)), probe());
   check("nudge-B 增长门触发", b.nudged === true, `usage=${b.usage} baseline=${state.baseline}`);
 
   // C. 高压带（可压量不足 50K，靠 provider floor 抬到 0.75 以上）
@@ -778,15 +778,15 @@ const HUGE = "x".repeat(20_000); // ≈5000 token/条
   check("stripWcTag 剥得掉带 ctx 的标签", stripWcTag(ctxTagged) === "正文", stripWcTag(ctxTagged));
   check("stripWcTag 不伤普通标签", stripWcTag('正文\n\n<wc tokens="2.1K" type="user">m00002</wc>') === "正文");
 
-  // 高压回合（120K/200K=60%，且旧段落可回收 ≥GROWTH_FLOOR=50K）→ ctx 带 ⚠compress。
-  // 夹具口径：每对 HUGE ≈ 5000 token 可压，20 对去掉尾部保护区仍有 ~75K 可压。
-  const { view } = freshState(transcript(20, HUGE), { tokens: 120_000 });
+  // 高压回合（160K/200K=80%，且旧段落可回收 ≥ 65% 窗口=130K）→ ctx 带 ⚠compress。
+  // 夹具口径：每对 HUGE ≈ 5000 token 可压，32 对去掉尾部保护区仍有 ~155K 可压。
+  const { view } = freshState(transcript(32, HUGE), { tokens: 120_000 });
   const tagged = view.messages
     .map((m: Msg) => textOf(m))
     .filter((t: string) => t.includes("<wc "));
   const withCtx = tagged.filter((t: string) => t.includes(' ctx="'));
   check("整个视图只有游标一处 ctx", withCtx.length === 1, `tagged=${tagged.length} withCtx=${withCtx.length}`);
-  check("ctx 挂在最后一条带标签消息上", tagged.at(-1)?.includes(' ctx="120K/200K 60%') === true, String(tagged.at(-1)?.slice(-140)));
+  check("ctx 挂在最后一条带标签消息上", tagged.at(-1)?.includes(' ctx="160K/200K 80%') === true, String(tagged.at(-1)?.slice(-140)));
   check("过闸门 ctx 带 ⚠compress", tagged.at(-1)?.includes("⚠compress") === true, String(tagged.at(-1)?.slice(-140)));
 
   // 低占用回合（20K/200K=10%）→ 有读数但不催。
@@ -800,6 +800,20 @@ const HUGE = "x".repeat(20_000); // ≈5000 token/条
 
   // 教义必须教会模型读表（TAGS 段）。
   check("教义 TAGS 段写明油表", COMPRESS_DOCTRINE.includes('ctx="used/window pct"') && COMPRESS_DOCTRINE.includes("⚠compress"));
+
+  // 字符串型 toolResult：ref 照常分配，标签也必须打上 —— 否则模型看得见清单却引用不到。
+  {
+    const strMsgs: Msg[] = [
+      user("hi"),
+      { role: "toolResult", toolCallId: "s1", toolName: "bash", content: "plain string output", isError: false, timestamp: 1 },
+      user("bye"),
+    ];
+    const { view } = freshState(strMsgs);
+    const taggedStr = view.messages.some(
+      (m: Msg) => typeof m.content === "string" && m.content.includes("plain string output") && m.content.includes("<wc "),
+    );
+    check("字符串型 toolResult 也带 wc 标签", taggedStr);
+  }
 }
 
 // ── 6.8 BC 对齐：孤儿失败封顶隐藏 / 清单预筛 / 终态计数 ─────────────────────

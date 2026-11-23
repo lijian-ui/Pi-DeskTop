@@ -103,6 +103,13 @@ const MIN_CONTEXT_LIMIT_PCT = 0.3; // BC 默认 0.45，本实现下调到 30%（
 const MAX_CONTEXT_LIMIT_PCT = 0.75;
 const GROWTH_FLOOR = 50000;
 const MIN_GROWTH_RATIO = 0.45;
+/** 常规/A 通路「值得压」的最小可回收量 = 窗口 × 65%。
+ *  为什么不是固定 50K：命中率 ≈ 1 − 每回合新增 ÷ 上下文总量，压缩一次会把前缀整段
+ *  改写，可回收量太小就是纯亏（实测 200K 窗口下 50K 门槛平均只用到 17% 窗口，命中率
+ *  被分母拖到 ~90%）。按窗口比例抬门槛后上下文更饱满，命中率与保留信息量同步上升。
+ *  20K 下限只为极小的窗口兜底，避免碎屑催压。 */
+const NUDGE_PENDING_RATIO = 0.65;
+const NUDGE_PENDING_FLOOR = 20000;
 const EMERGENCY_PCT = 0.95;
 const EMERGENCY_TARGET_RATIO = 0.9;
 const TRUNCATE_MIN_TOKENS = 1000;
@@ -1462,6 +1469,11 @@ function injectTag(msg: AgentMessage, tag: string): AgentMessage {
     return msg;
   }
   if (role === "toolResult") {
+    // 字符串型 content 也要打标签：ref 已经分配了，不打标签模型就永远引用不到它。
+    if (typeof content === "string") {
+      const base = stripWcTag(content);
+      return { ...(msg as object), content: base.trim() === "" ? tag : `${base}\n\n${tag}` } as AgentMessage;
+    }
     if (!Array.isArray(content)) return msg;
     return { ...(msg as object), content: appendToParts(content, tag) } as AgentMessage;
   }
@@ -1944,15 +1956,17 @@ export function refreshView(state: SessionState, messages: readonly AgentMessage
     state.lastBlockCount = blocks.length;
   }
   const win = probe.contextWindow > 0 ? probe.contextWindow : DEFAULT_CONTEXT_WINDOW;
+  // 可回收门槛按窗口缩放（命中率/成本实测见常量注释）。
+  const pendingNeed = Math.max(NUDGE_PENDING_FLOOR, NUDGE_PENDING_RATIO * win);
   const growth = Math.max(0, usage - state.baseline);
   const firstSight = state.lastNudge === 0 && state.baseline === 0;
   let nudged = false;
   let digestHint: { firstBlockId: string; lastBlockId: string } | undefined;
   if (firstSight) {
     // A. 首次见面即大量可压（ref: kernel firstSightMassReady :1756-1760）
-    if (usage >= MIN_CONTEXT_LIMIT_PCT * win && pendingTokens >= GROWTH_FLOOR) nudged = true;
+    if (usage >= MIN_CONTEXT_LIMIT_PCT * win && pendingTokens >= pendingNeed) nudged = true;
     else state.baseline = usage; // 只是没触发，也要把基线记下来供 B 通路测增长
-  } else if (usage >= MIN_CONTEXT_LIMIT_PCT * win && pendingTokens >= GROWTH_FLOOR) {
+  } else if (usage >= MIN_CONTEXT_LIMIT_PCT * win && pendingTokens >= pendingNeed) {
     // B. 常规增长门：可压量充足时门槛降到 22.5K（ref: :1746-1751）。
     // 占用地板与 compress 工具的硬门同口径 —— 否则低占用时一边催压一边 REFUSED。
     const need = GROWTH_FLOOR * MIN_GROWTH_RATIO;
@@ -2042,7 +2056,7 @@ export function refreshView(state: SessionState, messages: readonly AgentMessage
   }
   const cursorCtx =
     cursorIdx >= 0 && win > 0 && usage > 0
-      ? `${formatTokens(usage)}/${formatTokens(win)} ${pctOf(usage, win)}${usage >= MIN_CONTEXT_LIMIT_PCT * win && pendingTokens >= GROWTH_FLOOR ? " ⚠compress" : ""}`
+      ? `${formatTokens(usage)}/${formatTokens(win)} ${pctOf(usage, win)}${usage >= MIN_CONTEXT_LIMIT_PCT * win && pendingTokens >= pendingNeed ? " ⚠compress" : ""}`
       : undefined;
   for (let i = 0; i < view.length; i += 1) {
     const v = view[i];
@@ -2066,6 +2080,7 @@ export function refreshView(state: SessionState, messages: readonly AgentMessage
           v.core.role === "tool" &&
           v.core.tokens >= TRUNCATE_MIN_TOKENS &&
           i < view.length - 3 &&
+          textPartCount(v.msg) <= 1 &&
           !v.core.text.includes(TRUNCATE_MARKER),
       )
       .sort((a, b) => (b.v.core?.tokens ?? 0) - (a.v.core?.tokens ?? 0));
@@ -2133,6 +2148,15 @@ function truncateText(text: string, originalTokens: number): string | null {
 
 function messagesText(msg: AgentMessage): string {
   return flattenParts((msg as { content?: unknown }).content).text;
+}
+
+/** 消息里的 text block 数。应急截断只换最后一个 text block，多 block 的消息截了会变成
+ *  「旧全文 + 前缀+标记+后缀」重复而非变短，所以这类消息直接跳过（少截一条，不赌正确性）。 */
+function textPartCount(msg: AgentMessage): number {
+  const content = (msg as { content?: unknown }).content;
+  if (typeof content === "string") return 1;
+  if (!Array.isArray(content)) return 0;
+  return content.filter((p) => (p as { type?: string } | undefined)?.type === "text").length;
 }
 
 /** 只替换最后一个非空 text block（标签跟着 suffix 留在原地）。 */
@@ -2274,6 +2298,28 @@ const compressParams = Type.Object({
 
 /** 会话快照表（进程内）。账本不在这里持久化 —— 它靠 derive 从转录重放。 */
 const sessions = new Map<string, SessionState>();
+/** 同时跟踪的会话数上限：每项持有 core 全文、projCache 的消息引用与 core 副本、两张
+ *  refs Map，不设上限会随历史会话数线性涨内存。活跃会话每回合都会 touch，不会被误删；
+ *  被淘汰的会话下次访问时从转录重新推导，账本无损。 */
+const MAX_TRACKED_SESSIONS = 8;
+
+/** 取或建会话状态，并按 LRU 淘汰最久未用的（Map 的插入序即使用序）。 */
+function bindSession(sid: string, mk: () => SessionState): SessionState {
+  const hit = sessions.get(sid);
+  if (hit) {
+    sessions.delete(sid);
+    sessions.set(sid, hit);
+    return hit;
+  }
+  const created = mk();
+  sessions.set(sid, created);
+  while (sessions.size > MAX_TRACKED_SESSIONS) {
+    const oldest = sessions.keys().next().value as string | undefined;
+    if (oldest === undefined || oldest === sid) break;
+    sessions.delete(oldest);
+  }
+  return created;
+}
 
 function headTail(text: string, n: number, fromEnd: boolean): string {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -2369,11 +2415,7 @@ const compressTool = defineTool({
   executionMode: "sequential",
   execute: async (toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> => {
     const sid = ctx.sessionManager.getSessionId();
-    let state = sessions.get(sid);
-    if (!state) {
-      state = createSessionState();
-      sessions.set(sid, state);
-    }
+    const state = bindSession(sid, createSessionState);
     const { text } = runCompress(state, toolCallId, params);
     return { content: [{ type: "text", text }], details: undefined };
   },
@@ -2520,6 +2562,14 @@ export default function piworkCompress(pi: ExtensionAPI): void {
     const st = sessionStateFor(sid);
     if (st && st.stuckStreak >= TERMINAL_ESCAPE_AFTER) {
       st.stuckStreak = 0;
+      // 内置压缩会重写转录 ⇒ 旧账本与所有基线作废。不重置的话 blocks 归零而
+      // lastBlockCount 停在旧值，growth 恒为 0，B 通路从此永久沉默。
+      st.baseline = 0;
+      st.lastNudge = 0;
+      st.lastBlockCount = 0;
+      st.lastDigestNudge = 0;
+      st.idleNoticeShown = false;
+      st.projCache = undefined;
       return undefined; // 不 cancel ⇒ 内置压缩照常执行
     }
     return { cancel: true };
@@ -2528,11 +2578,7 @@ export default function piworkCompress(pi: ExtensionAPI): void {
   // 2) 每回合视图改写。ref: BC index.ts:406-423（入参 event.messages，出参 { messages }）。
   pi.on("context", (event, ctx) => {
     const sid = ctx.sessionManager.getSessionId();
-    let state = sessions.get(sid);
-    if (!state) {
-      state = createSessionState();
-      sessions.set(sid, state);
-    }
+    const state = bindSession(sid, createSessionState);
     const view = refreshView(state, event.messages, probeFromContext(ctx));
     return { messages: view.messages };
   });
