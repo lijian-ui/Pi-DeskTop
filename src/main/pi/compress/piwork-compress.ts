@@ -1656,6 +1656,9 @@ export interface SessionState {
   stuckStreak: number;
   /** 「压无可压」一次性提示是否已发（出现候选即重武装；分支/rewind 新建 state 自然重置）。 */
   idleNoticeShown: boolean;
+  /** 最近一次真正发给模型的视图消息（context 事件现算）。用量明细面板据此分桶，
+   *  避免把已被块隐藏的历史原文算成当前上下文；仅进程内持有，随 LRU 淘汰。 */
+  lastSentView?: readonly AgentMessage[];
 }
 
 export function createSessionState(): SessionState {
@@ -1677,6 +1680,11 @@ export function createSessionState(): SessionState {
     stuckStreak: 0,
     idleNoticeShown: false,
   };
+}
+
+/** 最近一次真正发给模型的视图消息（供用量明细面板分桶）。未启用压缩 / 尚未发过请求时为 undefined。 */
+export function getLatestSentView(sessionId: string): readonly AgentMessage[] | undefined {
+  return sessions.get(sessionId)?.lastSentView;
 }
 
 export interface UsageProbe {
@@ -2580,6 +2588,7 @@ export default function piworkCompress(pi: ExtensionAPI): void {
     const sid = ctx.sessionManager.getSessionId();
     const state = bindSession(sid, createSessionState);
     const view = refreshView(state, event.messages, probeFromContext(ctx));
+    state.lastSentView = view.messages;
     return { messages: view.messages };
   });
 

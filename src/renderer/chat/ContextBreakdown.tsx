@@ -42,15 +42,17 @@ export default function ContextBreakdownPanel({
   const { t } = useTranslation();
   const na = t("chat.breakdownUnavailable");
   const value = (n: number | null) => (n == null ? na : formatTokens(n));
+  // 系统开销 = 系统提示词估算 + 转录里 system 角色消息（两者都随请求发送）。
+  const systemValue = breakdown.systemPrompt == null ? null : breakdown.systemPrompt + breakdown.system;
 
   return (
     <div className={styles.popover} role="dialog" aria-label={t("chat.contextBreakdown")}>
       <div className={styles.popTitle}>{t("chat.contextBreakdown")}</div>
-      <Row k={t("chat.breakdownSystem")} v={value(breakdown.systemPrompt)} />
+      <Row k={t("chat.breakdownSystem")} v={value(systemValue)} />
       <Row k={t("chat.breakdownToolDefs")} v={value(breakdown.toolDefs)} />
+      <Row k={t("chat.breakdownUser")} v={value(breakdown.user)} />
+      <Row k={t("chat.breakdownModel")} v={value(breakdown.model)} />
       <Row k={t("chat.breakdownToolResults")} v={value(breakdown.tool)} />
-      <Row k={t("chat.breakdownText")} v={value(breakdown.text)} />
-      <Row k={t("chat.breakdownCode")} v={value(breakdown.code)} />
       <Row k={t("chat.breakdownSummaries")} v={value(breakdown.summaries)} />
       <Row k={t("chat.breakdownTotal")} v={value(breakdown.total)} strong />
       {breakdown.providerTokens != null && (

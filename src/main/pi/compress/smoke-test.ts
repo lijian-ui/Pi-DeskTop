@@ -1054,24 +1054,24 @@ const bdMsg = (over: Record<string, unknown>) => ({ role: "user", text: "", cont
   // toolName 不参与判定（BC issue #390）
   const named = bdMsg({ role: "assistant", contentType: "text", text: "普通说明", toolName: "bash" });
   const t2 = computeContextBreakdown([named]);
-  check("带 toolName 的普通文本不算 tool", isToolMessage(named) === false && t2.tool === 0 && t2.text > 0);
+  check("带 toolName 的普通文本不算 tool", isToolMessage(named) === false && t2.tool === 0 && t2.model > 0);
   check("tool-call/tool-result 才算 tool", isToolMessage(bdMsg({ contentType: "tool-call" })) === true && isToolMessage(bdMsg({ contentType: "tool-result" })) === true);
 
-  // tool 抢在 code 前；system 抢在 code 前；code 看 ```
+  // 按来源分桶：tool 仍抢在其余之前；assistant → 模型输出，user → 用户输入
   const mix = computeContextBreakdown([
     bdMsg({ role: "toolResult", contentType: "tool-result", text: "```js\ncode\n```" }),
     bdMsg({ role: "system", text: "prompt with ``` fence" }),
-    bdMsg({ role: "user", text: "```python\nx=1\n```" }),
+    bdMsg({ role: "assistant", text: "带代码 ```python\nx=1\n```" }),
     bdMsg({ role: "user", text: "纯文本一句话" }),
   ]);
-  check("tool 带代码块仍算 tool", mix.tool > 0 && mix.code > 0);
-  check("system 优先于 code", mix.system > 0);
-  check("code 只认含 ``` 的正文", mix.code === countTokens("```python\nx=1\n```"), JSON.stringify(mix));
-  check("text 桶收纯文本", mix.text === countTokens("纯文本一句话"));
+  check("tool 带代码块仍算 tool", mix.tool === countTokens("```js\ncode\n```"), JSON.stringify(mix));
+  check("system 独立成一桶", mix.system > 0);
+  check("模型输出不再按代码拆分", mix.model === countTokens("带代码 ```python\nx=1\n```"), JSON.stringify(mix));
+  check("用户输入独立成一桶", mix.user === countTokens("纯文本一句话"), JSON.stringify(mix));
 
   // 地板：合计取大，不虚高
   const floored = computeContextBreakdown([bdMsg({ text: "abcd" })], 1000);
-  check("provider 读数更高时取地板", floored.total === 1000 && floored.text === 1);
+  check("provider 读数更高时取地板", floored.total === 1000 && floored.user === 1);
   const noFloor = computeContextBreakdown([bdMsg({ text: "abcd" })], null);
   check("无地板时合计=桶和", noFloor.total === 1);
   const lowerFloor = computeContextBreakdown([bdMsg({ text: "x".repeat(400) })], 10);

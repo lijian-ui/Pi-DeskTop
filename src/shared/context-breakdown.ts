@@ -34,13 +34,18 @@ export interface BreakdownMessage {
   summary?: boolean;
 }
 
-/** 消息侧分桶结果。 */
+/** 消息侧分桶结果（按来源分桶：谁产生的内容占了多少上下文）。 */
 export interface BreakdownBuckets {
+  /** 对话转录里的 system 角色消息；UI 并入「系统提示」行展示。 */
   system: number;
+  /** 用户输入：user 角色正文（未知/自定义角色的兜底）。 */
+  user: number;
+  /** 模型输出：assistant 正文 + 思考。 */
+  model: number;
+  /** 工具：调用入参 + 工具输出。 */
   tool: number;
+  /** 压缩摘要（自研 wc-summary + 内置压缩边界）。 */
   summaries: number;
-  code: number;
-  text: number;
   /** 桶和与外部地板（provider 真实读数）取大后的合计。 */
   total: number;
 }
@@ -110,9 +115,10 @@ export function reconstructCompressSummaries(args: unknown): string[] {
 }
 
 /**
- * 分桶。判定顺序不许改：summaries → tool(contentType) → system → code(含 ```) → text。
+ * 分桶。判定顺序不许改：summaries → tool(contentType) → system → assistant → 其余。
  * 摘要必须抢在 tool 前（摘要由 compress 工具产出，形态上是 tool 结果）；tool 必须
- * 抢在 system / code / text 前（工具入参、返回值里满是代码块）。
+ * 抢在其余之前（工具入参、返回值里满是代码块与正文）。其余按来源：assistant 进
+ * 「模型输出」，user 及未知角色进「用户输入」。
  *
  * `total` 是外部地板（provider 报称的真实 token），合计取 `max(桶和, 地板)`。
  */
@@ -121,20 +127,20 @@ export function computeContextBreakdown(
   total?: number | null,
 ): BreakdownBuckets {
   let system = 0;
+  let user = 0;
+  let model = 0;
   let tool = 0;
   let summaries = 0;
-  let code = 0;
-  let text = 0;
   for (const msg of messages) {
     if (!msg) continue;
     const tokens = countMessageTokens(msg);
     if (isSummaryMessage(msg)) summaries += tokens;
     else if (isToolMessage(msg)) tool += tokens;
     else if (msg.role === "system") system += tokens;
-    else if (msg.text.includes("```")) code += tokens;
-    else text += tokens;
+    else if (msg.role === "assistant") model += tokens;
+    else user += tokens;
   }
-  const sum = system + tool + summaries + code + text;
+  const sum = system + user + model + tool + summaries;
   const floor = typeof total === "number" && Number.isFinite(total) ? total : 0;
-  return { system, tool, summaries, code, text, total: Math.max(sum, floor) };
+  return { system, user, model, tool, summaries, total: Math.max(sum, floor) };
 }

@@ -45,7 +45,7 @@ import { readRules, writeRules, deleteRulesFile } from "./rules";
 import { rulesExtension } from "./rules-extension";
 import { docsStripExtension } from "./docs-strip-extension";
 import { preambleExtension } from "./preamble-extension";
-import { compressExtension } from "./compress/piwork-compress";
+import { compressExtension, getLatestSentView } from "./compress/piwork-compress";
 import { loadConfig } from "./memory/config";
 import { readJsonFileSync } from "../json-file";
 import { scanMemoryContent } from "./memory/guard";
@@ -1133,6 +1133,8 @@ interface RuntimeUnit {
 
 /** 超过这个条数只统计最近 N 条并置 estimated（5MB 会话全量跑也不过几 ms）。 */
 const BREAKDOWN_MAX_MESSAGES = 5000;
+/** 视图消息里 compress 调用已被扩展隐藏，无需再减摘要，用空集即可。 */
+const EMPTY_CALL_IDS: ReadonlySet<string> = new Set();
 
 function safeStringify(value: unknown): string {
   try {
@@ -1286,6 +1288,23 @@ function projectProjectedFrom(
  * 覆盖的原文仍留在各自桶里（判定覆盖需要重放折叠逻辑，超出明细面板的估算精度诉求）。
  */
 function projectBreakdownMessages(session: any): { messages: BreakdownMessage[]; estimated: boolean } {
+  // 优先用 compress 扩展「最近一次真正发给模型的视图」：被块隐藏的历史原文不在其中，
+  // 分桶结果才等于当前上下文（否则工具输出等会按整段会话累计，合计远超 provider 读数）。
+  // 拿不到（压缩未启用 / 尚未发过请求）再退回整份发送投影 —— 那种情况下没有隐藏，两者等价。
+  const sid: unknown = session?.sessionManager?.getSessionId?.();
+  const sent = typeof sid === "string" ? getLatestSentView(sid) : undefined;
+  if (sent && sent.length > 0) {
+    const msgs: BreakdownMessage[] = [];
+    for (const raw of sent) {
+      const pm = projectMessageForBreakdown(raw, EMPTY_CALL_IDS);
+      if (pm) msgs.push(pm);
+    }
+    const over = msgs.length > BREAKDOWN_MAX_MESSAGES;
+    return {
+      messages: over ? msgs.slice(msgs.length - BREAKDOWN_MAX_MESSAGES) : msgs,
+      estimated: over,
+    };
+  }
   const projection = session?.sessionManager?.buildSessionProjection?.();
   const projected: any[] = Array.isArray(projection?.entries) ? projection.entries : [];
   // 生效 compress 调用必须全量扫：隐藏判定会影响**保留下来的**尾部消息怎么计文，
@@ -1377,10 +1396,10 @@ function buildContextBreakdown(session: any, providerTokens: number | null): Con
     const buckets = computeContextBreakdown(messages, providerTokens);
     const withOverhead =
       buckets.system +
+      buckets.user +
+      buckets.model +
       buckets.tool +
       buckets.summaries +
-      buckets.code +
-      buckets.text +
       (systemPrompt ?? 0) +
       (toolDefs ?? 0);
     return {
@@ -1396,10 +1415,10 @@ function buildContextBreakdown(session: any, providerTokens: number | null): Con
       systemPrompt: null,
       toolDefs: null,
       system: 0,
+      user: 0,
+      model: 0,
       tool: 0,
       summaries: 0,
-      code: 0,
-      text: 0,
       total: providerTokens ?? 0,
       providerTokens,
       estimated: true,
