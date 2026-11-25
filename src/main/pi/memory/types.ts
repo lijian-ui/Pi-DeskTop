@@ -21,34 +21,26 @@ export interface SessionSearchConfig {
 }
 
 export interface MemoryConfig {
-  /** Prompt memory mode. Default: policy-only */
-  memoryMode: "policy-only" | "legacy-inject";
-  /** Policy prompt style used when memoryMode is policy-only. Default: full */
-  memoryPolicyStyle?: "full" | "compact" | "custom" | "none";
-  /** Custom policy prompt text used when memoryPolicyStyle is custom */
-  memoryPolicyCustomText?: string;
+  /**
+   * Prompt memory mode. Only "policy-only" remains: the policy prompt is always
+   * injected and memory bodies are never dumped into the system prompt
+   * (old configs holding "legacy-inject" are silently migrated in config.ts).
+   */
+  memoryMode: "policy-only";
   /** Max chars for MEMORY.md (agent notes). Default: 5000 */
   memoryCharLimit: number;
   /** Max chars for USER.md (user profile). Default: 5000 */
   userCharLimit: number;
-  /** Max chars for project-level MEMORY.md. Default: 5000 */
-  projectCharLimit: number;
-  /** Turns between background auto-reviews. Default: 10 */
-  nudgeInterval: number;
-  /** Recent conversation messages included in background review. 0 = all. Default: 0 */
-  reviewRecentMessages?: number;
-  /** Enable background learning loop. Default: true */
-  reviewEnabled: boolean;
-  /** How background review invokes the LLM. Default: direct */
+  /** How background LLM calls (consolidation, pending-flush catch-up) invoke the model. Default: direct */
   reviewTransport?: ReviewTransport;
-  /** Flush memories before compaction. Default: true */
-  flushOnCompact: boolean;
-  /** Flush memories on session shutdown. Default: true */
-  flushOnShutdown: boolean;
-  /** Minimum user turns before flush triggers. Default: 6 */
-  flushMinTurns: number;
-  /** Recent conversation messages included in session flush. 0 = all. Default: 0 */
-  flushRecentMessages?: number;
+  /**
+   * Single auto-deposit switch. When on:
+   * - a hidden user-role flush turn is injected once enough context has been
+   *   dropped (merged trigger: N events or M dropped tokens);
+   * - shutdown writes a conversation snapshot for the next session to drain.
+   * When off, neither path runs. Default: true
+   */
+  autoDeposit: boolean;
   /** Override extension storage directory. Default: ~/.pi/agent/pi-hermes-memory */
   memoryDir?: string;
   /** Directory for project-scoped memory (relative to ~/.pi/agent). Default: "projects-memory" */
@@ -71,27 +63,16 @@ export interface MemoryConfig {
   overflowGraceMs?: number;
   /** Legacy alias for memoryOverflowStrategy. Default: true */
   autoConsolidate: boolean;
-  /** Detect user corrections and trigger immediate memory save. Default: true */
-  correctionDetection: boolean;
-  /** Override strong correction regex sources. Missing = defaults; [] = none. */
-  correctionStrongPatterns?: string[];
-  /** Override weak correction regex sources. Missing = defaults; [] = none. */
-  correctionWeakPatterns?: string[];
-  /** Override negative correction regex sources. Missing = defaults; [] = none. */
-  correctionNegativePatterns?: string[];
-  /** Override directive words used after weak correction patterns. Missing = defaults; [] = none. */
-  correctionDirectiveWords?: string[];
   /**
-   * Inject recent failure memories into the system prompt whenever the model
-   * may not think to search for them itself. Default: true
+   * Inject recent correction / preference memories into the system prompt.
+   * Default: true
    */
-  failureInjectionEnabled: boolean;
-  /** Maximum age in days for injected failure memories. Default: 7 */
-  failureInjectionMaxAgeDays: number;
-  /** Maximum number of failure memories to inject. Default: 5 */
-  failureInjectionMaxEntries: number;
-  /** Tool calls before triggering background review (in addition to turn count). Default: 15 */
-  nudgeToolCalls: number;
+  correctionInjectionEnabled?: boolean;
+  /**
+   * Append a one-line memory_search hint to user messages that refer to prior
+   * context (上次 / 之前 / as we agreed ...). Default: true
+   */
+  retrievalHintEnabled?: boolean;
   /** Maximum time in milliseconds for a consolidation run, auto or manual. Default: 180000 */
   consolidationTimeoutMs: number;
   /** Log failed auto-consolidation attempts to the session console. Default: true */
@@ -125,7 +106,7 @@ export interface MemoryResult {
   message?: string;
   warning?: string;
   warnings?: string[];
-  target?: "memory" | "user" | "failure" | "project";
+  target?: "memory" | "user" | "failure";
   entries?: string[];
   usage?: string;
   entry_count?: number;
@@ -133,7 +114,7 @@ export interface MemoryResult {
   evicted_count?: number;
   matches?: string[];
   /** Targets that contain old_text when a replace/remove was sent to the wrong one. */
-  matching_targets?: Array<"memory" | "user" | "failure" | "project">;
+  matching_targets?: Array<"memory" | "user" | "failure">;
 }
 
 export interface MemoryMutationOperation {

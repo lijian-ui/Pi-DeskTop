@@ -464,6 +464,27 @@ async function writePromptToTemporaryFile(prompt: string): Promise<{ dir: string
   }
 }
 
+/**
+ * Electron 宿主里 `process.execPath` 是 Electron 本体：直接 spawn 会按 browser 模式
+ * 启动 Chromium（磁盘缓存锁冲突、窗口初始化），pi CLI 拿不到 Node 语义而失败，stderr
+ * 全是 cache_util_win / deprecation 噪音。`pi.exec` 不支持传 env，而 spawn 是同步读
+ * `process.env` 的 —— 所以只在这一个调用窗口内打开 ELECTRON_RUN_AS_NODE，spawn 一
+ * 发生就还原（pid 级别的 env 快照，不影响后续进程）。
+ */
+function execAsPlainNode<T>(run: () => Promise<T>): Promise<T> {
+  if (!process.versions.electron) return run();
+  const previous = process.env.ELECTRON_RUN_AS_NODE;
+  process.env.ELECTRON_RUN_AS_NODE = "1";
+  let pending: Promise<T>;
+  try {
+    pending = run();
+  } finally {
+    if (previous === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+    else process.env.ELECTRON_RUN_AS_NODE = previous;
+  }
+  return pending;
+}
+
 export async function execChildPrompt(
   pi: Pick<ExtensionAPI, "exec">,
   prompt: string,
@@ -495,7 +516,9 @@ export async function execChildPrompt(
         options.timeoutMs,
         cancellationPath,
       );
-      const result = await pi.exec(invocation.command, invocation.args, execOptions) as PiExecResult;
+      const result = await execAsPlainNode(
+        () => pi.exec(invocation.command, invocation.args, execOptions) as Promise<PiExecResult>,
+      );
       if (
         result.code === 0 ||
         !options.retryWithoutOverrides ||
@@ -519,7 +542,9 @@ export async function execChildPrompt(
       options.timeoutMs,
       cancellationPath,
     );
-    return await pi.exec(retryInvocation.command, retryInvocation.args, execOptions) as PiExecResult;
+    return await execAsPlainNode(
+      () => pi.exec(retryInvocation.command, retryInvocation.args, execOptions) as Promise<PiExecResult>,
+    );
   } finally {
     options.signal?.removeEventListener("abort", requestCancellation);
     try {

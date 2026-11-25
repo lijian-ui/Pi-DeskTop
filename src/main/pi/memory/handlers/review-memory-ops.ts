@@ -13,7 +13,7 @@ import type { MemoryCategory, MemoryConfig, MemoryResult, ThinkingLevel } from "
 
 export interface ReviewMemoryOperation {
   action: "add" | "replace" | "remove";
-  target: "memory" | "user" | "project" | "failure";
+  target: "memory" | "user" | "failure";
   content?: string;
   old_text?: string;
   category?: MemoryCategory;
@@ -295,7 +295,7 @@ function isMemoryCategory(value: unknown): value is MemoryCategory {
 }
 
 function isReviewTarget(value: unknown): value is ReviewMemoryOperation["target"] {
-  return value === "memory" || value === "user" || value === "project" || value === "failure";
+  return value === "memory" || value === "user" || value === "failure";
 }
 
 function isReviewAction(value: unknown): value is ReviewMemoryOperation["action"] {
@@ -337,10 +337,8 @@ export function parseReviewOperations(text: string): ReviewMemoryOperation[] | n
 
 export async function applyReviewOperations(
   store: MemoryStore,
-  projectStore: MemoryStore | null,
   operations: ReviewMemoryOperation[],
   dbManager: DatabaseManager | null = null,
-  projectName?: string | null,
   options: {
     requireAtomicShrink?: boolean;
     expectedTarget?: ReviewMemoryOperation["target"];
@@ -374,28 +372,17 @@ export async function applyReviewOperations(
         error: `Atomic plan targeted '${target}', expected '${options.expectedTarget}'.`,
       };
     }
-    if (target === "project" && !projectStore) {
-      return {
-        appliedCount: 0,
-        skippedCount: operations.length,
-        error: "Project memory is unavailable.",
-      };
-    }
-
     if (options.signal?.aborted) {
       return { appliedCount: 0, skippedCount: operations.length, aborted: true };
     }
-    const activeStore = target === "project" ? projectStore! : store;
-    const memoryTarget = target === "project" ? "memory" : target;
     const mutationOperations = operations.map((operation) => ({
       action: operation.action,
       content: operation.content,
       oldText: operation.old_text,
       category: target === "failure" ? operation.category ?? "failure" : operation.category,
       failureReason: operation.failure_reason,
-      project: target === "failure" ? projectName ?? undefined : undefined,
     }));
-    const result = await activeStore.applyMutationPlan(memoryTarget, mutationOperations, {
+    const result = await store.applyMutationPlan(target, mutationOperations, {
       requireShrink: true,
       signal: options.signal,
     });
@@ -431,7 +418,6 @@ export async function applyReviewOperations(
   const flagConflicts = (
     activeStore: MemoryStore,
     memoryTarget: "memory" | "user" | "failure",
-    projectScope: string | null,
     content: string,
   ): void => {
     conflictFlagged += flagConflictsForWrite({
@@ -439,7 +425,7 @@ export async function applyReviewOperations(
       existingTexts: activeStore.getMemoryEntries(),
       content,
       target: memoryTarget,
-      project: projectScope,
+      project: null,
     });
   };
 
@@ -449,14 +435,8 @@ export async function applyReviewOperations(
       return { appliedCount, skippedCount, aborted: appliedCount === 0 };
     }
     const op = operations[i];
-    if (op.target === "project" && !projectStore) {
-      skippedCount++;
-      continue;
-    }
-
-    const rawTarget = op.target;
-    const memoryTarget = rawTarget === "project" ? "memory" : rawTarget === "failure" ? "failure" : rawTarget;
-    const activeStore = rawTarget === "project" ? projectStore! : store;
+    const memoryTarget = op.target;
+    const activeStore = store;
 
     let result: MemoryResult;
     switch (op.action) {
@@ -470,12 +450,11 @@ export async function applyReviewOperations(
           skippedCount++;
           continue;
         }
-        if (rawTarget === "failure") {
+        if (memoryTarget === "failure") {
           const category = op.category ?? "failure";
           result = await activeStore.addFailure(op.content, {
             category,
             failureReason: op.failure_reason,
-            project: projectName ?? undefined,
             signal: options.signal,
             sourceSessionId: options.sourceSessionId,
           });
@@ -488,12 +467,7 @@ export async function applyReviewOperations(
           result = await activeStore.add(memoryTarget, op.content, options.signal, options.sourceSessionId);
           if (result.success) {
             appliedCount++;
-            flagConflicts(
-              activeStore,
-              memoryTarget,
-              memoryTarget === "user" ? null : (projectName ?? null),
-              op.content,
-            );
+            flagConflicts(activeStore, memoryTarget, op.content);
           } else {
             skippedCount++;
           }
@@ -515,12 +489,7 @@ export async function applyReviewOperations(
           appliedCount++;
           // A replaced entry can contradict a third one, so re-check the same
           // way an add does.
-          flagConflicts(
-            activeStore,
-            memoryTarget,
-            memoryTarget === "user" ? null : (projectName ?? null),
-            op.content,
-          );
+          flagConflicts(activeStore, memoryTarget, op.content);
         } else {
           skippedCount++;
         }
@@ -554,6 +523,8 @@ export async function applyReviewOperations(
 }
 
 function responseText(content: unknown): string {
+  // 少数 provider/适配器给的是字符串 content，按数组处理会得到空串 → 被误判成 parse_error。
+  if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
     .filter((block): block is { type: "text"; text: string } => (
@@ -566,10 +537,8 @@ function responseText(content: unknown): string {
 export async function runDirectMemoryCompletion(
   ctx: Pick<ExtensionContext, "model" | "modelRegistry">,
   store: MemoryStore,
-  projectStore: MemoryStore | null,
   options: RunDirectMemoryCompletionOptions,
   dbManager: DatabaseManager | null = null,
-  projectName?: string | null,
   deps: { completeSimple?: typeof completeSimple } = {},
 ): Promise<DirectReviewResult> {
   const complete = deps.completeSimple ?? completeSimple;
@@ -668,7 +637,14 @@ export async function runDirectMemoryCompletion(
       const text = responseText(response.content);
       const operations = parseReviewOperations(text);
       if (operations === null) {
-        lastResult = { ok: false, appliedCount: 0, fallbackReason: "parse_error" };
+        // 带上 stopReason 与正文长度（不含正文，避免把会话内容漏进通知），
+        // 才能区分「模型没按协议回答」与「响应被截断 / 压根没吐文本」。
+        lastResult = {
+          ok: false,
+          appliedCount: 0,
+          fallbackReason: "parse_error",
+          error: `stopReason=${response.stopReason ?? "unknown"}, text=${text.length} chars`,
+        };
         if (mi < models.length - 1) { clearTimeout(timeout); continue; }
         return lastResult;
       }
@@ -682,10 +658,8 @@ export async function runDirectMemoryCompletion(
 
       const applied = await applyReviewOperations(
         store,
-        projectStore,
         operations,
         dbManager,
-        projectName,
         {
           requireAtomicShrink: options.requireAtomicShrink,
           expectedTarget: options.expectedTarget,

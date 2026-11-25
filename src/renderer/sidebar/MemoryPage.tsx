@@ -23,7 +23,7 @@ const MEMORY_CATEGORIES = [
  *    `<user-rules>…</user-rules>` 追加到系统提示词最末尾，所有会话与定时任务遵循。
  * 3) 记忆库：浏览 / 搜索 / 编辑 / 删除 / 置顶 Hermes 记忆（可编辑）。
  * 4) 快照：记忆库 7 天轮转备份的手动触发与列表。
- * 5) 记忆设置：核心记忆旋钮（沉淀/复习/衰减/锚点/守卫），改完热重载生效。
+ * 5) 记忆设置：核心记忆旋钮（沉淀/衰减/锚点/守卫），改完热重载生效。
  *
  * 注：曾有一节「常驻指令」（hermes STANDING.md，注入 <standing-instructions>），
  * 与「规则」在语义和注入时机上完全重叠，已移除 —— 需要"必须始终遵守"的约束
@@ -660,86 +660,13 @@ export default function MemoryPage() {
         {mcfg && (
           <>
             {/* 自动沉淀 */}
-            <div className={switchStyles.cfgGroupTitle}>自动沉淀（对话结束/压缩前）</div>
+            <div className={switchStyles.cfgGroupTitle}>自动沉淀</div>
             <div className={switchStyles.card}>
               <CfgSwitch
-                label="对话结束时沉淀"
-                desc="会话关闭前让 LLM 抽取值得记的耐久记忆"
-                on={mcfg.flushOnShutdown}
-                onClick={() => flipCfg("flushOnShutdown")}
-              />
-              <div className={switchStyles.cardDivider} />
-              <CfgSwitch
-                label="上下文压缩前沉淀"
-                desc="压缩丢弃上下文前先兜底保存记忆"
-                on={mcfg.flushOnCompact}
-                onClick={() => flipCfg("flushOnCompact")}
-              />
-              <div className={switchStyles.cardDivider} />
-              <CfgNumber
-                label="最少用户轮次"
-                desc="对话短于此轮数直接跳过，不调 LLM。0 = 不限制"
-                value={mcfg.flushMinTurns}
-                min={0}
-                onCommit={(v) => setCfgNumber({ flushMinTurns: v }, { flushMinTurns: v })}
-              />
-              <div className={switchStyles.cardDivider} />
-              <CfgNumber
-                label="沉淀时回看的消息数"
-                desc="0 = 整段对话都看"
-                value={mcfg.flushRecentMessages}
-                min={0}
-                onCommit={(v) =>
-                  setCfgNumber({ flushRecentMessages: v }, { flushRecentMessages: v })
-                }
-              />
-            </div>
-
-            {/* 后台复习 */}
-            <div className={switchStyles.cfgGroupTitle}>后台复习（周期性提炼）</div>
-            <div className={switchStyles.card}>
-              <CfgSwitch
-                label="启用后台复习"
-                desc="周期性回顾近期对话，提炼/合并记忆"
-                on={mcfg.reviewEnabled}
-                onClick={() => flipCfg("reviewEnabled")}
-              />
-              <div className={switchStyles.cardDivider} />
-              <CfgNumber
-                label="复习间隔（用户轮次）"
-                desc="每多少轮触发一次复习"
-                value={mcfg.nudgeInterval}
-                min={1}
-                onCommit={(v) => setCfgNumber({ nudgeInterval: v }, { nudgeInterval: v })}
-              />
-              <div className={switchStyles.cardDivider} />
-              <CfgNumber
-                label="复习间隔（工具调用数）"
-                desc="工具调用累计到此数也触发复习"
-                value={mcfg.nudgeToolCalls}
-                min={1}
-                onCommit={(v) => setCfgNumber({ nudgeToolCalls: v }, { nudgeToolCalls: v })}
-              />
-              <div className={switchStyles.cardDivider} />
-              <CfgNumber
-                label="复习时回看的消息数"
-                desc="0 = 整段对话都看"
-                value={mcfg.reviewRecentMessages}
-                min={0}
-                onCommit={(v) =>
-                  setCfgNumber({ reviewRecentMessages: v }, { reviewRecentMessages: v })
-                }
-              />
-            </div>
-
-            {/* 纠正检测 */}
-            <div className={switchStyles.cfgGroupTitle}>纠正检测（实时）</div>
-            <div className={switchStyles.card}>
-              <CfgSwitch
-                label="启用纠正检测"
-                desc="检测到用户纠错/工具报错时当场沉淀教训"
-                on={mcfg.correctionDetection}
-                onClick={() => flipCfg("correctionDetection")}
+                label="启用自动沉淀"
+                desc="上下文被裁剪且丢弃量累计达标（约 3 次或 8000 tokens，5 分钟内最多一次）时插入隐藏提示，由模型自己决定是否记忆；退出会话时另存快照，下次开新会话补做"
+                on={mcfg.autoDeposit}
+                onClick={() => flipCfg("autoDeposit")}
               />
             </div>
 
@@ -802,43 +729,6 @@ export default function MemoryPage() {
                   setCfgNumber(
                     { ranking: { decayGraceDays: v } },
                     { decayGraceDays: v },
-                  )
-                }
-              />
-            </div>
-
-            {/* 失败教训（两种模式都注入）*/}
-            <div className={switchStyles.cfgGroupTitle}>失败教训（无条件注入）</div>
-            <div className={switchStyles.card}>
-              <CfgSwitch
-                label="注入最近的失败教训"
-                desc="把最近踩过的坑直接写进系统提示词。这条通道不受 memoryMode 影响 —— 教训必须「不请自来」，等模型主动检索就已经晚了"
-                on={mcfg.failureInjectionEnabled}
-                onClick={() => flipCfg("failureInjectionEnabled")}
-              />
-              <div className={switchStyles.cardDivider} />
-              <CfgNumber
-                label="只取最近多少天内"
-                desc="超过这个天数的失败教训不再注入（默认 7 天）"
-                value={mcfg.failureInjectionMaxAgeDays}
-                min={0}
-                onCommit={(v) =>
-                  setCfgNumber(
-                    { failureInjection: { maxAgeDays: v } },
-                    { failureInjectionMaxAgeDays: v },
-                  )
-                }
-              />
-              <div className={switchStyles.cardDivider} />
-              <CfgNumber
-                label="最多注入几条"
-                desc="每轮的条数上限，取最近写入的 N 条（默认 5，设为 0 等于关闭）"
-                value={mcfg.failureInjectionMaxEntries}
-                min={0}
-                onCommit={(v) =>
-                  setCfgNumber(
-                    { failureInjection: { maxEntries: v } },
-                    { failureInjectionMaxEntries: v },
                   )
                 }
               />

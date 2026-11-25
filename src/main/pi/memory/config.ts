@@ -7,17 +7,9 @@ import type { GuardConfig, GuardSeverity } from "./guard/types";
 import {
   DEFAULT_MEMORY_CHAR_LIMIT,
   DEFAULT_USER_CHAR_LIMIT,
-  DEFAULT_PROJECT_CHAR_LIMIT,
   DEFAULT_PROJECTS_MEMORY_DIR,
-  DEFAULT_NUDGE_INTERVAL,
-  DEFAULT_FLUSH_MIN_TURNS,
-  DEFAULT_NUDGE_TOOL_CALLS,
-  DEFAULT_REVIEW_RECENT_MESSAGES,
-  DEFAULT_FLUSH_RECENT_MESSAGES,
   DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   DEFAULT_OVERFLOW_GRACE_MS,
-  DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
-  DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
   DEFAULT_SESSION_RETENTION_DAYS,
 } from "./constants";
 import { AGENT_ROOT, normalizeConfiguredMemoryDir, normalizeProjectsMemoryDir } from "./paths";
@@ -61,29 +53,17 @@ function isThinkingLevel(value: unknown): value is ThinkingLevel {
 
 const DEFAULT_CONFIG: MemoryConfig = {
   memoryMode: "policy-only",
-  // compact = 去重精简版（~270 token）；full 的 legacy 长版保留为显式 opt-in。
-  memoryPolicyStyle: "compact",
   memoryCharLimit: DEFAULT_MEMORY_CHAR_LIMIT,
   userCharLimit: DEFAULT_USER_CHAR_LIMIT,
-  projectCharLimit: DEFAULT_PROJECT_CHAR_LIMIT,
-  nudgeInterval: DEFAULT_NUDGE_INTERVAL,
-  reviewRecentMessages: DEFAULT_REVIEW_RECENT_MESSAGES,
-  reviewEnabled: true,
   reviewTransport: "direct",
-  flushOnCompact: true,
-  flushOnShutdown: true,
-  flushMinTurns: DEFAULT_FLUSH_MIN_TURNS,
-  flushRecentMessages: DEFAULT_FLUSH_RECENT_MESSAGES,
+  autoDeposit: true,
   memoryOverflowStrategy: "auto-consolidate",
   overflowGraceMs: DEFAULT_OVERFLOW_GRACE_MS,
   autoConsolidate: true,
-  correctionDetection: true,
-  failureInjectionEnabled: true,
-  failureInjectionMaxAgeDays: DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
-  failureInjectionMaxEntries: DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
+  correctionInjectionEnabled: true,
+  retrievalHintEnabled: true,
   consolidationTimeoutMs: DEFAULT_CONSOLIDATION_TIMEOUT_MS,
   autoConsolidationWarnOnFailure: true,
-  nudgeToolCalls: DEFAULT_NUDGE_TOOL_CALLS,
   projectsMemoryDir: DEFAULT_PROJECTS_MEMORY_DIR,
   sessionSearch: { variant: "legacy" },
   quickCheckOnOpen: true,
@@ -104,21 +84,7 @@ export const DEFAULT_CONFIG_PATH = path.join(
  * untouched so the panel cannot corrupt unrelated settings.
  */
 export interface MemoryConfigPatch {
-  flushOnShutdown?: boolean;
-  flushOnCompact?: boolean;
-  flushMinTurns?: number;
-  flushRecentMessages?: number;
-  reviewEnabled?: boolean;
-  reviewRecentMessages?: number;
-  nudgeInterval?: number;
-  nudgeToolCalls?: number;
-  correctionDetection?: boolean;
-  /** Inject recent failure lessons into the prompt in both memory modes. */
-  failureInjection?: {
-    enabled?: boolean;
-    maxAgeDays?: number;
-    maxEntries?: number;
-  };
+  autoDeposit?: boolean;
   ranking?: {
     enabled?: boolean;
     halfLifeDays?: number;
@@ -164,21 +130,7 @@ export function saveConfig(
   const isBool = (v: unknown): v is boolean => typeof v === "boolean";
   const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
 
-  if (isBool(patch.flushOnShutdown)) raw.flushOnShutdown = patch.flushOnShutdown;
-  if (isBool(patch.flushOnCompact)) raw.flushOnCompact = patch.flushOnCompact;
-  if (isNum(patch.flushMinTurns)) raw.flushMinTurns = Math.trunc(patch.flushMinTurns);
-  if (isNum(patch.flushRecentMessages)) raw.flushRecentMessages = Math.trunc(patch.flushRecentMessages);
-  if (isBool(patch.reviewEnabled)) raw.reviewEnabled = patch.reviewEnabled;
-  if (isNum(patch.reviewRecentMessages)) raw.reviewRecentMessages = Math.trunc(patch.reviewRecentMessages);
-  if (isNum(patch.nudgeInterval)) raw.nudgeInterval = Math.trunc(patch.nudgeInterval);
-  if (isNum(patch.nudgeToolCalls)) raw.nudgeToolCalls = Math.trunc(patch.nudgeToolCalls);
-  if (isBool(patch.correctionDetection)) raw.correctionDetection = patch.correctionDetection;
-
-  if (patch.failureInjection && typeof patch.failureInjection === "object") {
-    if (isBool(patch.failureInjection.enabled)) raw.failureInjectionEnabled = patch.failureInjection.enabled;
-    if (isNum(patch.failureInjection.maxAgeDays)) raw.failureInjectionMaxAgeDays = Math.trunc(patch.failureInjection.maxAgeDays);
-    if (isNum(patch.failureInjection.maxEntries)) raw.failureInjectionMaxEntries = Math.trunc(patch.failureInjection.maxEntries);
-  }
+  if (isBool(patch.autoDeposit)) raw.autoDeposit = patch.autoDeposit;
 
   if (patch.ranking && typeof patch.ranking === "object") {
     const prev = (raw.ranking && typeof raw.ranking === "object") ? raw.ranking as Record<string, unknown> : {};
@@ -240,24 +192,22 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       );
       let hasLegacyAutoConsolidate = false;
       let hasMemoryOverflowStrategy = false;
-      if (parsed.memoryMode === "policy-only" || parsed.memoryMode === "legacy-inject") config.memoryMode = parsed.memoryMode;
-      if (
-        parsed.memoryPolicyStyle === "full" ||
-        parsed.memoryPolicyStyle === "compact" ||
-        parsed.memoryPolicyStyle === "custom" ||
-        parsed.memoryPolicyStyle === "none"
-      ) config.memoryPolicyStyle = parsed.memoryPolicyStyle;
-      if (typeof parsed.memoryPolicyCustomText === "string") config.memoryPolicyCustomText = parsed.memoryPolicyCustomText;
+      // 旧配置里的 "legacy-inject" 模式已删除：读到它时静默迁移为 policy-only，
+      // 老配置文件不能因此报错。
+      if (parsed.memoryMode === "legacy-inject") config.memoryMode = "policy-only";
       if (typeof parsed.memoryCharLimit === "number") config.memoryCharLimit = parsed.memoryCharLimit;
       if (typeof parsed.userCharLimit === "number") config.userCharLimit = parsed.userCharLimit;
-      if (typeof parsed.nudgeInterval === "number") config.nudgeInterval = parsed.nudgeInterval;
-      if (isNonNegativeNumber(parsed.reviewRecentMessages)) config.reviewRecentMessages = parsed.reviewRecentMessages;
-      if (typeof parsed.reviewEnabled === "boolean") config.reviewEnabled = parsed.reviewEnabled;
       if (isReviewTransport(parsed.reviewTransport)) config.reviewTransport = parsed.reviewTransport;
-      if (typeof parsed.flushOnCompact === "boolean") config.flushOnCompact = parsed.flushOnCompact;
-      if (typeof parsed.flushOnShutdown === "boolean") config.flushOnShutdown = parsed.flushOnShutdown;
-      if (typeof parsed.flushMinTurns === "number") config.flushMinTurns = parsed.flushMinTurns;
-      if (isNonNegativeNumber(parsed.flushRecentMessages)) config.flushRecentMessages = parsed.flushRecentMessages;
+      if (typeof parsed.autoDeposit === "boolean") {
+        config.autoDeposit = parsed.autoDeposit;
+      } else if (
+        typeof parsed.flushOnShutdown === "boolean" ||
+        typeof parsed.flushOnCompact === "boolean"
+      ) {
+        // 旧配置把沉淀拆成两个开关；合并后任一个明确开启就算开启。
+        config.autoDeposit =
+          parsed.flushOnShutdown === true || parsed.flushOnCompact === true;
+      }
       if (typeof parsed.autoConsolidate === "boolean") {
         config.autoConsolidate = parsed.autoConsolidate;
         hasLegacyAutoConsolidate = true;
@@ -267,11 +217,6 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         hasMemoryOverflowStrategy = true;
       }
       if (isNonNegativeNumber(parsed.overflowGraceMs)) config.overflowGraceMs = parsed.overflowGraceMs;
-      if (typeof parsed.correctionDetection === "boolean") config.correctionDetection = parsed.correctionDetection;
-      if (isStringArray(parsed.correctionStrongPatterns)) config.correctionStrongPatterns = parsed.correctionStrongPatterns;
-      if (isStringArray(parsed.correctionWeakPatterns)) config.correctionWeakPatterns = parsed.correctionWeakPatterns;
-      if (isStringArray(parsed.correctionNegativePatterns)) config.correctionNegativePatterns = parsed.correctionNegativePatterns;
-      if (isStringArray(parsed.correctionDirectiveWords)) config.correctionDirectiveWords = parsed.correctionDirectiveWords;
       if (typeof parsed.consolidationTimeoutMs === "number") {
         config.consolidationTimeoutMs = parsed.consolidationTimeoutMs;
         if (parsed.consolidationTimeoutMs < DEFAULT_CONSOLIDATION_TIMEOUT_MS) {
@@ -284,17 +229,14 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (typeof parsed.autoConsolidationWarnOnFailure === "boolean") {
         config.autoConsolidationWarnOnFailure = parsed.autoConsolidationWarnOnFailure;
       }
-      if (typeof parsed.failureInjectionEnabled === "boolean") config.failureInjectionEnabled = parsed.failureInjectionEnabled;
-      if (typeof parsed.failureInjectionMaxAgeDays === "number") config.failureInjectionMaxAgeDays = parsed.failureInjectionMaxAgeDays;
-      if (typeof parsed.failureInjectionMaxEntries === "number") config.failureInjectionMaxEntries = parsed.failureInjectionMaxEntries;
-      if (typeof parsed.nudgeToolCalls === "number") config.nudgeToolCalls = parsed.nudgeToolCalls;
+      if (typeof parsed.correctionInjectionEnabled === "boolean") config.correctionInjectionEnabled = parsed.correctionInjectionEnabled;
+      if (typeof parsed.retrievalHintEnabled === "boolean") config.retrievalHintEnabled = parsed.retrievalHintEnabled;
       // Accept any finite number >= 0 so a user can both opt in (positive value)
       // and explicitly disable retention with 0. Invalid/negative values are
       // ignored, keeping the current (default) semantics.
       if (typeof parsed.sessionRetentionDays === "number" && Number.isFinite(parsed.sessionRetentionDays) && parsed.sessionRetentionDays >= 0) {
         config.sessionRetentionDays = parsed.sessionRetentionDays;
       }
-  if (typeof parsed.projectCharLimit === "number") config.projectCharLimit = parsed.projectCharLimit;
   // ─── ranking / anchors / guard ───
   if (parsed.ranking && typeof parsed.ranking === "object") {
     const r = parsed.ranking as Record<string, unknown>;

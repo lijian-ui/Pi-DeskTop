@@ -18,6 +18,9 @@ import { readAskUserConfigSync, writeAskUserConfig } from "./ask-user/ask-user-c
 import { readBrowserConfigSync, writeBrowserConfig } from "./browser/browser-config";
 import { readScheduleConfigSync, writeScheduleConfig } from "./schedule/schedule-config";
 import { readCompressConfigSync, writeCompressConfig } from "./compress/piwork-compress";
+import { readSubagentConfigSync, writeSubagentConfig } from "./subagent/subagent-config";
+import { readMemoryExtensionConfigSync, writeMemoryExtensionConfig } from "./memory/extension-config";
+import { readSkillsConfigSync, writeSkillsConfig } from "./skills/skills-config";
 import {
   mcpServerCapabilities,
   readMcpFeatureConfig,
@@ -52,17 +55,16 @@ export const BUILTIN_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "fin
 export const TOOL_MODES: Record<ToolMode, { builtins: readonly string[]; features: readonly string[] }> = {
   // Only read / bash / write + the subagent delegation channel.
   minimal: { builtins: ["read", "bash", "write"], features: ["subagent"] },
-  // Everything first-party (subagent and memory have no switch, so they are
-  // listed too).
+  // 全部第一方特性（subagent / memory / skills 也有独立开关）。
   standard: {
     builtins: BUILTIN_TOOL_NAMES,
-    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file", "schedule", "mcp", "compress"],
+    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "skills", "send-file", "schedule", "mcp", "compress"],
   },
   // Standard + the planned office-operation feature set (registered later as
   // FEATURES key "office"; harmless while the feature does not exist yet).
   office: {
     builtins: BUILTIN_TOOL_NAMES,
-    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "send-file", "schedule", "mcp", "compress"],
+    features: ["subagent", "todo", "ask-user", "web-search", "office", "memory", "skills", "send-file", "schedule", "mcp", "compress"],
   },
 };
 
@@ -184,8 +186,8 @@ const FEATURES: ReadonlyArray<FeatureDef> = [
   {
     key: "subagent",
     toolNames: ["subagent"],
-    switchable: false, // always loaded with the app; no separate config today
-    configFile: "",
+    switchable: true,
+    configFile: "subagent-config.json",
   },
   {
     // 自研上下文压缩（compress 工具 + 视图改写）。挂载在普通会话与定时任务两个数组。
@@ -211,7 +213,7 @@ const FEATURES: ReadonlyArray<FeatureDef> = [
   },
   {
     // Persistent memory layer (src/main/pi/memory, ported from
-    // pi-hermes-memory). Always on like subagent — no separate config today.
+    // pi-hermes-memory).
     key: "memory",
     toolNames: [
       "memory_add",
@@ -219,10 +221,17 @@ const FEATURES: ReadonlyArray<FeatureDef> = [
       "memory_remove",
       "memory_search",
       "session_search",
-      "skill_manage",
     ],
-    switchable: false,
-    configFile: "",
+    switchable: true,
+    configFile: "memory-extension-config.json",
+  },
+  {
+    // Procedural skills (SKILL.md): standalone extension split from memory so
+    // the two can be toggled independently.
+    key: "skills",
+    toolNames: ["skill_manage"],
+    switchable: true,
+    configFile: "skills-config.json",
   },
   {
     // MCP（Model Context Protocol）服务器：由 SDK 的 createMcpExtension 提供，
@@ -253,8 +262,14 @@ function readFeatureEnabled(key: string): boolean {
       return readCompressConfigSync().enabled;
     case "mcp":
       return readMcpFeatureConfigSync().enabled;
+    case "subagent":
+      return readSubagentConfigSync().enabled;
+    case "memory":
+      return readMemoryExtensionConfigSync().enabled;
+    case "skills":
+      return readSkillsConfigSync().enabled;
     default:
-      return true; // subagent (or unknown) → always on
+      return true; // unknown → always on
   }
 }
 
@@ -326,8 +341,17 @@ export async function setExtensionToolFeatureEnabled(
       await writeMcpFeatureConfig(cfg);
       return;
     }
+    case "subagent":
+      await writeSubagentConfig({ enabled });
+      return;
+    case "memory":
+      await writeMemoryExtensionConfig({ enabled });
+      return;
+    case "skills":
+      await writeSkillsConfig({ enabled });
+      return;
     default:
-      return; // subagent / unknown → not switchable, ignore
+      return; // unknown → not switchable, ignore
   }
 }
 

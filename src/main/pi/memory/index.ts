@@ -5,14 +5,12 @@
  * After `pi install`, users get:
  *
  * 1. Persistent Memory — MEMORY.md + USER.md that survive across sessions
- * 2. Background Learning Loop — auto-saves notable facts every N turns
- * 3. Session-End Flush — saves memories before compaction/shutdown
- * 4. Auto-Consolidation — merges memory when full instead of erroring
- * 5. Correction Detection — immediate save on user corrections
- * 6. Procedural Skills — SKILL.md files for reusable procedures
- * 7. Tool-Call-Aware Nudge — review triggers on tool call count too
- * 8. Context Fencing — <memory-context> tags prevent injection through stored memory
- * 9. Memory Aging — entry timestamps guide consolidation
+ * 2. Session Flush — after context compression the running agent is asked to
+ *    save what matters; sessions that quit before flushing leave a snapshot
+ *    that the next session start drains
+ * 3. Auto-Consolidation — merges memory when full instead of erroring
+ * 4. Context Fencing — <memory-context> tags prevent injection through stored memory
+ * 5. Memory Aging — entry timestamps guide consolidation
  *
  * NOTE (pi-desktop): the upstream `/memory-*` slash commands are deliberately
  * not registered. They report through ctx.ui.notify and several need terminal
@@ -25,61 +23,31 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { MemoryStore } from "./store/memory-store";
-import { SkillStore } from "./store/skill-store";
+import { touchMemoryByContent } from "./store/sqlite-memory-store";
 import { DatabaseManager } from "./store/db";
 import { indexSession, upsertSessionFileMetadata, pruneEphemeralReviewSessions, pruneOldSessions, retentionCutoffMs } from "./store/session-indexer";
 import { runRecoveryMaintenance } from "./store/recovery-maintenance";
+import { forgetStaleMemories } from "./handlers/forget-stale";
 import { scheduleSessionBackfill, waitForSessionBackfill, SESSION_BACKFILL_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-backfill";
 import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_SHUTDOWN_TIMEOUT_MS } from "./handlers/session-live-index";
 import { parseSessionFile } from "./store/session-parser";
 import { registerMemoryTool } from "./tools/memory-tool";
-import { registerSkillTool } from "./tools/skill-tool";
 import { registerSessionSearchTool } from "./tools/session-search-tool";
 import { registerMemorySearchTool } from "./tools/memory-search-tool";
-import { setupBackgroundReview } from "./handlers/background-review";
 import { setupSessionFlush } from "./handlers/session-flush";
-import { triggerConsolidation } from "./handlers/auto-consolidate";
-import { setupCorrectionDetector } from "./handlers/correction-detector";
 import { migrateThenSyncMarkdownMemories } from "./handlers/sync-markdown-memories";
 import { GUARD_RULES_FILENAME } from "./constants";
 import { promoteAnchorsBeforeCompact, buildAnchorContextBlock } from "./anchors";
 import { loadConfig } from "./config";
 import type { MemoryConfig } from "./types";
 import { maybeRotateSnapshot } from "./snapshot";
-import { shouldWarnAutoConsolidationFailure } from "./auto-consolidation-warning";
-import { detectProject, detectProjectSkills } from "./project";
+import { readMemoryExtensionConfigSync } from "./extension-config";
 import { buildPromptContext } from "./prompt-context";
-import { migrateLegacyProjectMemoryDirs } from "./project-memory-migration";
-import { AGENT_ROOT, resolveGlobalMemoryDir } from "./paths";
+import { AGENT_ROOT } from "./paths";
 import { isDatabaseMigrationPending } from "./extension-root-migration";
 import { measureLifecycle, measureLifecycleSync } from "./lifecycle-timing";
-
-export function resolveProjectSkillDiscovery(
-  skillStore: SkillStore,
-  projectsMemoryDir: string | undefined,
-  cwd?: string,
-): { skillPaths: string[] } {
-  const detected = detectProjectSkills(projectsMemoryDir, cwd);
-  skillStore.setProjectContext(detected.name, detected.skillsDir);
-
-  // This extension writes its generated skills directly into Pi's own global
-  // skills root (~/.pi/agent/skills/), so Pi discovers them on load without any
-  // extra bridging. We still contribute the path here for explicit discovery.
-  const skillPaths = [skillStore.getGlobalSkillsDir()];
-  if (detected.skillsDir) skillPaths.push(detected.skillsDir);
-  return { skillPaths };
-}
-
-export function registerProjectSkillDiscoveryHandler(
-  pi: Pick<ExtensionAPI, "on">,
-  skillStore: SkillStore,
-  projectsMemoryDir: string | undefined,
-): void {
-  pi.on("resources_discover", async (event, _ctx) => {
-    return resolveProjectSkillDiscovery(skillStore, projectsMemoryDir, (event as { cwd?: string }).cwd);
-  });
-}
 
 /**
  * Live-mutable config holder. The extension's three auto-memory setups
@@ -91,6 +59,36 @@ const liveConfigRef: { current: MemoryConfig | null } = { current: null };
 /** Global memory dir resolved at mount time — reused by reloadMemoryConfig to
  * re-pin the co-located guard rules file after a hot reload. */
 const liveGlobalDirRef: { current: string | null } = { current: null };
+
+/**
+ * 触发「轻量检索提示」的指代词/旧约定。
+ * 刻意收窄：宁可漏报，也不要每轮都往用户消息里塞提示。
+ */
+const RETRIEVAL_HINT_TRIGGER = /(上次|之前|原来|以前|我们说好|说好的|按惯例|照旧|别再|不要再|还记得|\blast time\b|\bpreviously\b|\bas we agreed\b|\bas before\b|\bwe agreed\b)/i;
+const RETRIEVAL_HINT_MARKER = "<memory-hint>";
+const RETRIEVAL_HINT_SUFFIX = "\n\n<memory-hint>This request may depend on earlier decisions or preferences. Call memory_search before acting if it refers to prior context.</memory-hint>";
+
+/**
+ * 已计入引用的注入条目，按会话隔离。
+ * 同一会话同一句只计一次，防止每轮注入把 access_count 刷爆。
+ */
+const countedInjectionsBySession = new Map<string, Set<string>>();
+
+/** 取消息里的可见文本（content 可能是字符串或 {type:"text",text} 数组）。 */
+function messageTextOf(message: AgentMessage): string {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block): block is { type: "text"; text: string } => (
+      typeof block === "object"
+      && block !== null
+      && (block as { type?: unknown }).type === "text"
+      && typeof (block as { text?: unknown }).text === "string"
+    ))
+    .map((block) => block.text)
+    .join("\n");
+}
 
 /**
  * Re-read hermes-memory-config.json from disk and apply it to the live config
@@ -122,6 +120,11 @@ export function hasLiveMemoryConfig(): boolean {
 }
 
 export default function (pi: ExtensionAPI) {
+  // 总开关（设置 → 可用工具 → 扩展工具）：关 → 不注册任何工具/事件。
+  if (!readMemoryExtensionConfigSync().enabled) {
+    liveConfigRef.current = null;
+    return;
+  }
   const config = loadConfig();
   liveConfigRef.current = config;
   // Nested objects (ranking/anchors/guard) are replaced wholesale by
@@ -151,19 +154,19 @@ export default function (pi: ExtensionAPI) {
   let persistenceInitialized = false;
 
   const store = new MemoryStore({ ...config, memoryDir: globalDir });
-  // Factory may run with no session (Pi public contract). Do not snapshot
-  // project identity from process.cwd() here — bind from session_start ctx.cwd
-  // and from tool execute ctx.cwd.
-  let projectName = "";
-  const skillStore = new SkillStore({
-    globalSkillsDir: path.join(agentRoot, "skills"), // 全局技能固定落 agent 根 skills（原跟随 memoryDir 默认会落到 pi-hermes-memory/skills）
-    piGlobalSkillsDir: path.join(agentRoot, "skills"),
-    projectSkillsDir: null,
-    projectName: null,
-    legacySkillsDir: path.join(legacyGlobalDir, "skills"),
-    migrationSentinelPath: path.join(agentRoot, ".skills-migrated-to-extension-storage"),
-  });
+  // 注入即使用：touchEntryByText 更新的是 Markdown 的 last，access_count 只存在于
+  // SQLite（排名与锚点阈值都读它），所以这里把计数转发给搜索镜像。
+  const bindAccessObserver = (target: MemoryStore) => {
+    target.setAccessObserver((rawTarget, text) => {
+      try {
+        touchMemoryByContent(dbManager, text, rawTarget);
+      } catch {
+        // 计数是尽力而为，绝不影响主流程。
+      }
+    });
+  };
   const dbManager = new DatabaseManager(globalDir);
+  bindAccessObserver(store);
   dbManager.setQuickCheckOnOpen(config.quickCheckOnOpen ?? true);
   let databaseMigrationPending = shouldMigrateExtensionRoot
     && isDatabaseMigrationPending(legacyGlobalDir, globalDir);
@@ -176,51 +179,14 @@ export default function (pi: ExtensionAPI) {
   }
   const sessionsDir = path.join(agentRoot, "sessions");
 
-  const refreshSkillProjectContext = (cwd?: string) => {
-    const resource = resolveProjectSkillDiscovery(skillStore, config.projectsMemoryDir, cwd);
-    return {
-      name: skillStore.getProjectName(),
-      skillsDir: skillStore.getProjectSkillsDir(),
-      resource,
-    };
-  };
-
-  // Keep project memory available for users upgrading from the old
-  // ~/.pi/agent/<project>/ layout. This is non-destructive: legacy folders
-  // remain in place while entries are copied/merged into projects-memory/.
-  migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
-  // Project-scoped store: ~/.pi/agent/<projectsMemoryDir>/<project_name>/
-  // Bound from session/tool ctx.cwd, never from factory process.cwd().
-  const createProjectStore = (projectInfo: ReturnType<typeof detectProject>): MemoryStore | null => {
-    if (!projectInfo.memoryDir) return null;
-    return new MemoryStore({
-      ...config,
-      memoryCharLimit: config.projectCharLimit,
-      memoryDir: projectInfo.memoryDir,
-    });
-  };
-  let projectMemoryDir: string | null = null;
-  let projectStore: MemoryStore | null = null;
-  const projectStoreRef = () => projectStore;
-  const projectNameRef = () => projectName;
-  let configureProjectStore: (candidate: MemoryStore | null) => void = () => {};
-  let configureMemoryToolProjectStore: (candidate: MemoryStore | null) => void = () => {};
-  const bindProjectFromCwd = async (cwd?: string): Promise<void> => {
-    if (!cwd) return;
-    const nextProject = detectProject(config.projectsMemoryDir, cwd);
-    const nextProjectMemoryDir = nextProject.memoryDir ?? null;
-    if (nextProjectMemoryDir !== projectMemoryDir) {
-      projectMemoryDir = nextProjectMemoryDir;
-      projectStore = createProjectStore(nextProject);
-      configureProjectStore(projectStore);
-      configureMemoryToolProjectStore(projectStore);
-      if (projectStore) await projectStore.loadFromDisk();
-    }
-    projectName = nextProject.name ?? "";
-  };
-
   // ── 1. Load memory from disk on session start ──
   pi.on("session_start", async (_event, ctx) => {
+    // 本会话的「注入即使用」去重表（同一句只计一次）。
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (!countedInjectionsBySession.has(sessionId)) {
+      countedInjectionsBySession.set(sessionId, new Set());
+    }
+
     if (!persistenceInitialized) {
       try {
         await measureLifecycle("session-start.persistence-sync", async () => {
@@ -228,8 +194,6 @@ export default function (pi: ExtensionAPI) {
             dbManager,
             shouldMigrateExtensionRoot ? legacyGlobalDir : null,
             globalDir,
-            config.projectsMemoryDir,
-            agentRoot,
             {
               onMigrationSucceeded: () => {
                 databaseMigrationPending = false;
@@ -245,12 +209,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     await measureLifecycle("session-start.load", async () => {
-      await bindProjectFromCwd(ctx.cwd);
-      refreshSkillProjectContext(ctx.cwd);
-      await skillStore.migrateLegacySkills();
-      await skillStore.ensureDiscoveredRoots();
       await store.loadFromDisk();
-      if (projectStore) await projectStore.loadFromDisk();
     });
 
     if (persistenceInitialized) {
@@ -280,6 +239,14 @@ export default function (pi: ExtensionAPI) {
       } catch (err) {
         console.warn(`⚠️ Snapshot retention sweep failed: ${err instanceof Error ? err.message : String(err)}`);
       }
+      try {
+        const forgotten = await forgetStaleMemories(store, dbManager, globalDir);
+        if (forgotten.archived > 0) {
+          console.info(`🧹 Forgot ${forgotten.archived} stale memories (archived to ${globalDir}/archive).`);
+        }
+      } catch (err) {
+        console.warn(`⚠️ Stale memory sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
       scheduleSessionBackfill(dbManager, sessionsDir, {
         notify: (message, level) => {
           const ui = (ctx as { ui?: { notify?: (message: string, level?: string) => void } }).ui;
@@ -298,10 +265,44 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir);
+  // ── 2a. 轻量检索提示：用户用指代词/旧约定时，在最后一条用户消息尾部追一句 ──
+  // 只提示、不检索：记忆正文仍不进提示词，模型自己决定是否调 memory_search。
+  pi.on("context", (event) => {
+    if (config.retrievalHintEnabled === false || config.memoryMode !== "policy-only") return;
 
-  // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
-  pi.on("before_agent_start", async (event, _ctx) => {
+    const messages = event.messages;
+    let lastUserIndex = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if ((messages[i] as { role?: string }).role === "user") {
+        lastUserIndex = i;
+        break;
+      }
+    }
+    if (lastUserIndex === -1) return;
+
+    const original = messages[lastUserIndex];
+    const text = messageTextOf(original);
+    // 已有标记直接跳过：同一消息重复触发时靠标记保持幂等。
+    if (!text || text.includes(RETRIEVAL_HINT_MARKER) || !RETRIEVAL_HINT_TRIGGER.test(text)) return;
+
+    const content = (original as { content?: unknown }).content;
+    const next = messages.slice();
+    if (typeof content === "string") {
+      next[lastUserIndex] = { ...original, content: content + RETRIEVAL_HINT_SUFFIX } as AgentMessage;
+    } else if (Array.isArray(content)) {
+      next[lastUserIndex] = {
+        ...original,
+        content: [...content, { type: "text", text: RETRIEVAL_HINT_SUFFIX.trim() }],
+      } as AgentMessage;
+    } else {
+      return;
+    }
+    // 新数组 + 新消息对象，原消息保持不变；其它消息原样透传。
+    return { messages: next };
+  });
+
+  // ── 2. Inject memory policy; memory bodies never enter the prompt ──
+  pi.on("before_agent_start", async (event, ctx) => {
     // 7-day rotating snapshot safety net (snapshot.ts). Age-guarded so it only
     // fires roughly once a week even though this hook runs on every agent start.
     try {
@@ -310,17 +311,33 @@ export default function (pi: ExtensionAPI) {
       console.warn(`⚠️ Memory snapshot rotation failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef());
+    const promptContext = await buildPromptContext(config, store);
 
     const parts: string[] = [];
-    if (promptContext) parts.push(promptContext);
+    if (promptContext.text) parts.push(promptContext.text);
+
+    // 注入即使用：对纠正块里真正写进提示的条目各记一次引用。
+    // 同一会话同一句只计一次，防止每轮注入把 access_count 刷爆。
+    const sessionId = ctx.sessionManager.getSessionId();
+    let counted = countedInjectionsBySession.get(sessionId);
+    if (!counted) {
+      counted = new Set();
+      countedInjectionsBySession.set(sessionId, counted);
+    }
+    for (const entryText of promptContext.injectedTexts) {
+      const key = `${sessionId}|${entryText.slice(0, 80)}`;
+      if (counted.has(key)) continue;
+      counted.add(key);
+      // 找不到即静默跳过。
+      store.touchEntryByText(entryText);
+    }
 
     // Compact bridge: pin durable, high-value memories and inject them so key
     // facts survive context resets (see anchors/compact-bridge.ts).
     const anchorsConfig = config.anchors;
     if (anchorsConfig?.enabled && dbManager) {
       try {
-        const anchorBlock = buildAnchorContextBlock(dbManager, anchorsConfig, projectNameRef());
+        const anchorBlock = buildAnchorContextBlock(dbManager, anchorsConfig);
         if (anchorBlock) parts.push(anchorBlock);
       } catch (err) {
         console.warn(`⚠️ Anchor block injection failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -336,75 +353,34 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── 3. Register action-specific memory write tools with SQLite sync ──
-  configureMemoryToolProjectStore = registerMemoryTool(pi, store, projectStoreRef, dbManager, projectNameRef, bindProjectFromCwd, config);
+  registerMemoryTool(pi, store, dbManager, config);
 
-  // ── 4. Register the skill tool ──
-  registerSkillTool(pi, skillStore);
+  // ── 4. Skill tool moved to the standalone skills extension (src/main/pi/skills) ──
 
-  // ── 5. Setup background learning loop (with tool-call-aware nudge) ──
-  setupBackgroundReview(pi, store, projectStoreRef, config, {
-    dbManager,
-    projectName: projectNameRef,
-  });
+  // ── 5. Setup session flush (compression turn + shutdown snapshot) ──
+  setupSessionFlush(pi, store, config, dbManager);
 
-  // ── 6. Setup session-end flush ──
-  setupSessionFlush(pi, store, projectStoreRef, config, dbManager, projectNameRef);
-
-  // ── 6b. Compact bridge: pin high-value memories before compaction so they
+  // ── 5b. Compact bridge: pin high-value memories before compaction so they
   // survive the context window reset (runs alongside the flush listener). ──
   pi.on("session_before_compact", async (_event, _ctx) => {
     const anchorsConfig = config.anchors;
     if (anchorsConfig?.enabled && dbManager) {
-      promoteAnchorsBeforeCompact(dbManager, anchorsConfig, projectNameRef());
+      promoteAnchorsBeforeCompact(dbManager, anchorsConfig);
     }
   });
 
-  // ── 7. Setup auto-consolidation (inject consolidator into stores) ──
-  // Keep the failure in the tool result regardless; session-console logging is
-  // separately configurable for users who already monitor tool results (#135).
-  const runAutoConsolidation = async (
-    target: "memory" | "user" | "failure",
-    targetStore: MemoryStore,
-    toolTarget: "memory" | "user" | "failure" | "project",
-    signal?: AbortSignal,
-  ) => {
-    const result = await triggerConsolidation(
-      pi,
-      targetStore,
-      target,
-      signal,
-      config.consolidationTimeoutMs,
-      toolTarget,
-      config,
-    );
-    if (result.deferred) {
-      console.info(`⏳ Auto-consolidation for '${toolTarget}' deferred: ${result.error ?? "another session holds the consolidation lock"}`);
-    } else if (shouldWarnAutoConsolidationFailure(config.autoConsolidationWarnOnFailure, result.consolidated)) {
-      console.warn(`⚠️ Auto-consolidation failed for '${toolTarget}': ${result.error ?? "no reason reported"}`);
-    }
-    return result;
-  };
-
-  store.setConsolidator((target, signal) => runAutoConsolidation(target, store, target, signal));
-  configureProjectStore = (candidate) => {
-    if (!candidate) return;
-    candidate.setConsolidator((target, signal) =>
-      runAutoConsolidation(target, candidate, target === "memory" ? "project" : target, signal),
-    );
-  };
-  configureProjectStore(projectStore);
-
-  // ── 8. Setup correction detection ──
-  setupCorrectionDetector(pi, store, projectStoreRef, config, dbManager, projectNameRef);
+  // ── 6. Auto-consolidation removed ──
+  // 记忆已无字符上限，且正文不进系统提示；整理改由写入时的近重复拦截与
+  // 定时遗忘（forget-stale）承担，不再保留「超限后自动合并」这条死路径。
 
   // NOTE: pi-hermes-memory's ten `/memory-*` slash commands are intentionally
   // NOT registered. They are TUI affordances: every one of them reports back
   // through ctx.ui.notify and several need terminal modals, which a desktop
   // shell cannot provide. The desktop surface for memory is the agent tools
-  // (memory_add / memory_search / session_search / skill_manage) — the user
+  // (memory_add / memory_search / session_search) — the user
   // just says "remember X". Their handlers are deleted from handlers/ rather
   // than left dangling; only the non-command logic they shared is kept
-  // (triggerConsolidation, migrateThenSyncMarkdownMemories, session backfill).
+  // (migrateThenSyncMarkdownMemories, session backfill).
 
   // ── 10. Live session indexing ──
   pi.on("message_end", async (_event, ctx) => {
@@ -429,6 +405,10 @@ export default function (pi: ExtensionAPI) {
   // DB-writing session_shutdown handler after this block — it would run after
   // close() and silently no-op.
   pi.on("session_shutdown", async (_event, ctx) => {
+    // 注入去重表按会话存活：不清理会随会话数线性涨内存。
+    try {
+      countedInjectionsBySession.delete(ctx.sessionManager.getSessionId());
+    } catch { /* best effort */ }
     try {
       measureLifecycleSync("shutdown.active-index", () => {
         const sessionFile = ctx.sessionManager.getSessionFile();

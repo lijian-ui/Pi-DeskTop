@@ -20,9 +20,6 @@ import {
   ENTRY_DELIMITER,
   DEFAULT_MEMORY_CHAR_LIMIT,
   DEFAULT_USER_CHAR_LIMIT,
-  DEFAULT_OVERFLOW_GRACE_MS,
-  DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS,
-  DEFAULT_FAILURE_INJECTION_MAX_ENTRIES,
   MEMORY_FILE,
   USER_FILE,
 } from "../constants";
@@ -30,10 +27,8 @@ import type {
   MemoryConfig,
   MemoryResult,
   MemorySnapshot,
-  ConsolidationResult,
   MemoryCategory,
   MemoryMutationOperation,
-  MemoryOverflowStrategy,
 } from "../types";
 import { AGENT_ROOT } from "../paths";
 import { canonicalMarkdownIdentity, withMarkdownMutationLock } from "./markdown-mutation-lock";
@@ -53,6 +48,58 @@ const CONFLICT_MAX_BYTES = 64 * 1024 * 1024;
 
 class ExternalMemoryWriteConflict extends Error {}
 
+/** 归一化记忆文本用于 touch 匹配：折叠空白并去掉截断省略号。 */
+function normalizeTouchText(text: string): string {
+  return text.replace(/\s+/g, " ").trim().replace(/[.…]+$/u, "").trim();
+}
+
+/** 写入时近重复判定阈值（Dice 相似度）：≥0.85 拒绝写入，0.6~0.85 写入但提示。 */
+const NEAR_DUPLICATE_BLOCK = 0.85;
+const NEAR_DUPLICATE_HINT = 0.6;
+
+/**
+ * 轻量相似度分词：拉丁词按空格切，CJK 取字符二元组（单字也保留）。
+ * 纯本地计算，不引入分词器依赖，也不调用模型。
+ */
+function similarityTokens(text: string): Set<string> {
+  const normalized = text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const tokens = new Set<string>();
+  for (const chunk of normalized.split(/\s+/)) {
+    if (!chunk) continue;
+    if (/^[\p{Script=Latin}\p{N}]+$/u.test(chunk)) {
+      tokens.add(chunk);
+      continue;
+    }
+    for (const ch of chunk) tokens.add(ch);
+    for (let i = 0; i < chunk.length - 1; i++) tokens.add(chunk.slice(i, i + 2));
+  }
+  return tokens;
+}
+
+/** Dice 系数：2|A∩B| / (|A|+|B|)，取值 0~1。 */
+function diceSimilarity(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const token of a) if (b.has(token)) shared++;
+  return (2 * shared) / (a.size + b.size);
+}
+
+function findClosestEntry(
+  entries: string[],
+  stripMetadata: (raw: string) => string,
+  content: string,
+): { text: string; score: number } | null {
+  const incoming = similarityTokens(content);
+  let best: { text: string; score: number } | null = null;
+  for (const raw of entries) {
+    const text = stripMetadata(raw);
+    if (!text) continue;
+    const score = diceSimilarity(incoming, similarityTokens(text));
+    if (!best || score > best.score) best = { text, score };
+  }
+  return best;
+}
+
 export class MemoryStore {
   private memoryEntries: string[] = [];
   private userEntries: string[] = [];
@@ -60,24 +107,27 @@ export class MemoryStore {
   private fileFingerprints: Record<string, string> = {};
   private storagePaths: Partial<Record<"memory" | "user" | "failure", string>> = {};
   private snapshot: MemorySnapshot = { memory: "", user: "" };
-  private consolidator: ((target: "memory" | "user" | "failure", signal?: AbortSignal) => Promise<ConsolidationResult>) | null = null;
-  private overflowSince: Partial<Record<"memory" | "user" | "failure", number>> = {};
   private mutationObserver: ((target: "memory" | "user" | "failure", entries: string[]) => Promise<string | null | undefined>) | null = null;
+  private accessObserver: ((target: "memory" | "user" | "failure", text: string) => void) | null = null;
+  /** 串行化 touch 写入，避免同批注入的并发改写互相覆盖 last。 */
+  private touchQueue: Promise<void> = Promise.resolve();
 
   constructor(private config: MemoryConfig) {}
-
-  /**
-   * Inject a consolidation function (avoids circular imports).
-   * Called from index.ts after both store and pi are available.
-   */
-  setConsolidator(fn: (target: "memory" | "user" | "failure", signal?: AbortSignal) => Promise<ConsolidationResult>): void {
-    this.consolidator = fn;
-  }
 
   setMutationObserver(
     fn: (target: "memory" | "user" | "failure", entries: string[]) => Promise<string | null | undefined>,
   ): void {
     this.mutationObserver = fn;
+  }
+
+  /**
+   * Inject the SQLite access-counter used by touchEntryByText. access_count is
+   * not stored in the Markdown metadata (that only carries created/last), so a
+   * bump has to reach the search mirror where ranking and the anchor threshold
+   * read it. Best-effort — callers must not let a failure escape.
+   */
+  setAccessObserver(fn: (target: "memory" | "user" | "failure", text: string) => void): void {
+    this.accessObserver = fn;
   }
 
   // ─── Path helpers ───
@@ -119,33 +169,6 @@ export class MemoryStore {
   private charLimit(target: "memory" | "user" | "failure"): number {
     if (target === "failure") return this.config.memoryCharLimit * 2; // Failures get more space
     return target === "user" ? this.config.userCharLimit : this.config.memoryCharLimit;
-  }
-  private get capEnforced(): boolean {
-    return this.config.memoryMode !== "policy-only";
-  }
-
-  private charCount(target: "memory" | "user" | "failure"): number {
-    const entries = this.entriesFor(target);
-    return entries.length ? entries.join(ENTRY_DELIMITER).length : 0;
-  }
-
-  private memoryOverflowStrategy(): MemoryOverflowStrategy {
-    return this.config.memoryOverflowStrategy ?? (this.config.autoConsolidate ? "auto-consolidate" : "reject");
-  }
-  private overflowGraceMs(): number {
-    const configured = this.config.overflowGraceMs;
-    return Number.isFinite(configured) && configured !== undefined && configured >= 0
-      ? configured
-      : DEFAULT_OVERFLOW_GRACE_MS;
-  }
-
-  private clearOverflow(target: "memory" | "user" | "failure"): void {
-    delete this.overflowSince[target];
-  }
-
-  private overflowGraceActive(target: "memory" | "user" | "failure"): boolean {
-    const since = this.overflowSince[target];
-    return since !== undefined && Date.now() - since < this.overflowGraceMs();
   }
 
   // ─── Load from disk ───
@@ -190,7 +213,7 @@ export class MemoryStore {
     signal?: AbortSignal,
     sourceSessionId?: string | null,
   ): Promise<MemoryResult> {
-    return this.addWithConsolidation(target, content, signal, 1, "Entry added.", undefined, sourceSessionId);
+    return this.addEntry(target, content, signal, "Entry added.", undefined, sourceSessionId);
   }
 
   async addFailure(content: string, options: {
@@ -203,8 +226,8 @@ export class MemoryStore {
     sourceSessionId?: string | null;
   }): Promise<MemoryResult> {
     const failureText = this.buildFailureMemoryText(content, options);
-    return this.addWithConsolidation(
-      "failure", failureText, options.signal, 1, "Failure memory saved: " + options.category,
+    return this.addEntry(
+      "failure", failureText, options.signal, "Failure memory saved: " + options.category,
       options.project, options.sourceSessionId,
     );
   }
@@ -220,6 +243,65 @@ export class MemoryStore {
         return decoded.created >= cutoffStr;
       })
       .map((entry) => this.stripMetadata(entry));
+  }
+
+  /**
+   * 「注入即使用」：把一条真正写进系统提示的记忆记为一次引用。
+   *
+   * - Markdown 权威源更新元数据里的 last（created/project/src 原样保留）；
+   * - SQLite 的 access_count 由 accessObserver 同步 +1（排名与锚点阈值读的是它）。
+   *
+   * 同一会话只应调用一次（去重由调用方负责），否则每轮注入都会把计数刷爆。
+   * 找不到条目时静默返回；写盘失败只回退内存状态，不影响主流程。
+   */
+  touchEntryByText(text: string): void {
+    this.touchQueue = this.touchQueue
+      .then(() => this.touchEntryByTextAsync(text))
+      .catch(() => { /* best-effort */ });
+  }
+
+  private async touchEntryByTextAsync(text: string): Promise<void> {
+    const needle = normalizeTouchText(text);
+    if (!needle) return;
+
+    // 注入块（失败/纠正）落在 failures.md；另两类一并匹配，便于将来复用。
+    for (const target of ["failure", "memory", "user"] as const) {
+      await this.syncTargetFromDiskIfChanged(target);
+      const entries = this.entriesFor(target);
+      const normalized = entries.map((entry) => normalizeTouchText(this.stripMetadata(entry)));
+      let index = normalized.indexOf(needle);
+      // 纠正块按 80 字符截断（尾部加 …），前缀匹配仍能定位到原条目。
+      if (index === -1 && needle.length >= 20) {
+        index = normalized.findIndex((entry) => entry.startsWith(needle));
+      }
+      if (index === -1) continue;
+
+      const decoded = this.decodeEntry(entries[index]);
+      const today = new Date().toISOString().split("T")[0];
+      const updated = this.encodeEntry(
+        decoded.text,
+        decoded.created,
+        today,
+        decoded.project ?? undefined,
+        decoded.sourceSessionId,
+      );
+      if (updated !== entries[index]) {
+        const filePath = await this.resolveStoragePath(target);
+        const nextEntries = [...entries];
+        nextEntries[index] = updated;
+        this.setEntries(target, nextEntries);
+        try {
+          await withMarkdownMutationLock(filePath, () => this.saveToDisk(target));
+        } catch {
+          // 写盘失败：丢弃指纹让下一次同步从磁盘真值恢复。
+          delete this.fileFingerprints[filePath];
+          await this.syncTargetFromDiskIfChanged(target).catch(() => {});
+        }
+      }
+
+      this.accessObserver?.(target, decoded.text);
+      return;
+    }
   }
 
   private async _add(
@@ -239,7 +321,6 @@ export class MemoryStore {
 
     await this.syncTargetFromDiskIfChanged(target);
     const entries = this.entriesFor(target);
-    const limit = this.charLimit(target);
 
     // Check for duplicate — strip metadata from existing entries before comparing
     const normalizedProject = project?.trim() || null;
@@ -249,40 +330,58 @@ export class MemoryStore {
         && (target !== "failure" || decoded.project === normalizedProject);
     });
     if (duplicate) {
-      return this.successResponse(target, "Entry already exists (no duplicate added).");
+      // 附上 target 与定位提示：否则「add 说已存在、search 又搜不到」会让
+      // 使用者以为有删除墓碑/分家存储（实测测试报告的困惑）。真相通常是
+      // browse 列表被 20 条截断 + 关键词没命中，条目其实活着。
+      return this.successResponse(
+        target,
+        `Entry already exists in target="${target}" (no duplicate added). If memory_search did not surface it, remember browse lists are capped at 20 — use memory_search with an empty query and target="${target}" to locate it.`,
+      );
     }
+
+    // 近重复：词面相似度不足以判定语义，但足以拦住模板式重复。
+    // 跨 target 一起比：同一条事实写进 memory 和 user 也算重复。
+    let closest: { text: string; score: number; target?: "memory" | "user" | "failure" } | null = null;
+    for (const other of ["memory", "user", "failure"] as const) {
+      const candidate = findClosestEntry(
+        other === target ? entries : this.entriesFor(other),
+        (raw) => this.stripMetadata(raw),
+        content,
+      );
+      if (candidate && (!closest || candidate.score > closest.score)) {
+        closest = { ...candidate, target: other };
+      }
+    }
+    const where = closest && closest.target !== target ? ` in '${closest.target}'` : "";
+    if (closest && closest.score >= NEAR_DUPLICATE_BLOCK) {
+      const preview = closest.text.length > 80 ? `${closest.text.slice(0, 79)}…` : closest.text;
+      return {
+        success: false,
+        error: `Near-duplicate of existing entry${where} (similarity ${closest.score.toFixed(2)}): "${preview}". Use memory_replace to merge into that entry instead of adding a new one.`,
+        target,
+        entry_count: entries.length,
+      };
+    }
+    const similarHint = closest && closest.score >= NEAR_DUPLICATE_HINT
+      ? `Note: similar to existing entry${where} "${closest.text.length > 60 ? `${closest.text.slice(0, 59)}…` : closest.text}" (similarity ${closest.score.toFixed(2)}) — if it is the same fact, prefer memory_replace next time.`
+      : "";
 
     // Encode metadata: both dates = today
     const today = new Date().toISOString().split("T")[0];
     const encoded = this.encodeEntry(content, today, today, project, sourceSessionId);
-
-    const newTotal = [...entries, encoded].join(ENTRY_DELIMITER).length;
-    if (this.capEnforced && newTotal > limit) {
-      this.overflowSince[target] ??= Date.now();
-      const strategy = this.memoryOverflowStrategy();
-
-      if (strategy === "fifo-evict") {
-        const result = await this.fifoEvictAndAdd(target, entries, encoded, content.length, limit);
-        if (result.success) markMutation();
-        return result;
-      }
-
-      return this.memoryFullError(target, content.length);
-    }
 
     entries.push(encoded);
     this.setEntries(target, entries);
     await this.saveToDisk(target);
     markMutation();
 
-    return this.successResponse(target, addedMessage);
+    return this.successResponse(target, similarHint ? `${addedMessage} ${similarHint}` : addedMessage);
   }
 
-  private async addWithConsolidation(
+  private async addEntry(
     target: "memory" | "user" | "failure",
     content: string,
     signal: AbortSignal | undefined,
-    retriesLeft: number,
     addedMessage: string,
     project?: string,
     sourceSessionId?: string | null,
@@ -292,98 +391,7 @@ export class MemoryStore {
       (markMutation) => this._add(target, content, signal, addedMessage, project, markMutation, sourceSessionId),
       signal,
     );
-    if (
-      result.success
-      || retriesLeft <= 0
-      || this.memoryOverflowStrategy() !== "auto-consolidate"
-      || !this.consolidator
-      || !result.error?.startsWith("Memory at ")
-    ) {
-      return result;
-    }
-    if (this.overflowGraceActive(target)) {
-      return {
-        ...result,
-        error: `${result.error} Automatic consolidation is deferred for ${this.overflowGraceMs()}ms after overflow so you can consolidate '${target}' manually first — retry after the grace window.`,
-      };
-    }
-
-    // Every failure mode (lock contention, spawn failure, non-zero exit, timeout
-    // kill) used to be swallowed here and present identically to a plain capacity
-    // error, making the auto path impossible to diagnose from outside (#135).
-    const consolidation = await this.consolidator(target, signal).catch(
-      (err): ConsolidationResult => ({ consolidated: false, error: `consolidator threw ${String(err).slice(0, 200)}` }),
-    );
-    if (consolidation.deferred) {
-      // Lock contention, not breakage — another session is consolidating this
-      // target right now. Tell the model to retry instead of reporting a
-      // failed consolidation it can do nothing about (#144).
-      return {
-        ...result,
-        error: `${result.error} Another session is consolidating '${target}' right now, so this entry was not saved — retry in a moment.`,
-      };
-    }
-    if (!consolidation.consolidated) {
-      const reason = consolidation.error || "no reason reported";
-      return { ...result, error: `${result.error} Auto-consolidation attempted but failed: ${reason}` };
-    }
-
-    try {
-      await this.loadFromDisk();
-    } catch (err) {
-      return { ...result, error: `${result.error} Auto-consolidation succeeded but reloading memory failed: ${String(err).slice(0, 200)}` };
-    }
-
-    const retried = await this.addWithConsolidation(target, content, signal, retriesLeft - 1, addedMessage, project, sourceSessionId);
-    if (retried.success || !retried.error?.startsWith("Memory at ")) return retried;
-    return { ...retried, error: `${retried.error} Auto-consolidation ran but did not free enough space.` };
-  }
-
-  private async fifoEvictAndAdd(
-    target: "memory" | "user" | "failure",
-    entries: string[],
-    encoded: string,
-    contentLength: number,
-    limit: number,
-  ): Promise<MemoryResult> {
-    if (encoded.length > limit) {
-      return this.memoryFullError(target, contentLength);
-    }
-
-    const remaining = [...entries];
-    const evictedEntries: string[] = [];
-
-    while ([...remaining, encoded].join(ENTRY_DELIMITER).length > limit && remaining.length > 0) {
-      const evicted = remaining.shift()!;
-      evictedEntries.push(this.stripMetadata(evicted));
-    }
-
-    remaining.push(encoded);
-    this.setEntries(target, remaining);
-    await this.saveToDisk(target);
-
-    return {
-      ...this.successResponse(
-        target,
-        `Memory updated. Rotated ${evictedEntries.length} older ${evictedEntries.length === 1 ? "entry" : "entries"} to stay within the limit.`,
-      ),
-      evicted_entries: evictedEntries,
-      evicted_count: evictedEntries.length,
-    };
-  }
-
-  private memoryFullError(target: "memory" | "user" | "failure", contentLength: number): MemoryResult {
-    const current = this.charCount(target);
-    const limit = this.charLimit(target);
-    const entries = this.entriesFor(target).map((raw) => this.decodeEntry(raw).text);
-    return {
-      success: false,
-      error: `Memory at ${current}/${limit} chars. Adding this entry (${contentLength} chars) would exceed the limit. Replace or remove existing entries first (see the entries list below), then retry this add — all in this turn.`,
-      target,
-      usage: `${current}/${limit} chars`,
-      entry_count: entries.length,
-      entries,
-    };
+    return result;
   }
 
   async applyMutationPlan(
@@ -455,12 +463,6 @@ export class MemoryStore {
 
       const originalTotal = originalEntries.join(ENTRY_DELIMITER).length;
       const plannedTotal = plannedEntries.join(ENTRY_DELIMITER).length;
-      if (this.capEnforced && plannedTotal > this.charLimit(target)) {
-        return {
-          success: false,
-          error: `Memory mutation plan would put memory at ${plannedTotal}/${this.charLimit(target)} chars.`,
-        };
-      }
       if (options.requireShrink && plannedTotal >= originalTotal) {
         return {
           success: false,
@@ -522,13 +524,6 @@ export class MemoryStore {
 
     const newTotal = testEntries.join(ENTRY_DELIMITER).length;
 
-    if (this.capEnforced && newTotal > this.charLimit(target)) {
-      return {
-        success: false,
-        error: `Replacement would put memory at ${newTotal}/${this.charLimit(target)} chars. Shorten or remove other entries first.`,
-      };
-    }
-
     this.setEntries(target, testEntries);
     await this.saveToDisk(target);
     markMutation();
@@ -580,50 +575,46 @@ export class MemoryStore {
     if (this.snapshot.memory) parts.push(this.fenceBlock(this.snapshot.memory));
     if (this.snapshot.user) parts.push(this.fenceBlock(this.snapshot.user));
 
-    const failureBlock = this.formatFailureBlock();
-    if (failureBlock) parts.push(failureBlock);
-
     return parts.join("\n\n");
   }
 
   /**
-   * Recent failure lessons as a standalone, fenced prompt block ("" when
-   * disabled, out of budget, or nothing recent).
-   *
-   * Split out from formatForSystemPrompt because the two memory modes need it
-   * differently: `legacy-inject` folds it in with the full MEMORY.md/USER.md
-   * dump, while `policy-only` deliberately injects no stored memory at all —
-   * EXCEPT this block. Failure lessons are the one category that must not wait
-   * to be searched for: by the time the model thinks to look, it has already
-   * repeated the mistake. The block is small (default: max 5 entries, 7 days),
-   * so it cannot crowd out the context the way the full memory dump would.
-   *
-   * Scoped to the store it is called on, so a project store yields that
-   * project's failures (plus unattributed ones).
+   * Recent corrections & preferences as a standalone, fenced prompt block.
+   * These are the narrow categories that override model assumptions;
+   * everything else still has to be retrieved with memory_search.
    */
-  formatFailureBlock(): string {
-    if (this.config.failureInjectionEnabled === false) return "";
-
-    const maxAgeDays = this.config.failureInjectionMaxAgeDays ?? DEFAULT_FAILURE_INJECTION_MAX_AGE_DAYS;
-    const maxFailures = this.config.failureInjectionMaxEntries ?? DEFAULT_FAILURE_INJECTION_MAX_ENTRIES;
-    if (maxFailures <= 0) return "";
-
-    const recentFailures = this.getFailureEntries(maxAgeDays);
-    if (recentFailures.length === 0) return "";
-
-    const failures = recentFailures.slice(-maxFailures).reverse();
-    if (failures.length === 0) return "";
-
-    return this.fenceBlock(this.renderFailureBlock(failures));
+  formatCorrectionBlock(): string {
+    const entries = this.getCorrectionInjectionEntries();
+    if (entries.length === 0) return "";
+    return this.fenceBlock(this.renderCorrectionBlock(entries));
   }
 
   /**
-   * Render a project-specific memory block for system prompt injection.
-   * Uses only the memory entries (no user split) with a project-labelled header.
+   * Corrections/preferences picked from the failure store (newest first).
+   * Per-entry text is capped at 80 chars and the whole set at 300 chars so the
+   * block stays small; the returned strings are exactly what gets injected.
    */
-  formatProjectBlock(projectName: string): string {
-    const block = this.renderProjectBlock(projectName, this.memoryEntries);
-    return block ? this.fenceBlock(block) : "";
+  getCorrectionInjectionEntries(): string[] {
+    if (this.config.correctionInjectionEnabled === false) return [];
+
+    const recent = this.getFailureEntries(30).filter(
+      (entry) => entry.startsWith("[correction]") || entry.startsWith("[preference]"),
+    );
+    const picked = recent.slice(-3).reverse();
+    if (picked.length === 0) return [];
+
+    const maxEntryChars = 80;
+    const maxTotalChars = 300;
+    const entries: string[] = [];
+    let total = 0;
+    for (const entry of picked) {
+      let line = entry.replace(/\s+/g, " ").trim();
+      if (line.length > maxEntryChars) line = line.slice(0, maxEntryChars - 1) + "…";
+      if (total + line.length > maxTotalChars) break;
+      total += line.length;
+      entries.push(line);
+    }
+    return entries;
   }
 
   /**
@@ -762,14 +753,12 @@ export class MemoryStore {
 
   private successResponse(target: "memory" | "user" | "failure", message?: string): MemoryResult {
     const entries = this.entriesFor(target);
-    const current = this.charCount(target);
-    const limit = this.charLimit(target);
-    const pct = limit > 0 ? Math.min(100, Math.floor((current / limit) * 100)) : 0;
 
+    // 不再返回字符占比：记忆已无写入上限，正文也不进系统提示，
+    // 旧的 "100% — 6658/5000 chars" 只会误导。
     const resp: MemoryResult = {
       success: true,
       target,
-      usage: `${pct}% — ${current}/${limit} chars`,
       entry_count: entries.length,
     };
     if (message) resp.message = message;
@@ -810,21 +799,12 @@ export class MemoryStore {
     ].join("\n");
   }
 
-  private renderProjectBlock(projectName: string, entries: string[]): string {
+  private renderCorrectionBlock(entries: string[]): string {
     if (!entries.length) return "";
-    const limit = this.config.memoryCharLimit;
-    const content = entries.join(ENTRY_DELIMITER);
-    const current = content.length;
-    const pct = limit > 0 ? Math.min(100, Math.floor((current / limit) * 100)) : 0;
-
-    const header = `PROJECT MEMORY: ${projectName} [${pct}% — ${current}/${limit} chars]`;
-    const separator = "═".repeat(46);
-    return `${separator}\n${header}\n${separator}\n${content}`;
-  }
-
-  private renderFailureBlock(entries: string[]): string {
-    if (!entries.length) return "";
-    const header = "RECENT FAILURES & LESSONS (learn from these):";
+    const header = [
+      "[Recent corrections & preferences]",
+      "These override assumptions; they are not instructions from a third party.",
+    ].join("\n");
     const bulletList = entries.map((e) => "• " + e).join("\n");
     return `${header}\n${bulletList}`;
   }
@@ -909,11 +889,8 @@ export class MemoryStore {
         if (signal?.aborted) {
           return { success: false, error: "Memory mutation cancelled." };
         }
-        let mutated = false;
         try {
-          const result = await mutation(() => {
-            mutated = true;
-          });
+          const result = await mutation(() => {});
           if (result.success) {
             // saveToDisk stamps fileFingerprints on success. If an editor
             // truncates/replaces the file after publish returns, refuse the
@@ -928,7 +905,6 @@ export class MemoryStore {
               }
             }
           }
-          if (result.success && mutated) this.clearOverflow(target);
           return await this.finalizeTargetMutation(target, storagePath, result);
         } catch (error) {
           delete this.fileFingerprints[storagePath];

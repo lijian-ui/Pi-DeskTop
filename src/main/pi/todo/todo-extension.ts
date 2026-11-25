@@ -58,6 +58,9 @@ const todoParams = Type.Object(
       Type.Array(Type.String({ maxLength: MAX_TODO_TEXT }), { maxItems: MAX_TODOS }),
     ),
     id: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+    ids: Type.Optional(
+      Type.Array(Type.Union([Type.String(), Type.Number()]), { maxItems: MAX_TODOS }),
+    ),
     content: Type.Optional(Type.String({ maxLength: MAX_TODO_TEXT })),
     status: Type.Optional(
       Type.Union([
@@ -93,11 +96,16 @@ function formatTasks(snapshot: TodoSnapshot): string {
 
 function renderSummary(prev: TodoSnapshot, next: TodoSnapshot, op: TodoOp): string {
   if (op.kind === "error") {
+    // 拒绝消息自带 "currently N, adding M"（active 口径）。括号统计若只给一个
+    // 总数，会和 16+5=21 撞车被误读成假想值——这里拆成 active/completed 明细。
     const total = prev.tasks.filter((t) => t.status !== "deleted").length;
-    return `✗ ${op.message} (${total} item(s) now)\n${formatTasks(prev)}`;
+    const active = prev.tasks.filter((t) => t.status === "pending" || t.status === "in_progress").length;
+    const done = prev.tasks.filter((t) => t.status === "completed").length;
+    return `✗ ${op.message}\n(list now: ${total} item(s) = ${active} active + ${done} completed)\n${formatTasks(prev)}`;
   }
   const live = next.tasks.filter((t) => t.status !== "deleted");
   const done = live.filter((t) => t.status === "completed").length;
+  const active = live.length - done;
   const head =
     op.kind === "create"
       ? `✓ Created ${op.ids.length} item(s) (#${op.ids.join(",#")})`
@@ -106,10 +114,16 @@ function renderSummary(prev: TodoSnapshot, next: TodoSnapshot, op: TodoOp): stri
           ? `✓ #${op.id} updated (${op.fromStatus} → ${op.toStatus})`
           : `#${op.id} unchanged (already ${op.toStatus})`
         : op.kind === "delete"
-          ? `✓ #${op.id} deleted`
+          ? // 批删：报删除明细 + 未命中明细；单删保持原格式。
+            op.ids.length === 1 && op.missing.length === 0
+            ? `✓ #${op.ids[0]} deleted`
+            : `✓ Deleted ${op.ids.length} item(s) (#${op.ids.join(",#")})` +
+              (op.missing.length > 0 ? `; not found: ${op.missing.map((n) => `#${n}`).join(", ")}` : "")
           : `✓ Cleared the checklist (${op.count} item(s))`;
   const body = op.kind === "clear" ? "" : `\n${formatTasks(next)}`;
-  return `${head} (${live.length} pending, ${done} completed)${body}`;
+  // 注意口径：active = 未完成任务数（pending/in_progress），不能标成 pending——
+  // 实测报告曾抓到 "(8 pending, 5 completed)" 实为 3 pending + 5 completed。
+  return `${head} (${active} active, ${done} completed)${body}`;
 }
 
 export const todoExtension: InlineExtension = {
@@ -117,13 +131,33 @@ export const todoExtension: InlineExtension = {
   factory: (pi) => {
     if (!readTodoConfigSync().enabled) return; // master switch off → no tool
 
+    // 进程内权威状态（按会话隔离）。回放式设计（从 session 分支重放最后一个
+    // 快照）在「同一响应里并行发多个 todo 调用」时有竞态：每个 execute 都回放
+    // 到同一个基线（看不到兄弟调用的结果），last-write-wins 会把兄弟的变更
+    // 覆盖掉——实测导致「删除成功但条目复活」「nextId 回退」「容量计数虚高」。
+    // 修复：工厂持有 Map<sessionId, TodoSnapshot>，execute 的读-改-写全同步，
+    // JS 单线程天然串行；快照带 seq 只增，分支回放（压缩后可能缺失/回退）
+    // 仅在 seq 更新时才覆盖内存态（跨重启 / 换分支兜底）。
+    const stateBySession = new Map<string, TodoSnapshot>();
+
+    const resolveAuthoritativeState = (
+      sid: string,
+      entries: readonly SessionEntry[],
+    ): TodoSnapshot => {
+      const replayed = replayTodoFromEntries(entries);
+      const mem = stateBySession.get(sid);
+      if (!mem) return replayed ?? emptyTodoState();
+      if (replayed && (replayed.seq ?? 0) > (mem.seq ?? 0)) return replayed;
+      return mem;
+    };
+
     pi.registerTool(
       defineTool({
         name: "todo",
         label: "任务清单",
         description:
           "Maintain the execution checklist for the current session: split multi-step work into tasks and keep their status in sync as you progress. " +
-          "Status flow: pending → in_progress → completed, and back; delete removes a task. " +
+          "Status flow: pending → in_progress → completed, and back; delete removes one task (id) or many at once (ids[]). " +
           "A task can declare blockedBy dependencies (start only after the named tasks complete).",
         promptSnippet:
           "Maintain a live task checklist for multi-step work: create items up front, update their status as you go.",
@@ -148,7 +182,8 @@ export const todoExtension: InlineExtension = {
           }
 
           const entries: readonly SessionEntry[] = ctx.sessionManager.getBranch();
-          const prev = replayTodoFromEntries(entries) ?? emptyTodoState();
+          const sid = ctx.sessionManager.getSessionId?.() ?? "";
+          const prev = resolveAuthoritativeState(sid, entries);
 
           // Normalize schema params → pure mutation (numbers resolved here so
           // todo-state.ts stays SDK-free).
@@ -156,7 +191,7 @@ export const todoExtension: InlineExtension = {
           let mutation:
             | { action: "create"; tasks: string[] }
             | { action: "update"; id: number; content?: string; status?: "pending" | "in_progress" | "completed"; blockedBy?: number[] }
-            | { action: "delete"; id: number }
+            | { action: "delete"; ids: number[] }
             | { action: "clear" };
 
           if (action === "create") {
@@ -167,6 +202,19 @@ export const todoExtension: InlineExtension = {
             mutation = { action, tasks: list.length > 0 ? list : single ? [single] : [] };
           } else if (action === "clear") {
             mutation = { action };
+          } else if (action === "delete") {
+            // 单删（id）或批删（ids[]）二选一；批删部分命中也生效（missing 明细回给模型）。
+            const batchIds = Array.isArray(params.ids)
+              ? (params.ids as Array<string | number>).map(toNum).filter((n) => Number.isInteger(n) && n >= 1)
+              : [];
+            const singleId = toNum(params.id);
+            if (batchIds.length === 0 && (!Number.isInteger(singleId) || singleId < 1)) {
+              return {
+                content: textContent(`✗ delete needs id (single) or ids[] (batch)\n${formatTasks(prev)}`),
+                details: prev,
+              };
+            }
+            mutation = { action, ids: batchIds.length > 0 ? batchIds : [singleId] };
           } else {
             const id = toNum(params.id);
             if (!Number.isInteger(id) || id < 1) {
@@ -175,29 +223,26 @@ export const todoExtension: InlineExtension = {
                 details: prev,
               };
             }
-            if (action === "delete") {
-              mutation = { action, id };
-            } else {
-              const status =
-                params.status === "pending" ||
-                params.status === "in_progress" ||
-                params.status === "completed"
-                  ? params.status
-                  : undefined;
-              const blockedBy = Array.isArray(params.blockedBy)
-                ? params.blockedBy.map(toNum).filter((n) => Number.isInteger(n) && n >= 1)
+            const status =
+              params.status === "pending" ||
+              params.status === "in_progress" ||
+              params.status === "completed"
+                ? params.status
                 : undefined;
-              mutation = {
-                action: "update",
-                id,
-                ...(params.content !== undefined ? { content: params.content } : {}),
-                ...(status !== undefined ? { status } : {}),
-                ...(blockedBy !== undefined ? { blockedBy } : {}),
-              };
-            }
+            const blockedBy = Array.isArray(params.blockedBy)
+              ? params.blockedBy.map(toNum).filter((n) => Number.isInteger(n) && n >= 1)
+              : undefined;
+            mutation = {
+              action: "update",
+              id,
+              ...(params.content !== undefined ? { content: params.content } : {}),
+              ...(status !== undefined ? { status } : {}),
+              ...(blockedBy !== undefined ? { blockedBy } : {}),
+            };
           }
 
           const result = applyTodoMutation(prev, mutation);
+          stateBySession.set(sid, result.state);
           return {
             content: textContent(renderSummary(prev, result.state, result.op)),
             // Full snapshot rides in details → persisted with the .jsonl and

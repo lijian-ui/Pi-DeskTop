@@ -6,9 +6,9 @@
  * that reads and writes these shapes.
  */
 
-/** Status of a todo item. `deleted` is a tombstone: the item stays in the
- * list (so `blockedBy` references by other items keep resolving) but it is
- * not rendered and cannot transition to a live status again. */
+/** Status of a todo item. `deleted` only appears in legacy snapshots: delete
+ * now removes the task from the list entirely (no tombstone — tombstones used
+ * to inflate the MAX_TODOS count and resurrect "deleted" items in replays). */
 export type TodoStatus = "pending" | "in_progress" | "completed" | "deleted";
 
 /** Live statuses the model may set (deleted is reducer-managed only). */
@@ -23,8 +23,14 @@ export interface TodoTask {
 }
 
 /** Full snapshot — embedded in the tool result `details` (persistence) and
- * returned to the renderer over IPC (`pi:getTodoSnapshot`). */
+ * returned to the renderer over IPC (`pi:getTodoSnapshot`).
+ *
+ * `seq` is a monotonically increasing mutation counter used to defend the
+ * in-memory authoritative state against a stale branch replay (compaction may
+ * drop old tool results, forks may expose older branches): replayed snapshots
+ * with a lower seq never overwrite a newer in-memory state. */
 export interface TodoSnapshot {
   tasks: TodoTask[];
   nextId: number;
+  seq?: number;
 }

@@ -2,6 +2,7 @@ import type { WebContents } from "electron";
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { runSubagent, SubagentParams, SubagentEvent } from "./runner";
 import { listAgents } from "./agent-discovery";
+import { readSubagentConfigSync } from "./subagent-config";
 
 /**
  * Build the subagent inline extension. Registered on the PARENT session only
@@ -23,6 +24,8 @@ export function createSubagentExtension(
   getWebContents: () => WebContents | null,
   getModelRuntime: () => unknown
 ): InlineExtension {
+  // 总开关（设置 → 可用工具 → 扩展工具）：关 → 不注册工具、不追加委托提示。
+  if (!readSubagentConfigSync().enabled) return () => {};
   // Resolve the live webContents at SEND time, not at extension-creation time.
   // The subagent extension is registered inside ensureUnit(), which runs during
   // manager init — BEFORE setEventTarget() assigns this.webContents. Capturing

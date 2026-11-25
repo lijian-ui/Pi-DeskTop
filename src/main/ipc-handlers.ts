@@ -108,6 +108,22 @@ export function registerIpcHandlers(
   pmgr = null;
   ipcMain.handle("pi:getAppVersion", () => app.getVersion());
 
+  // 动态窗口最小宽（Trae 式布局约束）：右栏面板（Todo/子代理）打开时，渲染层
+  // 调高窗口 minWidth——窗口本身就拒绝拖到「装不下所有区域」的宽度；面板关闭
+  // 时恢复基线。当前宽度低于新下限时保持右缘不动、向左扩（用户拖的就是右缘）。
+  ipcMain.handle("window:setMinWidth", (_, { width }: { width: number }) => {
+    const base = 900;
+    const w = Math.max(base, Math.round(Number(width) || base));
+    const [, minH] = mainWindow.getMinimumSize();
+    mainWindow.setMinimumSize(w, minH || 600);
+    const [cur] = mainWindow.getSize();
+    if (cur < w) {
+      const b = mainWindow.getBounds();
+      mainWindow.setBounds({ x: b.x + (b.width - w), y: b.y, width: w, height: b.height });
+    }
+  });
+
+
   // Open an external URL in the OS default browser (e.g. GitHub repo, docs).
   // Renderer cannot do this safely on its own in Electron, so it asks the
   // main process which uses shell.openExternal.
@@ -269,7 +285,11 @@ export function registerIpcHandlers(
     async (_, updates: ExtensionToolFeatureUpdate[]) => {
       if (!pmgr) throw new Error("Pi SDK not initialized");
       await applyExtensionToolFeatureUpdates(updates);
-      await pmgr.reapplyToolSetToAllUnits();
+      // subagent / memory / skills 的开关在扩展工厂里生效，必须重建 services
+      // 才能真正挂载或卸载；其他特性只需刷新活跃工具集。
+      const needsRemount = updates.some((u) => u.key === "subagent" || u.key === "memory" || u.key === "skills");
+      if (needsRemount) await pmgr.applyExtensionFactoryChanges();
+      else await pmgr.reapplyToolSetToAllUnits();
     },
   );
 

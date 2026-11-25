@@ -10,8 +10,8 @@ import type { ExtensionToolFeature } from "../../shared/tool-catalog-types";
  *  - Built-in SDK tools (read/bash/edit/write/grep/find/ls): persisted to
  *    settings.json `activeTools` via pi:saveActiveTools.
  *  - Extension tools (todo / ask_user_question / web_search / web_fetch /
- *    subagent): each feature's enabled flag is persisted to its own
- *    `*-config.json` via pi:saveExtensionTools. Subagent has no switch.
+ *    subagent / memory): each feature's enabled flag is persisted to its own
+ *    `*-config.json` via pi:saveExtensionTools.
  */
 const BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 

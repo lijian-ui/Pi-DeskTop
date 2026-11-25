@@ -15,6 +15,8 @@ import {
   searchMemories,
   removeMemory,
   setMemoryPinned,
+  incrementAccessCounts,
+  touchMemory,
   type SqliteMemoryEntry,
 } from "./store/sqlite-memory-store";
 import { tokenizeForStorage } from "./ranking";
@@ -22,15 +24,13 @@ import { getEpisodicForMemory, type EpisodicResult } from "./store/episodic";
 import { flagConflictsForWrite } from "./store/conflict-flag";
 import { scanMemoryContent } from "./guard";
 import { loadConfig } from "./config";
-import { resolveGlobalMemoryDir, AGENT_ROOT } from "./paths";
+import { resolveGlobalMemoryDir } from "./paths";
 import {
   GUARD_RULES_FILENAME,
   ENTRY_DELIMITER,
   MEMORY_FILE,
   USER_FILE,
-  DEFAULT_PROJECTS_MEMORY_DIR,
 } from "./constants";
-import { resolveAuthoritativeMemoryFile } from "./handlers/sync-markdown-memories";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MemoryCategory } from "./types";
@@ -92,28 +92,32 @@ function toView(e: SqliteMemoryEntry): MemoryView {
 }
 
 export function listMemories(globalDir: string): MemoryView[] {
-  return getMemories(dbFor(globalDir), {}).map(toView);
+  // 项目记忆功能已移除：历史行仍保留在 DB 里，但 project 列非空的行不再展示，
+  // 避免面板里出现无法追溯来源的旧项目记忆。
+  return getMemories(dbFor(globalDir), { project: null }).map(toView);
 }
 
 export function searchMemoriesView(globalDir: string, query: string): MemoryView[] {
   const q = (query ?? "").trim();
   if (!q) return listMemories(globalDir);
-  return searchMemories(dbFor(globalDir), q, { limit: 200 }).map(toView);
+  return searchMemories(dbFor(globalDir), q, { limit: 200 })
+    .filter((entry) => entry.project === null)
+    .map(toView);
 }
 
 export function deleteMemory(globalDir: string, id: number): boolean {
   const dbManager = dbFor(globalDir);
   const db = dbManager.getDb();
   const row = db
-    .prepare("SELECT id, content, target, project FROM memories WHERE id = ?")
+    .prepare("SELECT id, content, target FROM memories WHERE id = ?")
     .get(id) as
-    | { id: number; content: string; target: "memory" | "user" | "failure"; project: string | null }
+    | { id: number; content: string; target: "memory" | "user" | "failure" }
     | undefined;
   if (!row) return false;
 
   // 同步删除 Markdown 权威源中的对应条目，避免下次对账时从 md 重新插回 SQLite（"删除复活"）。
   // 先动权威源、再删镜像：即使镜像删除失败，对账也会按"md 已无此条目"把孤儿 SQL 行清掉。
-  removeMarkdownMemoryEntry(globalDir, row.target, row.project, row.content);
+  removeMarkdownMemoryEntry(globalDir, row.target, row.content);
 
   return removeMemory(dbManager, id);
 }
@@ -127,10 +131,9 @@ export function deleteMemory(globalDir: string, id: number): boolean {
 function removeMarkdownMemoryEntry(
   globalDir: string,
   target: "memory" | "user" | "failure",
-  project: string | null,
   content: string,
 ): void {
-  const filePath = resolveMarkdownFileForScope(globalDir, target, project);
+  const filePath = resolveMarkdownFileForScope(globalDir, target);
   if (!filePath || !fs.existsSync(filePath)) return;
 
   const raw = fs.readFileSync(filePath, "utf-8");
@@ -155,15 +158,11 @@ function removeMarkdownMemoryEntry(
 function resolveMarkdownFileForScope(
   globalDir: string,
   target: "memory" | "user" | "failure",
-  project: string | null,
 ): string | null {
   if (target === "user") return path.join(globalDir, USER_FILE);
   if (target === "failure") return path.join(globalDir, "failures.md");
   // target === "memory"
-  if (!project) return path.join(globalDir, MEMORY_FILE);
-  const projectsRoot = path.resolve(AGENT_ROOT, DEFAULT_PROJECTS_MEMORY_DIR);
-  return resolveAuthoritativeMemoryFile(projectsRoot, project)
-    ?? path.join(projectsRoot, project, MEMORY_FILE);
+  return path.join(globalDir, MEMORY_FILE);
 }
 
 /** 去掉记忆条目尾部 `<!-- created=... -->` 元数据注释，取可见文本用于匹配。 */
@@ -204,7 +203,16 @@ export function getMemoryEpisodic(
   id: number,
   aroundCount = 40,
 ): EpisodicResult {
-  return getEpisodicForMemory(dbFor(globalDir), id, aroundCount);
+  const dbManager = dbFor(globalDir);
+  // 只有用户点开单条记忆详情（回溯原始会话）才计入引用；
+  // 列表刷新走 getMemories，不会经过这里，避免计数虚高。
+  try {
+    touchMemory(dbManager, id);
+    incrementAccessCounts(dbManager, [id]);
+  } catch {
+    // 计数仅影响排名，失败不阻断详情查看。
+  }
+  return getEpisodicForMemory(dbManager, id, aroundCount);
 }
 
 /**

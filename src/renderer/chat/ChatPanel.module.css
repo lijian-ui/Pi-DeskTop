@@ -26,13 +26,17 @@
 .rightRail {
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  flex-shrink: 1;
   align-self: flex-start;
   height: fit-content;
   max-height: 100%;
-  /* 整栏加宽：随窗口 38vw 自适应（360–560px），DAG/run 卡要足够宽才有可读性。 */
-  width: clamp(360px, 38vw, 560px);
-  min-width: 0;
+  /* 宽度随内容自适应：Todo 文字短 → 栏窄；文字长 → 撑宽。
+     - min-width: 320px 硬下限（窗口 minWidth 在 Todo 打开时已被调高到
+       1180，三个区域必然放得下，见 TodoPanel.tsx 的布局约束注释）；
+     - max-width: min(720px, 55vw) 防止超长任务行无界撑宽（超限换行）。 */
+  width: fit-content;
+  min-width: 320px;
+  max-width: min(720px, 55vw);
   min-height: 0;
   border-left: 1px solid var(--border-neutral-l1);
   background: var(--bg-base-default);
@@ -44,6 +48,14 @@
   display: none;
 }
 
+/* Todo 面板在场时整栏拉伸到全高：否则 border-left 分割线只随内容高度，
+   聊天区下方会有一段「断线」（用户可见的瑕疵）。仅当只有子代理块时保持
+   fit-content，避免 Todo 关闭时出现一整条空白栏。 */
+.rightRail:has(> [data-todo-panel]) {
+  align-self: stretch;
+  height: auto;
+}
+
 /* A hairline separates stacked blocks sharing the rail. */
 .rightRail > * + * {
   border-top: 1px solid var(--border-neutral-l1);
@@ -53,8 +65,15 @@
   display: flex;
   flex-direction: column;
   flex: 1;
+  /* Todo 面板在场时聊天区保底 600：与 TodoPanel.tsx 的窗口 minWidth 1180
+     对齐（侧栏 260 + 聊天 600 + Todo 栏 320 = 1180）。Todo 关闭时不设下限
+     ——整块聊天区由 MainPanel 的 .chatArea min-width: 640 兜底。 */
   min-width: 0;
   min-height: 0;
+}
+
+.chatBody:has([data-todo-panel]) .chatMain {
+  min-width: 600px;
 }
 
 .messageList {

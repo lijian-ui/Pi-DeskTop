@@ -238,10 +238,7 @@ function buildScopeConditions(params: unknown[], target?: string, project?: stri
 function buildSearchTargetConditions(params: unknown[], target: string | undefined, tablePrefix: string): string[] {
   const conditions: string[] = [];
 
-  if (target === 'project') {
-    conditions.push(`${tablePrefix}.target = 'memory'`);
-    conditions.push(`${tablePrefix}.project IS NOT NULL`);
-  } else if (target) {
+  if (target) {
     conditions.push(`${tablePrefix}.target = ?`);
     params.push(target);
   }
@@ -1176,6 +1173,30 @@ export function touchMemory(dbManager: DatabaseManager, id: number): void {
 }
 
 /**
+ * Bump access_count + last_referenced for an exact (target, content) row.
+ * Used by "injection counts as use" (MemoryStore.touchEntryByText): the
+ * Markdown metadata has no access_count, so the count lives only here.
+ * Best-effort: never throws.
+ */
+export function touchMemoryByContent(
+  dbManager: DatabaseManager,
+  content: string,
+  target: 'memory' | 'user' | 'failure',
+): void {
+  try {
+    const db = dbManager.getDb();
+    const row = db
+      .prepare('SELECT id FROM memories WHERE target = ? AND content = ? ORDER BY id ASC LIMIT 1')
+      .get(target, content) as { id: number } | undefined;
+    if (!row) return;
+    db.prepare('UPDATE memories SET access_count = access_count + 1, last_referenced = ? WHERE id = ?')
+      .run(today(), row.id);
+  } catch {
+    // Access counting is telemetry; a failure must not affect the caller.
+  }
+}
+
+/**
  * Get memory statistics.
  */
 export function getMemoryStats(dbManager: DatabaseManager): {
@@ -1210,7 +1231,7 @@ export function getMemoryStats(dbManager: DatabaseManager): {
 // ─────────────────────────────────────────────────────────────────────────────
 
 type RankedSearchOptions = {
-  project?: string;
+  project?: string | null;
   target?: string;
   category?: MemoryCategory;
   limit?: number;
@@ -1237,7 +1258,7 @@ interface RankedFtsRow {
   rank_score: number;
 }
 
-function buildRankedScope(params: unknown[], project: string | undefined, target: string | undefined, category: MemoryCategory | undefined): string[] {
+function buildRankedScope(params: unknown[], project: string | null | undefined, target: string | undefined, category: MemoryCategory | undefined): string[] {
   const conditions: string[] = [];
   if (project !== undefined) {
     if (project === null) conditions.push('m.project IS NULL');

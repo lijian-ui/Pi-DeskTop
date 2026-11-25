@@ -2,7 +2,10 @@
    drives it via the `todo` tool; the UI is a read-only projection). Width,
    left border and background come from the rail container; this block fills
    whatever vertical space the subagent block above leaves. Visibility is
-   controlled from the titlebar Todo toggle; when closed nothing renders. */
+   controlled from the titlebar Todo toggle; when closed nothing renders.
+
+   卡片化样式：图标标题 + 完成度徽章 + 进度条 + 圆角任务卡（方形勾选框，
+   completed 删除线，in_progress 品牌色指示点）。 */
 .panel {
   display: flex;
   flex-direction: column;
@@ -12,27 +15,43 @@
   overflow: hidden;
 }
 
+/* ── Header ────────────────────────────────────────────────────────────── */
+
 .header {
   display: flex;
   align-items: center;
   gap: var(--spacer-8);
-  padding: var(--spacer-8) var(--spacer-12);
-  border-bottom: 1px solid var(--border-neutral-l1);
+  padding: var(--spacer-12) var(--spacer-12) var(--spacer-8);
+  flex-shrink: 0;
+}
+
+.headerIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-6);
+  background: var(--bg-overlay-l2);
+  color: var(--text-brand);
   flex-shrink: 0;
 }
 
 .headerTitle {
   color: var(--text-default);
   font-size: var(--body-sm-font-size);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-strong);
   white-space: nowrap;
 }
 
-.progress {
-  color: var(--text-tertiary);
+.headerBadge {
+  padding: 2px var(--spacer-8);
+  border-radius: var(--radius-full);
+  background: var(--bg-overlay-l2);
+  color: var(--text-secondary);
   font-size: var(--body-xs-font-size);
   font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .spacer {
@@ -43,7 +62,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 2px;
+  padding: 3px;
   border: none;
   border-radius: var(--radius-4);
   background: transparent;
@@ -56,42 +75,106 @@
   color: var(--text-default);
 }
 
+/* ── Progress bar ──────────────────────────────────────────────────────── */
+
+.progressBlock {
+  padding: 0 var(--spacer-12) var(--spacer-10);
+  flex-shrink: 0;
+}
+
+.progressLabels {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--spacer-6);
+}
+
+.progressLabel {
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+}
+
+.progressPct {
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.progressTrack {
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-overlay-l2);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--bg-brand);
+  transition: width 240ms ease;
+}
+
+/* ── Task cards ────────────────────────────────────────────────────────── */
+
 .list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--spacer-6) var(--spacer-12) var(--spacer-6);
+  padding: 0 var(--spacer-12) var(--spacer-6);
   display: flex;
   flex-direction: column;
-  gap: var(--spacer-2);
+  gap: var(--spacer-8);
 }
 
-.row {
+.card {
   display: flex;
   align-items: flex-start;
-  gap: var(--spacer-8);
-  padding: var(--spacer-4) 0;
+  gap: var(--spacer-10);
+  padding: var(--spacer-10) var(--spacer-12);
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  background: var(--bg-base-default);
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
-.rowBody {
+.card:hover {
+  background: var(--bg-overlay-l1);
+}
+
+/* in_progress 卡片：品牌色描边 + 微色底，扫一眼能找到当前正在做的事。 */
+.cardActive {
+  border-color: color-mix(in srgb, var(--bg-brand) 35%, transparent);
+  background: color-mix(in srgb, var(--bg-brand) 6%, transparent);
+}
+
+.cardActive:hover {
+  background: color-mix(in srgb, var(--bg-brand) 10%, transparent);
+}
+
+.cardBody {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  gap: 1px;
+  gap: 2px;
+  padding-top: 1px;
 }
 
-.rowText {
+.cardText {
   color: var(--text-default);
   font-size: var(--body-sm-font-size);
   line-height: 1.45;
-  word-break: break-word;
+  /* anywhere 而非 break-word：路径/URL 等长 token 也要参与断行，否则
+     卡片的 min-content 会超过 Todo 栏宽（320px），右缘内容被 overflow 裁掉。 */
+  overflow-wrap: anywhere;
 }
 
 .doneText {
   color: var(--text-tertiary);
   font-size: var(--body-sm-font-size);
   line-height: 1.45;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--text-tertiary) 55%, transparent);
 }
 
 .dep {
@@ -100,51 +183,61 @@
 }
 
 .emptyHint {
-  padding: var(--spacer-12) 0;
+  padding: var(--spacer-16) 0;
   color: var(--text-tertiary);
   font-size: var(--body-sm-font-size);
   text-align: center;
 }
 
+/* ── Checkbox（方形，三态）────────────────────────────────────────────── */
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-4);
+  border: 1.5px solid var(--border-neutral-l1);
+  background: transparent;
+  color: #fff;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.checkboxCompleted {
+  border-color: var(--bg-brand);
+  background: var(--bg-brand);
+}
+
+.checkboxInProgress {
+  border-color: var(--bg-brand);
+}
+
+.checkDot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-brand);
+}
+
+/* ── Footer toggle ─────────────────────────────────────────────────────── */
+
 .doneToggle {
   display: flex;
   align-items: center;
-  gap: var(--spacer-4);
+  gap: var(--spacer-6);
   margin: var(--spacer-2) var(--spacer-12) var(--spacer-10);
-  padding: var(--spacer-4) 0;
+  padding: var(--spacer-8) 0;
   border: none;
+  border-top: 1px solid var(--border-neutral-l1);
   background: transparent;
   color: var(--text-secondary);
-  font-size: var(--body-xs-font-size);
+  font-size: var(--body-sm-font-size);
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .doneToggle:hover {
   color: var(--text-brand);
-}
-
-/* Status dots — functional state only (no decorative animation). */
-.dotPending,
-.dotInProgress,
-.dotCompleted {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  margin-top: 5px;
-}
-
-.dotPending {
-  border: 1.5px solid var(--icon-secondary, var(--text-tertiary));
-  background: transparent;
-}
-
-.dotInProgress {
-  background: var(--bg-brand);
-}
-
-.dotCompleted {
-  background: var(--bg-brand);
-  opacity: 0.55;
 }

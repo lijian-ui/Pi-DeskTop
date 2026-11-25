@@ -24,7 +24,7 @@ export const MAX_TODO_TEXT = 120;
 export type TodoMutation =
   | { action: "create"; tasks: string[] }
   | { action: "update"; id: number; content?: string; status?: TodoLiveStatus; blockedBy?: number[] }
-  | { action: "delete"; id: number }
+  | { action: "delete"; ids: number[] }
   | { action: "clear" };
 
 /** Reducer outcome — mirrors rpiv's closed Op union but slimmer. `error`
@@ -33,7 +33,7 @@ export type TodoOp =
   | { kind: "error"; message: string }
   | { kind: "create"; ids: number[] }
   | { kind: "update"; id: number; fromStatus: TodoStatus; toStatus: TodoStatus; changed: boolean }
-  | { kind: "delete"; id: number }
+  | { kind: "delete"; ids: number[]; missing: number[] }
   | { kind: "clear"; count: number };
 
 export interface TodoApplyResult {
@@ -118,6 +118,36 @@ function trimContent(content: string): string {
   return content.trim().slice(0, MAX_TODO_TEXT);
 }
 
+/** Bump the mutation counter — every accepted mutation must produce a snapshot
+ * whose seq is strictly greater than the one it was applied to. `patch` carries
+ * the new fields; seq is always derived from the ORIGINAL state (never from the
+ * patch object, which does not carry the old seq). */
+function withSeq(state: TodoSnapshot, patch: Partial<TodoSnapshot>): TodoSnapshot {
+  return { ...state, ...patch, seq: (state.seq ?? 0) + 1 };
+}
+
+/** Keep at most MAX_TODOS completed items: when create/update push completed
+ * past the cap, the OLDEST completed entries fall off the list. Without this,
+ * a long session would grow the snapshot unboundedly (it rides in every todo
+ * tool result and therefore every request payload). */
+function capCompleted(tasks: TodoTask[]): TodoTask[] {
+  const completedIdx = tasks
+    .map((t, i) => (t.status === "completed" ? i : -1))
+    .filter((i) => i >= 0);
+  const overflow = completedIdx.length - MAX_TODOS;
+  if (overflow <= 0) return tasks;
+  const drop = new Set(completedIdx.slice(0, overflow));
+  return tasks.filter((_, i) => !drop.has(i));
+}
+
+/** Capacity semantics: only ACTIVE tasks (pending / in_progress) count toward
+ * MAX_TODOS. Completed items stay visible for context but never block create —
+ * "delete or complete some tasks first" must be literally true. Legacy
+ * tombstones (status "deleted") neither display nor occupy capacity. */
+function activeCount(tasks: readonly TodoTask[]): number {
+  return tasks.filter((t) => t.status === "pending" || t.status === "in_progress").length;
+}
+
 /**
  * Pure reducer: (state, mutation) → (state, op). Every failure path returns
  * the SAME state plus an `error` op — the caller surfaces the message to the
@@ -136,10 +166,11 @@ export function applyTodoMutation(state: TodoSnapshot, mutation: TodoMutation): 
           "create needs at least one non-empty task — pass tasks[] (array) or content (single task)",
         );
       }
-      if (state.tasks.length + subjects.length > MAX_TODOS) {
+      const active = activeCount(state.tasks);
+      if (active + subjects.length > MAX_TODOS) {
         return errorResult(
           state,
-          `Task count exceeds the limit of ${MAX_TODOS} (currently ${state.tasks.length}, adding ${subjects.length}); delete or complete some tasks first`,
+          `Task count exceeds the limit of ${MAX_TODOS} active tasks (currently ${active}, adding ${subjects.length}); delete or complete some tasks first`,
         );
       }
       let nextId = state.nextId;
@@ -149,9 +180,9 @@ export function applyTodoMutation(state: TodoSnapshot, mutation: TodoMutation): 
         status: "pending",
       }));
       nextId += subjects.length;
-      const created: TodoTask[] = [...state.tasks, ...newTasks];
+      const created = capCompleted([...state.tasks, ...newTasks]);
       return {
-        state: { tasks: created, nextId },
+        state: withSeq(state, { tasks: created, nextId }),
         op: { kind: "create", ids: newTasks.map((t) => t.id) },
       };
     }
@@ -215,28 +246,43 @@ export function applyTodoMutation(state: TodoSnapshot, mutation: TodoMutation): 
 
       const newTasks = [...state.tasks];
       newTasks[idx] = updated;
+      // cap 必须在应用完变更之后：本次 update 可能刚把一个任务置为 completed。
+      const capped = capCompleted(newTasks);
       return {
-        state: { tasks: newTasks, nextId: state.nextId },
+        state: withSeq(state, { tasks: capped }),
         op: { kind: "update", id: updated.id, fromStatus: current.status, toStatus: newStatus, changed },
       };
     }
 
     case "delete": {
-      const idx = state.tasks.findIndex((t) => t.id === mutation.id);
-      if (idx === -1) return errorResult(state, `#${mutation.id} does not exist`);
-      const current = state.tasks[idx];
-      if (current.status === "deleted") return errorResult(state, `#${current.id} is deleted`);
-      const newTasks = [...state.tasks];
-      newTasks[idx] = { ...current, status: "deleted" };
-      return {
-        state: { tasks: newTasks, nextId: state.nextId },
-        op: { kind: "delete", id: current.id },
-      };
+      // 批量删除：ids[] 里删得掉的物理移除，不存在的记入 missing。全部不存在
+      // 才整体报错（部分成功也保留，模型看到 missing 明细即可补正）。
+      const deleted: number[] = [];
+      const missing: number[] = [];
+      const tasks = [...state.tasks];
+      for (const id of mutation.ids) {
+        const idx = tasks.findIndex((t) => t.id === id);
+        if (idx === -1 || tasks[idx].status === "deleted") {
+          missing.push(id);
+          continue;
+        }
+        tasks.splice(idx, 1);
+        deleted.push(id);
+      }
+      if (deleted.length === 0) {
+        return errorResult(
+          state,
+          missing.length === 1
+            ? `#${missing[0]} does not exist`
+            : `Tasks do not exist: ${missing.map((n) => `#${n}`).join(", ")}`,
+        );
+      }
+      return { state: withSeq(state, { tasks }), op: { kind: "delete", ids: deleted, missing } };
     }
 
     case "clear": {
       return {
-        state: emptyTodoState(),
+        state: withSeq(state, { tasks: [], nextId: 1 }),
         op: { kind: "clear", count: state.tasks.length },
       };
     }
@@ -274,6 +320,11 @@ export interface TodoEntryLike {
 }
 
 export function replayTodoFromEntries(entries: readonly TodoEntryLike[]): TodoSnapshot | null {
+  // 取 seq 最大的快照，而非「最后一条」：并行调用时结果按**完成顺序**落盘，
+  // 转写里最后落地的条目可能携带较早的累计状态（seq 更小），按 last 取会把
+  // 已删除的条目复活（实测偶发幽灵）。快照 seq 由 reducer 严格递增保证。
+  let best: TodoSnapshot | null = null;
+  let bestSeq = -1;
   let last: TodoSnapshot | null = null;
   for (const entry of entries) {
     if (!entry || entry.type !== "message") continue;
@@ -281,9 +332,18 @@ export function replayTodoFromEntries(entries: readonly TodoEntryLike[]): TodoSn
     if (!m || m.role !== "toolResult" || m.toolName !== "todo") continue;
     if (m.isError === true) continue;
     const snap = isTodoSnapshot(m.details) ? m.details : null;
-    if (snap) last = snap;
+    if (snap) {
+      last = snap;
+      const seq = snap.seq ?? -1;
+      if (seq > bestSeq) {
+        bestSeq = seq;
+        best = snap;
+      }
+    }
   }
-  return last;
+  // 分支上全是旧格式（无 seq）快照时退回 last-write-wins；
+  // 新旧混合时 seq ≥ 1 的新快照必然压过旧快照。
+  return bestSeq >= 0 ? best : last;
 }
 
 export function isTodoSnapshot(value: unknown): value is TodoSnapshot {

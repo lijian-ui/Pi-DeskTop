@@ -8,16 +8,16 @@ export function normalizeMemoryLookupText(text: string): string {
     .find((line) => line.length > 0);
   if (firstNonEmptyLine) normalized = firstNonEmptyLine;
 
-  // Current memory_search results use a URL-encoded scope token so arbitrary
-  // project names cannot terminate the prefix early.
+  // Older memory_search results prefixed entries with a scope token; keep
+  // stripping it so previously copied lines still work as lookup text.
   normalized = normalized.replace(
-    /^\S+\s+scope=(?:global|project:[^\s]+)\s+\[target=(?:memory|user|project|failure)\]\s+/u,
+    /^\S+\s+scope=global\s+\[target=(?:memory|user|failure)\]\s+/u,
     "",
   );
   normalized = normalized.replace(/^\S+\s+\[[^\]]+\]\s+/u, "");
-  // memory_search labels each result with its mutation target after the scope.
+  // memory_search labels each result with its mutation target.
   // Keep copied search lines usable as replace/remove lookup text.
-  normalized = normalized.replace(/^\[target=(?:memory|user|project|failure)\]\s+/u, "");
+  normalized = normalized.replace(/^\[target=(?:memory|user|failure)\]\s+/u, "");
   normalized = normalized.replace(/^(\[[^\]]+\])\s+\1(\s+|$)/, "$1 ");
 
   return normalized.trim();

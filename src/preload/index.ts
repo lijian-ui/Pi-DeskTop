@@ -269,6 +269,9 @@ const piAPI = {
 
   // App version (read from package.json via app.getVersion), used by the About dialog
   getAppVersion: () => ipcRenderer.invoke("pi:getAppVersion"),
+  // 动态窗口最小宽（Todo 等右栏面板打开时调高，关闭时恢复基线 900）
+  setWindowMinWidth: (width: number) =>
+    ipcRenderer.invoke("window:setMinWidth", { width }),
 
   // Fired once the main process finishes SDK initialization. Safe to call at
   // any time — if the event already fired, the callback runs immediately.

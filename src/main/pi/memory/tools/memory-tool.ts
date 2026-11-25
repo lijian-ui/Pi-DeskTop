@@ -4,7 +4,7 @@
  * See PLAN.md → "Hermes Source File Reference Map" for source lines.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { MemoryStore } from "../store/memory-store";
@@ -21,7 +21,6 @@ import {
   isFts5QueryError,
 } from "../store/sqlite-memory-store";
 import { MEMORY_TOOL_DESCRIPTION } from "../constants";
-import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context";
 import type { MemoryCategory, MemoryConfig, MemoryResult } from "../types";
 import { normalizeMemoryLookupText } from "../store/memory-lookup";
 import { scanMemoryContent } from "../guard";
@@ -62,45 +61,29 @@ function formatMemoryToolText(result: MemoryResult): string {
   return JSON.stringify(result);
 }
 
-function sqliteProjectFor(rawTarget: "memory" | "user" | "project" | "failure", projectName?: string | null): string | null | undefined {
-  if (rawTarget === "project") return projectName?.trim() || null;
-  if (rawTarget === "memory") return null;
-  if (rawTarget === "user") return null;
-  if (rawTarget === "failure") return null;
-  return undefined;
-}
-
-function sqliteTargetFor(rawTarget: "memory" | "user" | "project" | "failure"): "memory" | "user" | "failure" {
-  if (rawTarget === "project") return "memory";
-  return rawTarget;
-}
-
 function matchingMutationTargets(
   oldText: string,
   store: MemoryStore,
-  projectStore: MemoryStore | null,
-): Array<"memory" | "user" | "failure" | "project"> {
+): Array<"memory" | "user" | "failure"> {
   const lookup = normalizeMemoryLookupText(oldText);
   if (!lookup) return [];
 
-  const targets: Array<"memory" | "user" | "failure" | "project"> = [];
+  const targets: Array<"memory" | "user" | "failure"> = [];
   if (store.getMemoryEntries().some((entry) => entry.includes(lookup))) targets.push("memory");
   if (store.getUserEntries().some((entry) => entry.includes(lookup))) targets.push("user");
   if (store.getAllFailureEntries().some((entry) => entry.includes(lookup))) targets.push("failure");
-  if (projectStore?.getMemoryEntries().some((entry) => entry.includes(lookup))) targets.push("project");
   return targets;
 }
 
 function addWrongTargetHint(
   result: MemoryResult,
-  rawTarget: "memory" | "user" | "project" | "failure",
+  rawTarget: "memory" | "user" | "failure",
   oldText: string,
   store: MemoryStore,
-  projectStore: MemoryStore | null,
 ): MemoryResult {
   if (result.success || !result.error?.startsWith("No entry matched")) return result;
 
-  const alternatives = matchingMutationTargets(oldText, store, projectStore)
+  const alternatives = matchingMutationTargets(oldText, store)
     .filter((target) => target !== rawTarget);
   if (alternatives.length === 0) return result;
 
@@ -114,12 +97,11 @@ function addWrongTargetHint(
 }
 
 async function syncAddToSqlite(
-  rawTarget: "memory" | "user" | "project" | "failure",
+  rawTarget: "memory" | "user" | "failure",
   content: string,
   category: MemoryCategory | undefined,
   failureReason: string | undefined,
   dbManager: DatabaseManager | null,
-  projectName?: string | null,
   /**
    * Seed reinforcement for a brand-new row. Without this the row starts at
    * access_count = 0, and since the only place counts are ever incremented is
@@ -133,9 +115,6 @@ async function syncAddToSqlite(
   if (!dbManager) return null;
 
   try {
-    const sqliteTarget = sqliteTargetFor(rawTarget);
-    const sqliteProject = sqliteProjectFor(rawTarget, projectName);
-
     if (rawTarget === "failure") {
       const failureCategory = category ?? "failure";
       syncMemoryEntry(dbManager, {
@@ -144,7 +123,7 @@ async function syncAddToSqlite(
           failureReason,
         }),
         target: "failure",
-        project: sqliteProject ?? null,
+        project: null,
         category: failureCategory,
         failureReason,
         initialAccessCount,
@@ -154,8 +133,8 @@ async function syncAddToSqlite(
 
     syncMemoryEntry(dbManager, {
       content,
-      target: sqliteTarget,
-      project: sqliteProject ?? null,
+      target: rawTarget,
+      project: null,
       initialAccessCount,
     });
     return null;
@@ -165,21 +144,18 @@ async function syncAddToSqlite(
 }
 
 async function syncReplaceToSqlite(
-  rawTarget: "memory" | "user" | "project" | "failure",
+  rawTarget: "memory" | "user" | "failure",
   oldText: string,
   newContent: string,
   dbManager: DatabaseManager | null,
-  projectName?: string | null,
 ): Promise<string | null> {
   if (!dbManager) return null;
 
   try {
-    const sqliteTarget = sqliteTargetFor(rawTarget);
-    const sqliteProject = sqliteProjectFor(rawTarget, projectName);
     const syncResult = replaceSyncedMemories(dbManager, oldText, {
       content: newContent,
-      target: sqliteTarget,
-      project: sqliteProject,
+      target: rawTarget,
+      project: null,
     });
 
     if (syncResult.matched === 0) {
@@ -193,19 +169,16 @@ async function syncReplaceToSqlite(
 }
 
 async function syncRemoveFromSqlite(
-  rawTarget: "memory" | "user" | "project" | "failure",
+  rawTarget: "memory" | "user" | "failure",
   oldText: string,
   dbManager: DatabaseManager | null,
-  projectName?: string | null,
 ): Promise<string | null> {
   if (!dbManager) return null;
 
   try {
-    const sqliteTarget = sqliteTargetFor(rawTarget);
-    const sqliteProject = sqliteProjectFor(rawTarget, projectName);
     const syncResult = removeSyncedMemories(dbManager, oldText, {
-      target: sqliteTarget,
-      project: sqliteProject,
+      target: rawTarget,
+      project: null,
     });
 
     if (syncResult.matched === 0) {
@@ -219,22 +192,18 @@ async function syncRemoveFromSqlite(
 }
 
 async function syncEvictionsFromSqlite(
-  rawTarget: "memory" | "user" | "project" | "failure",
+  rawTarget: "memory" | "user" | "failure",
   evictedEntries: string[] | undefined,
   dbManager: DatabaseManager | null,
-  projectName?: string | null,
 ): Promise<void> {
   if (!dbManager) return;
   if (!evictedEntries || evictedEntries.length === 0) return;
 
-  const sqliteTarget = sqliteTargetFor(rawTarget);
-  const sqliteProject = sqliteProjectFor(rawTarget, projectName);
-
   for (const entry of evictedEntries) {
     try {
       removeExactSyncedMemories(dbManager, entry, {
-        target: sqliteTarget,
-        project: sqliteProject,
+        target: rawTarget,
+        project: null,
       });
     } catch {
       // FIFO already updated the Markdown source of truth. SQLite is only a
@@ -245,23 +214,16 @@ async function syncEvictionsFromSqlite(
 
 async function reconcileStoreScope(
   entries: string[],
-  rawTarget: "memory" | "user" | "project" | "failure",
+  rawTarget: "memory" | "user" | "failure",
   dbManager: DatabaseManager | null,
-  projectName?: string | null,
 ): Promise<string | null | undefined> {
   if (!dbManager) return undefined;
   try {
     if (rawTarget === "failure") {
       return degradedRepairMessage(reconcileMarkdownFailureScopes(dbManager, entries));
     }
-    const target = sqliteTargetFor(rawTarget);
     return degradedRepairMessage(
-      reconcileMarkdownMemoryScope(
-        dbManager,
-        entries,
-        target,
-        sqliteProjectFor(rawTarget, projectName) ?? null,
-      ),
+      reconcileMarkdownMemoryScope(dbManager, entries, rawTarget, null),
     );
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
@@ -285,7 +247,7 @@ function degradedRepairMessage(result: { degraded?: boolean; degradedReason?: st
 type MemoryAction = "add" | "replace" | "remove";
 
 type MemoryToolParams = {
-  target: "memory" | "user" | "project" | "failure";
+  target: "memory" | "user" | "failure";
   content?: string;
   old_text?: string;
   category?: MemoryCategory;
@@ -294,30 +256,18 @@ type MemoryToolParams = {
 export function registerMemoryTool(
   pi: ExtensionAPI,
   store: MemoryStore,
-  projectStore: ProjectStoreRef,
   dbManager: DatabaseManager | null = null,
-  projectName: ProjectNameRef = null,
-  bindProjectFromCwd?: (cwd?: string) => void | Promise<void>,
   config: MemoryConfig = {} as MemoryConfig,
-): (candidate: MemoryStore | null) => void {
+): void {
   const reconciledStores = new WeakSet<MemoryStore>();
-  const attachMutationObserver = (candidate: MemoryStore | null, isProjectStore = false): void => {
+  const attachMutationObserver = (candidate: MemoryStore | null): void => {
     if (!candidate || reconciledStores.has(candidate) || typeof candidate.setMutationObserver !== "function") return;
     candidate.setMutationObserver((target, entries) =>
-      reconcileStoreScope(
-        entries,
-        isProjectStore && target === "memory" ? "project" : target,
-        dbManager,
-        resolveProjectName(projectName),
-      ),
+      reconcileStoreScope(entries, target, dbManager),
     );
     reconciledStores.add(candidate);
   };
-  const configureProjectStore = (candidate: MemoryStore | null): void => {
-    attachMutationObserver(candidate, true);
-  };
   attachMutationObserver(store);
-  configureProjectStore(resolveProjectStore(projectStore));
 
   /**
    * Flag a direct-tool write against the store it landed in.
@@ -328,19 +278,17 @@ export function registerMemoryTool(
    */
   const flagConflictsForActiveStore = async (
     activeStore: MemoryStore,
-    rawTarget: "memory" | "user" | "failure" | "project",
+    rawTarget: "memory" | "user" | "failure",
     content: string,
   ): Promise<void> => {
     if (!dbManager) return;
     try {
-      const isProject = rawTarget === "project";
-      const projectScope = rawTarget === "user" ? null : (resolveProjectName(projectName) ?? null);
       flagConflictsForWrite({
         dbManager,
         existingTexts: activeStore.getMemoryEntries(),
         content,
-        target: isProject ? "memory" : rawTarget,
-        project: projectScope,
+        target: rawTarget,
+        project: null,
       });
     } catch {
       // Advisory only — a flag failure must never fail the write.
@@ -359,30 +307,11 @@ export function registerMemoryTool(
     action: MemoryAction,
     params: MemoryToolParams,
     signal?: AbortSignal,
+    sourceSessionId?: string | null,
   ) => {
     const { target: rawTarget, content, old_text, category, failure_reason } = params;
-    const target = rawTarget === "project" ? "memory" : rawTarget;
-    const activeProjectStore = resolveProjectStore(projectStore);
-    const activeProjectName = resolveProjectName(projectName);
-    const activeStore = rawTarget === "project" ? activeProjectStore : store;
-
-    if (rawTarget === "project" && !activeProjectStore) {
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            success: false,
-            error: "Project memory is not available (no project detected).",
-          }),
-        }],
-        details: {
-          success: false,
-          error: "Project memory is not available (no project detected).",
-        },
-      };
-    }
-
-    const store_ = activeStore!;
+    const target = rawTarget;
+    const store_ = store;
     attachMutationObserver(store_);
     // Seed a new row's access_count so freshly written memories are not frozen
     // at zero reinforcement (see syncAddToSqlite).
@@ -423,15 +352,16 @@ export function registerMemoryTool(
           result = await store_.addFailure(content, {
             category: memoryCategory,
             failureReason: failure_reason,
+            sourceSessionId,
           });
           if (result.success && !syncHandled) {
-            syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, activeProjectName);
+            syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager);
           }
         } else {
-          result = await store_.add(target, content, signal);
+          result = await store_.add(target, content, signal, sourceSessionId);
           if (result.success && !syncHandled) {
-            await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, activeProjectName);
-            syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, activeProjectName, seedAccessCount);
+            await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager);
+            syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, seedAccessCount);
           }
         }
         if (result.success) {
@@ -443,7 +373,7 @@ export function registerMemoryTool(
         if (!content) throw new Error("content is required for 'replace' action.");
         result = await store_.replace(target, old_text, content);
         if (result.success && !syncHandled) {
-          syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, activeProjectName);
+          syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager);
         }
         if (result.success) {
           await flagConflictsForActiveStore(store_, rawTarget, content);
@@ -453,22 +383,21 @@ export function registerMemoryTool(
         if (!old_text) throw new Error("old_text is required for 'remove' action.");
         result = await store_.remove(target, old_text);
         if (result.success && !syncHandled) {
-          syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager, activeProjectName);
+          syncWarning = await syncRemoveFromSqlite(rawTarget, old_text, dbManager);
         }
         break;
     }
 
     if (action !== "add" && old_text) {
-      result = addWrongTargetHint(result, rawTarget, old_text, store, activeProjectStore);
+      result = addWrongTargetHint(result, rawTarget, old_text, store);
     }
 
     if (result.success && !syncHandled && typeof store_.getRawEntriesForSync === "function") {
-      const reconciliationWarning = await reconcileStoreScope(store_.getRawEntriesForSync(target), rawTarget, dbManager, activeProjectName);
+      const reconciliationWarning = await reconcileStoreScope(store_.getRawEntriesForSync(target), rawTarget, dbManager);
       if (reconciliationWarning !== undefined) syncWarning = reconciliationWarning;
     }
 
     if (syncWarning && result.success) result = appendSyncWarning(result, syncWarning);
-    if (rawTarget === "project" && result.success) result = { ...result, target: "project" };
 
     return {
       content: [{ type: "text" as const, text: formatMemoryToolText(result) }],
@@ -497,16 +426,15 @@ This action-specific tool accepts only the parameters listed in its schema.`;
       promptGuidelines: [],
       renderResult: createSharedToolResultRenderer(memoryResultView),
       parameters,
-      async execute(_toolCallId, params, signal, _onUpdate, ctx?: { cwd?: string }) {
-        if (bindProjectFromCwd && ctx?.cwd) {
-          await bindProjectFromCwd(ctx.cwd);
-        }
-        return executeAction(action, params as MemoryToolParams, signal);
+      async execute(_toolCallId, params, signal, _onUpdate, ctx?: ExtensionToolContext) {
+        // 记录来源会话（episodic 回溯用）；无会话上下文时传 null。
+        const sourceSessionId = ctx?.sessionManager?.getSessionId() ?? null;
+        return executeAction(action, params as MemoryToolParams, signal, sourceSessionId);
       },
     });
   };
 
-  const target = StringEnum(["memory", "user", "project", "failure"] as const, {
+  const target = StringEnum(["memory", "user", "failure"] as const, {
     description: "Memory scope. Use failure for failures, corrections, insights, and tool quirks.",
   });
   const category = StringEnum(["failure", "correction", "insight", "preference", "convention", "tool-quirk"] as const, {
@@ -552,5 +480,4 @@ Remove one existing entry. The target and old_text fields are required.`,
       old_text: Type.String({ description: "Substring identifying the entry to remove." }),
     }),
   );
-  return configureProjectStore;
 }

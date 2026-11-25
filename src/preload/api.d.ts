@@ -171,6 +171,11 @@ export interface PiDeskAPI {
   openExternal(url: string): Promise<void>;
   /** App version read from package.json via app.getVersion(). */
   getAppVersion(): Promise<string>;
+  /** Raise the window's minWidth (e.g. while a right-rail panel is open) so
+   *  the window can never be dragged smaller than its regions need. Pass the
+   *  baseline (900) to restore. If the window is currently smaller, it is
+   *  grown leftwards (right edge stays put). */
+  setWindowMinWidth(width: number): Promise<void>;
   /** Fired once the main process finishes SDK initialization. Safe to call at
    *  any time — if the event already fired, the callback runs immediately. */
   onReady(callback: () => void): () => void;
@@ -744,22 +749,8 @@ export interface SnapshotInfo {
 
 /** 记忆功能配置视图（纯可序列化，供设置面板渲染）。 */
 export interface MemoryConfigView {
-  // 自动沉淀（session flush）
-  flushOnShutdown: boolean;
-  flushOnCompact: boolean;
-  flushMinTurns: number;
-  flushRecentMessages: number;
-  // 后台复习（background review）
-  reviewEnabled: boolean;
-  reviewRecentMessages: number;
-  nudgeInterval: number;
-  nudgeToolCalls: number;
-  // 纠正检测
-  correctionDetection: boolean;
-  // 失败教训（两种模式都注入 —— 见 prompt-context.ts）
-  failureInjectionEnabled: boolean;
-  failureInjectionMaxAgeDays: number;
-  failureInjectionMaxEntries: number;
+  // 自动沉淀（压缩后提醒 + 退出快照）
+  autoDeposit: boolean;
   // 排序 / 时间衰减
   rankingEnabled: boolean;
   halfLifeDays: number;
@@ -781,20 +772,7 @@ export interface MemoryConfigView {
 
 /** 记忆配置的可写补丁（仅暴露核心记忆旋钮）。 */
 export interface MemoryConfigPatch {
-  flushOnShutdown?: boolean;
-  flushOnCompact?: boolean;
-  flushMinTurns?: number;
-  flushRecentMessages?: number;
-  reviewEnabled?: boolean;
-  reviewRecentMessages?: number;
-  nudgeInterval?: number;
-  nudgeToolCalls?: number;
-  correctionDetection?: boolean;
-  failureInjection?: {
-    enabled?: boolean;
-    maxAgeDays?: number;
-    maxEntries?: number;
-  };
+  autoDeposit?: boolean;
   ranking?: {
     enabled?: boolean;
     halfLifeDays?: number;

@@ -15,22 +15,8 @@ import type { GuardSeverity } from "./guard/types";
 
 /** Serializable snapshot of the memory settings the panel can edit. */
 export interface MemoryConfigView {
-  // Auto-save (session flush)
-  flushOnShutdown: boolean;
-  flushOnCompact: boolean;
-  flushMinTurns: number;
-  flushRecentMessages: number;
-  // Background review
-  reviewEnabled: boolean;
-  reviewRecentMessages: number;
-  nudgeInterval: number;
-  nudgeToolCalls: number;
-  // Correction detection
-  correctionDetection: boolean;
-  // Failure lessons (injected in BOTH memory modes — see prompt-context.ts)
-  failureInjectionEnabled: boolean;
-  failureInjectionMaxAgeDays: number;
-  failureInjectionMaxEntries: number;
+  // Auto-deposit (compression reminder + shutdown snapshot)
+  autoDeposit: boolean;
   // Ranking / time-decay
   rankingEnabled: boolean;
   halfLifeDays: number;
@@ -57,18 +43,7 @@ export function getMemoryConfigView(): MemoryConfigView {
   const anchors = c.anchors;
   const guard = c.guard;
   return {
-    flushOnShutdown: c.flushOnShutdown,
-    flushOnCompact: c.flushOnCompact,
-    flushMinTurns: c.flushMinTurns,
-    flushRecentMessages: c.flushRecentMessages ?? 0,
-    reviewEnabled: c.reviewEnabled,
-    reviewRecentMessages: c.reviewRecentMessages ?? 0,
-    nudgeInterval: c.nudgeInterval,
-    nudgeToolCalls: c.nudgeToolCalls,
-    correctionDetection: c.correctionDetection,
-    failureInjectionEnabled: c.failureInjectionEnabled ?? true,
-    failureInjectionMaxAgeDays: c.failureInjectionMaxAgeDays ?? 7,
-    failureInjectionMaxEntries: c.failureInjectionMaxEntries ?? 5,
+    autoDeposit: c.autoDeposit,
     rankingEnabled: ranking?.enabled ?? true,
     halfLifeDays: ranking?.halfLifeDays ?? 180,
     reinforcementFactor: ranking?.reinforcementFactor ?? 0.5,

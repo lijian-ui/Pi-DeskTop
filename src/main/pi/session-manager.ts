@@ -82,6 +82,7 @@ import { abortSubagents } from "./subagent/runner";
 import { TaskScheduler } from "./scheduler";
 import { createScheduledTaskExtension } from "./scheduled-task-extension";
 import hermesMemoryExtension from "./memory/index";
+import skillExtension from "./skills/index";
 import {
   readScheduledTasks,
   saveScheduledTask as writeScheduledTask,
@@ -1947,7 +1948,7 @@ export class PiDeskSessionManager {
         resourceLoaderOptions: {
           // deferred 试点：桌面普通/空间会话走 deferred（tool_search 按需装载），
           // IM 默认工作区（chat/im/<channel>）保持常驻 direct。browser / schedule 同机制。
-          extensionFactories: [soulExtension, rulesExtension, docsStripExtension, preambleExtension, webSearchExtension, isImSessionCwd(servicesKey) ? browserTool : browserToolDeferred, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), createSendFileExtension(), createScheduleExtension({ runNow: (taskId) => this.runScheduledTaskNow(taskId), deferred: !isImSessionCwd(servicesKey) }), hermesMemoryExtension, createMcpMount(), compressExtension],
+          extensionFactories: [soulExtension, rulesExtension, docsStripExtension, preambleExtension, webSearchExtension, isImSessionCwd(servicesKey) ? browserTool : browserToolDeferred, createSubagentExtension(() => this.webContents, () => this.modelRuntime), todoExtension, createAskUserExtension(() => this.webContents), createSendFileExtension(), createScheduleExtension({ runNow: (taskId) => this.runScheduledTaskNow(taskId), deferred: !isImSessionCwd(servicesKey) }), hermesMemoryExtension, skillExtension, createMcpMount(), compressExtension],
           agentsFilesOverride: createContextFilesOverride(),
           skillsOverride: createSkillsCompactOverride(),
         },
@@ -2036,7 +2037,7 @@ export class PiDeskSessionManager {
     // `session.bindExtensions()` — nowhere else. pi-desktop never called it, so
     // every extension hook registered on `session_start` was dead code. For
     // pi-hermes-memory that means its persistence bootstrap (memory dir
-    // creation, Markdown→SQLite sync, project memory bind, session index
+    // creation, Markdown→SQLite sync, session index
     // backfill) never ran, which is why ~/.pi/agent/pi-hermes-memory/ was never
     // created. Bind once here, and re-bind via setRebindSession so /new,
     // /resume, /fork and import (which rebuild the session from the same
@@ -3626,6 +3627,19 @@ export class PiDeskSessionManager {
    * 工具集，让「总开关关闭」立即把 `mcp__*` 工具移出活跃集。
    */
   async applyMcpChanges(): Promise<void> {
+    this.servicesByCwd.clear();
+    for (const unit of this.units.values()) {
+      Promise.resolve(unit.runtime?.session?.reload?.()).catch(() => {});
+    }
+    await this.applyToolSetToAllUnits();
+  }
+
+  /**
+   * 扩展工厂开关变更后的热更新（subagent / memory）：这两个扩展在工厂里
+   * 早退，只有重建 services 才会真正挂载或卸载工具与钩子。清缓存 + reload
+   * 活动会话，再重刷活跃工具集。
+   */
+  async applyExtensionFactoryChanges(): Promise<void> {
     this.servicesByCwd.clear();
     for (const unit of this.units.values()) {
       Promise.resolve(unit.runtime?.session?.reload?.()).catch(() => {});
