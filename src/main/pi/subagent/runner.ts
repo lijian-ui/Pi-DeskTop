@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { getAgent, SubagentDef } from "./agent-discovery";
 import { webSearchToolDefs } from "../web-search-extension";
+import { browserToolDefs } from "../browser/browser-tool";
 
 /** One unit of work delegated to a subagent role. */
 export interface SubagentTaskSpec {
@@ -262,10 +263,18 @@ async function runOne(
     noTools: def.tools ? ("builtin" as const) : undefined,
     tools: def.tools ?? undefined,
     excludeTools: def.excludeTools.length ? def.excludeTools : undefined,
-    // 角色白名单点名的 web 工具：父会话的 inline 扩展进不了子会话，
+    // 角色白名单点名的扩展工具：父会话的 inline 扩展进不了子会话，
     // 把同源定义经 customTools 注入（配置门控，未启用时自然为空）。
+    //  - web_search / web_fetch：来自 web-search-extension；
+    //  - browser：来自 browser-tool（同一套门禁/审计/自动弹窗登录）。
+    //    Chrome 是单例，browser-tool 内部有进程级执行互斥锁，父/子并发安全。
+    //    已知边界：定时任务会话派生的子代理也按 attended（unattended:false）
+    //    授权——比其父会话宽松，依赖 browser-guard 的动作级门禁兜底。
     customTools: def.tools
-      ? webSearchToolDefs().filter((t) => def.tools!.includes(t.name))
+      ? [
+          ...webSearchToolDefs().filter((t) => def.tools!.includes(t.name)),
+          ...browserToolDefs().filter((t) => def.tools!.includes(t.name)),
+        ]
       : undefined,
   });
 
@@ -650,11 +659,18 @@ export async function runSubagent(
     }
   } else if (isTasks) {
     // Resolve dependsOn id references → runIds (post-registration).
-    planned.forEach((p, i) => {
-      p.dependsOn = specs[i].depKeys
-        .map((k) => idToRunId.get(k))
-        .filter((v): v is string => !!v);
-    });
+    // 未知 id 直接整体报错（与未知角色名同口径）：静默过滤会让依赖任务
+    // 提前开跑，悄悄破坏执行顺序（实测发现的坑）。
+    for (let i = 0; i < planned.length; i++) {
+      const unknown = specs[i].depKeys.filter((k) => !idToRunId.has(k));
+      if (unknown.length > 0) {
+        return errorResult(
+          `Unknown dependsOn id: ${unknown.map((k) => `"${k}"`).join(", ")}. ` +
+            'Every dependsOn entry must match an "id" declared on one of the tasks in the same call.'
+        );
+      }
+      planned[i].dependsOn = specs[i].depKeys.map((k) => idToRunId.get(k)!);
+    }
   }
 
   return runDag(planned, ctx, onUpdate, sendEvent, modelRuntime);

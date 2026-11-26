@@ -237,64 +237,204 @@
   50% { stroke-opacity: 0.35; }
 }
 
-/* ---------- run 卡列表 ---------- */
+/* ---------- run 卡（状态侧条卡，见 subagent-runcard-design.html 变体 A） ---------- */
 .cards {
   display: flex;
   flex-direction: column;
-  gap: var(--spacer-6);
+  gap: 10px;
   padding: 10px var(--spacer-12) var(--spacer-12);
 }
 
 .card {
-  border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-6);
+  display: flex;
   background: var(--bg-base-secondary);
-  padding: var(--spacer-8) 10px;
-  transition: opacity 0.18s ease, border-color 0.18s ease;
+  border: 1px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  overflow: hidden;
+  transition: opacity 0.18s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.card:hover {
+  border-color: var(--border-neutral-l3);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
+
+.card[data-s="running"] {
+  border-color: color-mix(in srgb, var(--text-brand) 35%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--text-brand) 8%, transparent), transparent 55%),
+    var(--bg-base-secondary);
 }
 
 .card[data-s="error"] {
-  border-color: color-mix(in srgb, var(--status-error-default) 62%, transparent);
-}
-
-.card[data-s="skipped"] {
-  background: var(--bg-base-default);
-  background-image: repeating-linear-gradient(
-    45deg,
-    var(--bg-overlay-l2) 0 5px,
-    transparent 5px 10px
-  );
+  border-color: color-mix(in srgb, var(--status-error-default) 40%, transparent);
 }
 
 .card[data-dim="1"] { opacity: 0.42; }
 
-.cardRow1 {
+/* 左侧状态色条 */
+.rail { flex: none; width: 4px; }
+.card[data-s="running"] .rail { background: var(--text-brand); }
+.card[data-s="done"] .rail { background: var(--status-success-default); opacity: 0.5; }
+.card[data-s="error"] .rail { background: var(--status-error-default); }
+.card[data-s="pending"] .rail,
+.card[data-s="skipped"] .rail { background: var(--border-neutral-l2); }
+
+.cardBody { flex: 1; min-width: 0; padding: 10px 12px; }
+
+.row1 {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
-  cursor: default;
+}
+.row1[role="button"] { cursor: pointer; }
+.spacer { flex: 1; }
+
+.task {
+  margin: 4px 0 0 30px;
+  font-size: var(--body-xs-font-size);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.cardRow1[role="button"] { cursor: pointer; }
+.statusRow { margin: 6px 0 0 30px; min-width: 0; }
 
-.cardRow2 {
+.metrics {
   display: flex;
   align-items: center;
-  gap: var(--spacer-6);
-  margin: 5px 0 0 25px;
-  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0 30px;
 }
 
-.avatar {
-  flex: none;
-  width: 18px;
-  height: 18px;
+.metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--bg-overlay-l1);
+  font-family: var(--font-family-mono);
+  font-size: var(--body-xs-font-size);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.metric b { color: var(--text-default); font-weight: var(--font-weight-medium); }
+
+.metricDep {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 6px;
+  border: 1px dashed var(--border-neutral-l2);
+  font-size: var(--body-xs-font-size);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
+
+.expandBtn {
+  display: block;
+  width: calc(100% - 30px);
+  margin: 8px 0 0 30px;
+  padding: 4px 0 0;
+  border: none;
+  border-top: 1px dashed var(--border-neutral-l2);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--body-xs-font-size);
+  text-align: left;
+  cursor: pointer;
+}
+.expandBtn:hover { color: var(--text-default); }
+
+/* step 流：时间线（连接线贯穿状态圆点，最新一步呼吸） */
+.steps {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height 0.2s ease, opacity 0.2s ease;
+}
+
+.card[data-open="1"] .steps {
+  max-height: 190px;
+  opacity: 1;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.stepList {
+  list-style: none;
+  position: relative;
+  margin: 6px 0 0;
+  padding: 2px 0 4px 22px;
+}
+.stepList::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--border-neutral-l1);
+}
+
+.step {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: var(--body-xs-font-size);
+  line-height: 1.55;
+  min-width: 0;
+  color: var(--text-secondary);
+  /* 左侧 20px 让位给绝对定位的圆形状态图标，否则图标会压住工具名文字 */
+  padding: 2px 2px 2px 20px;
+}
+
+.stepMark {
+  position: absolute;
+  left: 0;
+  top: 5px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: var(--body-xs-font-size);
+  background: var(--bg-base-default);
+  border: 1.5px solid var(--border-neutral-l2);
+  color: var(--text-tertiary);
+}
+.step[data-ok="1"] .stepMark { border-color: var(--status-success-default); color: var(--status-success-default); }
+.step[data-err="1"] .stepMark { border-color: var(--status-error-default); color: var(--status-error-default); }
+.step[data-latest="1"] .stepMark { border-color: var(--text-brand); color: var(--text-brand); animation: pulse 1.4s ease-in-out infinite; }
+
+.step[data-latest="1"] {
+  color: var(--text-default);
+  background: var(--bg-brand-popup);
+  border-radius: var(--radius-4);
+}
+
+.step[data-err="1"] { color: var(--status-error-default); }
+
+/* 标识行元素（avatar/名字/模型 chip/状态 pill）与一句话状态（.msg 系） */
+.avatar {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
   font-weight: var(--font-weight-strong);
   color: var(--text-onbrand);
 }
@@ -310,14 +450,14 @@
 
 .modelChip {
   flex: none;
-  max-width: 80px;
+  max-width: 90px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 0 var(--spacer-6);
+  padding: 0 6px;
   border: 1px solid var(--border-neutral-l1);
   border-radius: var(--radius-full);
-  font-size: var(--body-xs-font-size);
+  font-size: 10.5px;
   line-height: 1.55;
   color: var(--text-tertiary);
 }
@@ -325,71 +465,36 @@
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: var(--spacer-4);
+  gap: 5px;
   flex: none;
-  padding: 1px 7px;
+  padding: 1px 8px;
   border-radius: var(--radius-full);
-  background: var(--bg-overlay-l1);
   font-size: var(--body-xs-font-size);
   white-space: nowrap;
 }
 
-.pill[data-s="running"] { color: var(--text-brand); }
-.pill[data-s="done"] { color: var(--status-success-default); }
-.pill[data-s="error"] { color: var(--status-error-default); }
-.pill[data-s="pending"],
-.pill[data-s="skipped"] { color: var(--text-tertiary); }
-
+.pill i,
 .pillDot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: currentColor;
   flex: none;
-  animation: pulse 1.4s ease-in-out infinite;
 }
+
+.pillDot { animation: pulse 1.4s ease-in-out infinite; }
+
+.pill[data-s="running"] { color: var(--text-brand); background: color-mix(in srgb, var(--text-brand) 9%, transparent); }
+.pill[data-s="done"] { color: var(--status-success-default); background: color-mix(in srgb, var(--status-success-default) 9%, transparent); }
+.pill[data-s="error"] { color: var(--status-error-default); background: color-mix(in srgb, var(--status-error-default) 9%, transparent); }
+.pill[data-s="pending"],
+.pill[data-s="skipped"] { color: var(--text-tertiary); background: var(--bg-overlay-l1); }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.35; transform: scale(0.8); }
 }
 
-.cardRight {
-  margin-left: auto;
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.stepsCount {
-  font-size: var(--body-xs-font-size);
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.elapsed {
-  font-size: var(--body-xs-font-size);
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
-  min-width: 34px;
-  text-align: right;
-}
-
-.toggle {
-  flex: none;
-  display: inline-flex;
-  color: var(--icon-secondary);
-}
-
-.toggle svg {
-  transition: transform 0.18s ease;
-}
-
-.card[data-open="1"] .toggle svg { transform: rotate(90deg); }
-
-/* 一句话状态（五口径） */
 .msg {
   font-size: var(--body-sm-font-size);
   color: var(--text-secondary);
@@ -415,62 +520,6 @@
   border-radius: var(--radius-4);
   margin-left: var(--spacer-4);
 }
-
-/* step 流（点开贴底跟随） */
-.steps {
-  max-height: 0;
-  overflow: hidden;
-  opacity: 0;
-  transition: max-height 0.2s ease, opacity 0.2s ease;
-}
-
-.card[data-open="1"] .steps {
-  max-height: 190px;
-  opacity: 1;
-  overflow-y: auto;
-  scroll-behavior: smooth;
-}
-
-.stepList {
-  list-style: none;
-  margin: 7px 0 0;
-  padding: 7px 0 0;
-  border-top: 1px solid var(--border-neutral-l1);
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.step {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  font-size: var(--body-xs-font-size);
-  line-height: 1.55;
-  min-width: 0;
-  color: var(--text-secondary);
-  padding: 0 2px;
-}
-
-.step[data-latest="1"] {
-  color: var(--text-default);
-  background: var(--bg-brand-popup);
-  border-radius: var(--radius-4);
-}
-
-.step[data-err="1"] { color: var(--status-error-default); }
-
-.stepMark {
-  flex: none;
-  width: 11px;
-  display: inline-flex;
-  justify-content: center;
-  color: var(--text-tertiary);
-  transform: translateY(1px);
-}
-
-.step[data-ok="1"] .stepMark { color: var(--status-success-default); }
-.step[data-err="1"] .stepMark { color: var(--status-error-default); }
 
 .stepTool {
   flex: none;

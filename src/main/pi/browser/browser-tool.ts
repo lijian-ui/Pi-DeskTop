@@ -27,6 +27,7 @@ import { Type } from "typebox";
 import { createHash } from "node:crypto";
 import {
   defineTool,
+  type ToolDefinition,
   getAgentDir,
   type AgentToolResult,
   type InlineExtension,
@@ -308,9 +309,6 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
         })
         .catch((error) => console.warn("[browser] 托管 Chrome 预热失败：", (error as Error).message));
 
-      // 连续「无变化快照」计数（本会话内）。任何**会改变页面**的动作都会把它清零，
-      // 因此只有「模型反复 snapshot 而页面纹丝不动」才会累积 → 判定死循环。
-      let stalledSnapshots = 0;
       // 死循环被强制终止后待补发的可见说明（terminate 之后模型已无法再发言）。
       let loopNotice: number | undefined;
       pi.on("agent_end", () => {
@@ -369,593 +367,646 @@ export function createBrowserTool(options: BrowserToolOptions = {}): InlineExten
         return changed ? { messages: next } : undefined;
       });
 
-      /**
-       * send() 的「检查 + 派发」主体。审计由外层 send() 包办（成功/失败各记一条）。
-       *
-       * 检查顺序（前一道不通过就不会走到后一道）：
-       *  1. 授权总闸（auth.ts）—— 能不能用浏览器；
-       *  2. 动作级门禁（browser-guard.ts）—— 这个动作允不允许（默认拒绝）；
-       *  3. 域名围栏（policy.ts）—— 白/黑名单；
-       *  4. 后台策略 —— 是否允许激活标签页。
-       */
-      const sendChecked = async (
-        action: string,
-        params: Record<string, unknown>,
-        signal: AbortSignal | undefined,
-        cfg: BrowserConfig,
-      ): Promise<unknown> => {
-        assertBrowserAuthorized(unattended, cfg, { readOnly: READ_ONLY_ACTIONS.has(action) }); // 授权闸门（未授权/无人值守越界即抛）
-        // 动作级门禁：upload / evaluate / 组合键默认拒绝（详见 browser-guard.ts）。
-        assertActionGuarded(action, params, cfg);
-        // 后台策略：
-        //  - 窗口可见时 → 强制前台：用户在场（扫码/登录），必须让他看见页面。
-        //  - 无头时 → 走常规静默策略。
-        // 注意用**运行时**模式（effectiveHeadless）而非配置：自动弹窗/手动 show 后
-        // 实例已是可见窗口，此时不该再按"配置=无头"把它算成后台。
-        const forceForeground = !effectiveHeadless(cfg);
-        const background = forceForeground
-          ? false
-          : effectiveBackground(params as { background?: boolean; foreground?: boolean }, cfg.background);
-        assertActionAllowed(action, background);
-        // 域名围栏（前置）：能拿到 URL 的动作先查。
-        if (typeof params.url === "string") assertUrlAllowed(params.url, cfg);
-        // 按需启动/切换托管 Chrome，并连接 CDP（playwright-core 直连）。
-        await ensureBrowserReady(cfg);
-        const cdp = getManagedCdp(cfg);
-        if (!cdp.connected) {
-          const ok = await connectManagedCdp(cfg);
-          if (!ok) {
-            throw new Error(
-              `托管 Chrome 的 CDP 未连接（${cdp.url}）。请调 browser({action:"status"}) 查看状态，` +
-                `并确认 managed.executablePath 指向有效的 Chrome、且 Chrome 已成功启动（查看主进程日志）。`,
-            );
-          }
-        }
-        const result = await cdp.send(action, {
-          ...params,
-          background,
-          foreground: !background,
-        });
-        rememberFromResult(result); // 供 browser window show 自动恢复页面
-        // 非快照动作会改变页面（或至少代表换了策略）→ 清零停滞计数；
-        // 只有连续 snapshot 才允许累积，避免把「边操作边观察」误判成死循环。
-        if (action !== "page.snapshot") stalledSnapshots = 0;
-        return result;
-      };
-
-      /**
-       * 统一的「门禁 + 后台策略 + 连接自检 + 审计」出口，所有 action 都走这里。
-       * 无论成功还是被拒，都往审计日志写一条（**拦截事件往往比成功事件更值得看**）。
-       */
-      const send = async (
-        action: string,
-        params: Record<string, unknown>,
-        signal?: AbortSignal,
-        cfgOverride?: BrowserConfig,
-      ): Promise<unknown> => {
-        const cfg = cfgOverride ?? readBrowserConfigSync();
-        const url = typeof params.url === "string" ? params.url : undefined;
-        try {
-          const result = await sendChecked(action, params, signal, cfg);
-          appendBrowserAudit({
-            unattended,
-            action,
-            ok: true,
-            ...(url ? { url } : {}),
-            detail: summarizeParams(params),
-          });
-          return result;
-        } catch (error) {
-          appendBrowserAudit({
-            unattended,
-            action,
-            ok: false,
-            ...(url ? { url } : {}),
-            error: (error as Error).message,
-            detail: summarizeParams(params),
-          });
-          throw error;
-        }
-      };
-
-      // ---- 各 action 的格式化助手（内核 send 不变，这里只处理返回呈现）----
-
-      const doStatus = async (cfg: BrowserConfig): Promise<AgentToolResult<unknown>> => {
-        const cdp = getManagedCdp(cfg);
-        let browserInfo: unknown = null;
-        if (cdp.connected) {
-          browserInfo = await cdp
-            .send("tab.version", {})
-            .catch((error) => ({ error: String((error as Error).message) }));
-        }
-        const info = {
-          enabled: cfg.enabled,
-          managed: cfg.managed,
-          managedChrome: managedChromeInfo(),
-          background: cfg.background,
-          allowUnattended: cfg.allowUnattended,
-          allowUnattendedRead: cfg.allowUnattendedRead,
-          allowedDomains: cfg.allowedDomains,
-          blockedDomains: cfg.blockedDomains,
-          guard: guardSummary(cfg),
-          auditFile: browserAuditFile(),
-          authorization: authSummary(cfg),
-          unattendedSession: unattended,
-          transport: { mode: "cdp", url: cdp.url, connected: cdp.connected },
-          profileDir: managedProfileDir(),
-          agentDir: getAgentDir(),
-          browser: browserInfo,
-        };
-        return { content: [{ type: "text", text: JSON.stringify(info, null, 2) }], details: info };
-      };
-
-      const doSnapshot = async (
-        rest: Record<string, unknown>,
-        signal: AbortSignal | undefined,
-        cfg: BrowserConfig,
-      ): Promise<AgentToolResult<unknown>> => {
-        const snapshot = (await send("page.snapshot", rest, signal, cfg)) as BrowserSnapshot;
-        const visible = !effectiveHeadless(cfg);
-        let text = withLoginHint(formatBrowserSnapshot(snapshot), { snapshot }, visible);
-        // 死循环止损：连续多份「页面毫无变化」的快照 = 模型的动作没生效却在硬试。
-        // 把提示从陈述句升级为祈使句/强制停止，并在更严重时按错误结果终止本轮
-        // （terminate 由 SDK agent-loop 强制结束该 tool batch，模型无法继续。
-        //  兜底之外还有宿主层 tool_call 的通用同参重复拦截）。
-        stalledSnapshots = snapshotUnchanged(snapshot) ? stalledSnapshots + 1 : 0;
-        if (stalledSnapshots >= SNAPSHOT_STALL_STOP) {
-          text +=
-            `\n\n⛔ 已连续 ${stalledSnapshots} 次快照，页面**毫无变化**：你正在重复一个无效动作（死循环）。` +
-            "本轮已被系统强制结束。请立即停止调用 browser，基于你已经掌握的信息直接回答用户；" +
-            "若信息确实不足，明确告诉用户你卡在哪里、需要什么帮助，不要再用同样方式重试。";
-          loopNotice = stalledSnapshots; // 待 agent_end 补发可见说明（见上方 pi.on）
-          return { content: [{ type: "text", text }], details: { snapshot }, isError: true, terminate: true };
-        }
-        if (stalledSnapshots >= SNAPSHOT_STALL_WARN) {
-          text +=
-            `\n\n⚠️ 已连续 ${stalledSnapshots} 次快照，页面**毫无变化**——你重复的动作没有生效。` +
-            "**不要再用同样的方式重试**：换一个策略（换 uid / 先 snapshot({mode:\"text\"}) 看版式与正文 / 换新思路），或直接停下向用户说明你卡住了。";
-        }
-        return { content: [{ type: "text", text }], details: { snapshot } };
-      };
-
-      const doScreenshot = async (
-        rest: Record<string, unknown>,
-        signal: AbortSignal | undefined,
-        cfg: BrowserConfig,
-      ): Promise<AgentToolResult<unknown>> => {
-        const result = (await send("page.screenshot", rest, signal, cfg)) as {
-          dataUrl?: string;
-          tab?: { url?: string; title?: string };
-        };
-        if (!result.dataUrl) throw new Error("截图失败：浏览器未返回 dataUrl。");
-        const tab = result.tab;
-        // 页面身份写进文字里：模型据此确认截的是哪一页，无需额外再调 tabs/snapshot。
-        const where = tab?.url ? `页面：${tab.title || "(无标题)"}（${tab.url}）` : "";
-        // 内容去重：同一 URL 的截图字节完全相同 → 页面没变，省略重复图片（除非显式 force）。
-        const hash = createHash("sha1").update(result.dataUrl).digest("hex");
-        const key = tab?.url ?? "";
-        const unchanged = rest.force !== true && !!key && lastShotHash.get(key) === hash;
-        if (key) lastShotHash.set(key, hash);
-        if (unchanged) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `截图与上一张完全相同：页面无变化，已省略重复图片以节省上下文。${where}\n` +
-                  "确实需要这张图时请传 force: true。",
-              },
-            ],
-            details: { tab, omitted: true },
-          };
-        }
-        const image = toImageContent(result.dataUrl);
-        const content: ContentBlock[] = [
-          { type: "text", text: `已捕获当前业务系统截图（见附图）。${where}` },
-          image,
-        ];
-        return { content, details: { tab } };
-      };
-
-      const doClick = async (
-        rest: Record<string, unknown>,
-        signal: AbortSignal | undefined,
-        cfg: BrowserConfig,
-      ): Promise<AgentToolResult<unknown>> => {
-        const result = await send("page.click", rest, signal, cfg);
-        if (rest.includeSnapshot) {
-          const snapshot = (await send(
-            "page.snapshot",
-            { targetId: rest.targetId },
-            signal,
-            cfg,
-          )) as BrowserSnapshot;
-          return {
-            content: [
-              { type: "text", text: `${JSON.stringify(result)}\n\n${formatBrowserSnapshot(snapshot)}` },
-            ],
-            details: { result, snapshot },
-          };
-        }
-        return asText(result);
-      };
-
-      const doNavigate = async (
-        rest: Record<string, unknown>,
-        signal: AbortSignal | undefined,
-        cfg: BrowserConfig,
-      ): Promise<AgentToolResult<unknown>> => {
-        let navigated = (await send("page.navigate", rest, signal, cfg)) as {
-          tab?: { url?: string; title?: string };
-        };
-        // 主流程：撞到登录页 + 需要人工介入（验证码/扫码/短信）+ 当前无头 → **自动弹出可见窗口**。
-        // 纯用户名密码登录页不自动弹窗：让模型自己 snapshot → fill → submit，不需要用户介入。
-        const needsLogin = looksLikeLogin({ url: navigated?.tab?.url, title: navigated?.tab?.title });
-        const captchaLogin = isCaptchaLoginPage({ url: navigated?.tab?.url, title: navigated?.tab?.title });
-        let autoShown = false;
-        if (needsLogin && captchaLogin && effectiveHeadless(cfg)) {
-          try {
-            // 切换可见性会重启 Chrome → 旧 CDP 连接失效，重启后重连（connectManagedCdp 会重试）。
-            await ensureManagedChrome(false, cfg);
-            await connectManagedCdp(cfg);
-            // 切换会重启浏览器、页面回到空白 → 重新打开同一 URL（此时 send 会因
-            // 运行时已是可见窗口而自动前台化，标签被激活，用户能看到二维码）。
-            navigated = (await send("page.navigate", rest, signal, cfg)) as typeof navigated;
-            autoShown = true;
-          } catch {
-            // 弹窗失败（如上次运行遗留的托管窗口占用句柄）：不影响本次结果，
-            // 下面的 LOGIN_HINT 会引导模型调 browser window，那里有明确报错。
-          }
-        }
-        const payload = JSON.stringify(navigated);
-        const text = autoShown
-          ? `${payload}\n\n⚠️ 已**自动弹出托管浏览器窗口**（橙色「Pi 自动化」），因为检测到这是需要人工介入的登录页（验证码/扫码/短信）。` +
-            `请告知用户在该窗口完成登录；用户确认登录完成后，调 ` +
-            `browser({action:"window", windowAction:"hide"}) 切回后台，再 browser({action:"navigate"}) 继续干活。`
-          : withLoginHint(
-              payload,
-              { url: navigated?.tab?.url, title: navigated?.tab?.title },
-              !effectiveHeadless(cfg),
-            );
-        return { content: [{ type: "text", text }], details: { result: navigated } };
-      };
-
-      const doWindow = async (
-        windowAction: string | undefined,
-        rest: Record<string, unknown>,
-        signal: AbortSignal | undefined,
-        cfg: BrowserConfig,
-      ): Promise<AgentToolResult<unknown>> => {
-        const cdp = getManagedCdp(cfg);
-        if (!windowAction || windowAction === "status") {
-          const info = {
-            managed: cfg.managed,
-            managedChrome: managedChromeInfo(),
-            transport: { mode: "cdp", url: cdp.url, connected: cdp.connected },
-          };
-          return { content: [{ type: "text", text: JSON.stringify(info, null, 2) }], details: info };
-        }
-        assertBrowserAuthorized(unattended, cfg);
-        const headless = windowAction === "hide";
-        // 切换可见性必然重启 Chrome → 旧 CDP 连接失效，重启后重连（connectManagedCdp 会重试）。
-        await ensureManagedChrome(headless, cfg);
-        await connectManagedCdp(cfg);
-        let navigated: unknown = null;
-        // 切换模式会重启浏览器 → 页面丢失。show 未显式给 url 时自动恢复「最近访问的页面」，
-        // 否则用户看到的只是一张空白页（体验上就变成了"弹出个新标签页"）。
-        const targetUrl =
-          typeof rest.url === "string" ? rest.url : windowAction === "show" ? lastVisitedUrl() : undefined;
-        if (targetUrl) {
-          assertUrlAllowed(targetUrl, cfg);
-          navigated = await cdp
-            // foreground:true —— show 的目的是让用户看见（扫码/登录），必须激活标签。
-            .send("page.navigate", { url: targetUrl, foreground: true, background: false })
-            .catch((error) => ({ error: String((error as Error).message) }));
-          // 这条路径直连 CDP（不走 send()），故自行补一条审计：window show 触发的导航
-          // 也是一次真实的页面跳转，不该在审计里缺席。
-          const navError = (navigated as { error?: string } | null)?.error;
-          appendBrowserAudit({
-            unattended,
-            action: "page.navigate",
-            ok: !navError,
-            url: targetUrl,
-            ...(navError ? { error: String(navError) } : {}),
-            detail: { via: "window " + windowAction },
-          });
-        }
-        const info = {
-          action: windowAction,
-          headless,
-          managedChrome: managedChromeInfo(),
-          transport: { mode: "cdp", url: cdp.url, connected: cdp.connected },
-          navigated,
-          note: headless
-            ? "已切回无头后台（完全不可见）。"
-            : `已打开可见窗口${targetUrl ? `并打开页面：${targetUrl}` : "（无历史页面可恢复，请再 browser({action:\"navigate\"})）"}，` +
-              "请让用户完成登录；完成后调 browser({action:\"window\", windowAction:\"hide\"}) 切回后台。",
-        };
-        return { content: [{ type: "text", text: JSON.stringify(info, null, 2) }], details: info };
-      };
-
-      // ---- 单一工具注册 ----
       pi.registerTool(
-        defineTool({
-          name: "browser",
-          label: "浏览器控制",
-          // 试点：deferred = 注册但不声明给模型（不进 tools 数组），tool_search 命中才装载。
-          exposure: deferred ? "deferred" : "direct",
-          description:
-            "Control the browser to operate business systems (single entry point; the action field selects the operation). " +
-            "Observe: snapshot (structure + element uid; add delta:true for a diff against the last snapshot; mode:\"text\" also returns the whole page text — the safe way to read tables/lists instead of evaluate) / screenshot (image) / tabs (tab list) / status (connection diagnostics). " +
-            "Interact: navigate (open URL) / click / type (append) / fill (clear then write; accepts a fields array for batch) / press_key / hover / scroll. " +
-            "click/type/fill/press_key/navigate return post-action signals: navigated (URL changed) / newRequests (new requests fired) / effective (whether the action really took effect); " +
-            "fill/type also return valueChanged (whether the control's value/checked/selectedIndex actually changed), and batch fill returns fieldsChanged. " +
-            "effective=false means the action produced no visible effect — do not blindly retry. Add waitFor:{url|selector,timeout} to wait for an outcome before returning. " +
-            "Advanced: evaluate (run JS) / network (list the page's recent requests with headers) / drag / upload (upload a file) / get_cookie (export cookies for a given site, including HttpOnly). " +
-            "Window: window show pops a visible window so the user can complete a CAPTCHA/QR login themselves; window hide returns to the background afterwards. " +
-            "The browser is launched by this app itself (separate profile, hidden by default, login state persists across sessions) — **no browser extension is required**.",
-          promptSnippet:
-            "Control the browser to operate the business system via one tool: snapshot/screenshot to see, navigate/click/type/fill to act, window to show/hide for login, status to diagnose. Pick the action, not a separate tool name.",
-          promptGuidelines: [
-            'Before operating a business system, first call browser({action:"snapshot"}) to observe the page and get element uids, or browser({action:"tabs"}) to find the target tab id; always locate elements with uid / targetId afterwards.',
-            'When the user gives you a URL to work on, first call browser({action:"navigate", url}) to open it, then snapshot to see the content.',
-            'Click/type with uid from the latest snapshot; after any structure change (navigation/dialog/submit) old uids go stale — snapshot again for fresh ones, do not blindly retry.',
-            'fill/type report valueChanged: true means the value really was written, so the action succeeded even if other effective fields are false — do not retry.',
-            'On the error "N non-blank tabs exist": first call browser({action:"tabs"}) to see the list, then pass targetId in the action to pick the target tab; do not assume it lands on the tab you want.',
-            'browser({action:"type"}) **appends** input; when a field already has a value, use browser({action:"fill"}) instead (clear then write); fill\'s submit:true should only be used when you really want to submit the form, to avoid accidentally submitting business documents.',
-            'Observation priority: default to snapshot to understand the page and verify an action\'s effect; reserve screenshot for things only an image can convey — pictures/charts/layout, or a login QR code — and **do not screenshot a page that has not changed** (every image stays in the context permanently).',
-            'For an element you cannot click, first browser({action:"press_key", key:"Tab"}) to move focus then Enter to trigger it — this often bypasses overlay layers.',
-            'For menus that only appear on hover: first browser({action:"hover"}) then snapshot to get the new uids.',
-            'If snapshot + click can do it, do not detour through browser({action:"evaluate"}) to run JS (that action is denied by the guard by default).',
-            'For API automation (HTTP calls that need the login state), use browser({action:"get_cookie", url:"<business site URL>"}) to get the full Cookie string (including HttpOnly); only the specified site is exported per call, bound by the allowlist. The return includes valid=yes/no/unknown session probing: valid=no (401/403 or redirect to login) means the login state has expired — **do not blindly retry**; immediately browser({action:"window", windowAction:"show"}) to pop the window and ask the user to log in again via QR/captcha, then hide to switch back; when valid=unknown, do the real work first and take the API\'s 401 as the source of truth. A full Cookie is equivalent to account session credentials: use it only for automation within the authorized scope, and never leak it to third parties or write it to public files.',
-            'When you hit a login page: the system only auto-pops the window for **captcha/QR/SMS login**; a pure username/password login page will not auto-pop, leaving you to snapshot → fill → submit yourself. Three cases: ① the account and password from the user are already in the conversation history → first snapshot to locate the form fields (the password box showing value=[masked] is **normal secure masking**, not an empty box or an anomaly; after filling the system keeps masking it and will not echo the password, **and do not repeat the password in the conversation**), then fill with browser({action:"fill", uid:<password box uid>, text:<password>}); after submitting, snapshot again to see whether login succeeded (URL changed / login box gone / business page elements appeared). ② If a captcha/QR/SMS/password-error prompt appears → immediately browser({action:"window", windowAction:"show"}) to pop the window and let the user take over. ③ If you do not yet have credentials → prompt the user for account/password, then go to ①. Do not call window again when the auto-pop notice appears; after the user finishes logging in, browser({action:"window", windowAction:"hide"}) to switch back to the background.',
-            'Three high-risk actions are denied by the guard by default: upload (upload a local file) / evaluate (run arbitrary JS) / press_key with ctrl·meta·alt combos. When denied, the error message explains why and points to which item to enable in the guard section of browser-config.json — **leave that decision to the user; do not find your own way around it** (e.g. using evaluate instead of upload).',
-            'If a token is NOT in cookie/localStorage (memory-only, sent as a request header such as "token:"), use browser({action:"network", header:"token"}) to read it from the page\'s own recent requests. Trigger one page request first if nothing is captured (e.g. click a refresh control). Never reload/navigate that page to fetch it — a memory-only token dies on refresh. network returns full URLs, method, status, and a top-level "tokens" array with the raw header value; static/telemetry noise is filtered out by default. Narrow it with urlRegex / urlIncludes / method / resourceType ("xhr,fetch") / limit (1-100); status 401/403 means the token expired. It is read-only and needs no guard switch.',
-            'When other browser calls error or misbehave, first browser({action:"status"}) to check the connection and config.',
-          ],
-          parameters: Type.Object(
-            {
-              // 核心操作选择
-              action: Type.Union(
-                [
-                  Type.Literal("status"),
-                  Type.Literal("tabs"),
-                  Type.Literal("snapshot"),
-                  Type.Literal("screenshot"),
-                  Type.Literal("navigate"),
-                  Type.Literal("get_cookie"),
-                  Type.Literal("click"),
-                  Type.Literal("type"),
-                  Type.Literal("fill"),
-                  Type.Literal("press_key"),
-                  Type.Literal("hover"),
-                  Type.Literal("scroll"),
-                  Type.Literal("evaluate"),
-                  Type.Literal("network"),
-                  Type.Literal("drag"),
-                  Type.Literal("upload"),
-                  Type.Literal("window"),
-                ],
-                { description: "Operation type." },
-              ),
-              // 窗口
-              windowAction: Type.Optional(
-                Type.Union([Type.Literal("show"), Type.Literal("hide"), Type.Literal("status")], {
-                  description: "Only for action=window: show=visible window (for login), hide=switch back to headless, status=view state.",
-                }),
-              ),
-              // 导航 / 目标选择
-              url: Type.Optional(Type.String({ description: "Target URL for action=navigate / window(show), or the business site URL to export for action=get_cookie (bound by the allowlist)." })),
-              targetId: Type.Optional(Type.String({ description: "Target tab id (from tabs / snapshot)." })),
-              // 元素定位
-              uid: Type.Optional(Type.String({ description: "Element uid (from snapshot). Used by click/type/fill/hover/drag." })),
-              selector: Type.Optional(Type.String({ description: "CSS selector (when there is no uid)." })),
-              // 文本输入
-              text: Type.Optional(Type.String({ maxLength: 4000, description: "Input text for type / fill." })),
-              fields: Type.Optional(
-                Type.Array(
-                  Type.Object({
-                    uid: Type.Optional(Type.String()),
-                    selector: Type.Optional(Type.String()),
-                    text: Type.String(),
-                  }),
-                  {
-                    description:
-                      "Only for action=fill: batch-fill multiple fields to write the whole form in one call (e.g. login). Each item is {uid|selector, text}; with submit:true it also submits.",
-                  },
-                ),
-              ),
-              perCharacter: Type.Optional(Type.Boolean({ description: "Type character by character (slower but closer to a human)." })),
-              pressEnter: Type.Optional(Type.Boolean({ description: "Press Enter after type." })),
-              submit: Type.Optional(Type.Boolean({ description: "Submit the enclosing form after fill." })),
-              includeSnapshot: Type.Optional(Type.Boolean({ description: "Attach a fresh snapshot after click." })),
-              waitFor: Type.Optional(
-                Type.Object(
-                  {
-                    url: Type.Optional(Type.String({ description: "URL regex; waiting ends as soon as it matches." })),
-                    selector: Type.Optional(Type.String({ description: "CSS selector; waiting ends as soon as it appears." })),
-                    timeout: Type.Optional(Type.Number({ description: "Max wait in milliseconds (default 5000)." })),
-                  },
-                  {
-                    description:
-                      'Optional: after the action, wait until the condition holds before returning (applies to click/type/fill/press_key/navigate), collapsing "act → wait for result" into one call. e.g. {url:"/home"}.',
-                  },
-                ),
-              ),
-              // 按键
-              key: Type.Optional(Type.String({ description: "Key name for press_key, e.g. Enter/Tab/Escape/ArrowDown/a." })),
-              ctrlKey: Type.Optional(Type.Boolean()),
-              altKey: Type.Optional(Type.Boolean()),
-              shiftKey: Type.Optional(Type.Boolean()),
-              metaKey: Type.Optional(Type.Boolean()),
-              // 滚动
-              deltaX: Type.Optional(Type.Number()),
-              deltaY: Type.Optional(Type.Number()),
-              // 快照选项
-              mode: Type.Optional(
-                Type.Union(
-                  [
-                    Type.Literal("auto"),
-                    Type.Literal("interactive"),
-                    Type.Literal("forms"),
-                    Type.Literal("text"),
-                  ],
-                  {
-                    description:
-                      'Snapshot mode. "text" additionally returns the whole page body text (## 页面全文), which is the safe way to read tables/lists/long content instead of evaluate. Default auto.',
-                  },
-                ),
-              ),
-              maxElements: Type.Optional(Type.Number({ minimum: 1, maximum: 400 })),
-              containingText: Type.Optional(Type.String({ description: "Return only elements whose label text contains this string." })),
-              roleFilter: Type.Optional(Type.String({ description: "Return only elements with this role/tag name, e.g. button." })),
-              delta: Type.Optional(
-                Type.Boolean({
-                  description:
-                    "Only for action=snapshot: return a structured diff against the last snapshot (element added/removed/changed / form value changed / text changed / focus / navigation); " +
-                    "when the page did not substantively change, output a condensed form (omit the element list to save context). Suited to polling scenarios like \"act once and see if anything reacts\". Default false.",
-                }),
-              ),
-              excludeOccluded: Type.Optional(
-                Type.Boolean({
-                  description:
-                    "Only for action=snapshot: omit nodes whose center is covered by an overlay (occluded-by-*), reporting only an occludedSkipped count in the result. " +
-                    "Use it to filter out hidden forms/duplicate controls masked by an overlay. Default false (keep them and mark [occluded-by-…]).",
-                }),
-              ),
-              // 截图选项
-              format: Type.Optional(Type.Union([Type.Literal("png"), Type.Literal("jpeg")])),
-              quality: Type.Optional(Type.Number({ minimum: 0, maximum: 100, description: "JPEG quality 0-100." })),
-              force: Type.Optional(
-                Type.Boolean({
-                  description:
-                    "Only for action=screenshot: force-return the image even if it is byte-identical to the previous screenshot of the same page. By default an identical screenshot is skipped (text only) to save context. Default false.",
-                }),
-              ),
-              // 求值
-              expression: Type.Optional(Type.String({ maxLength: 4000, description: "JS expression for evaluate." })),
-              // 网络请求抓取（取内存态 token 等）
-              urlIncludes: Type.Optional(
-                Type.String({ description: "Only for action=network: return only requests whose URL contains this substring." }),
-              ),
-              urlRegex: Type.Optional(
-                Type.String({ description: "Only for action=network: return only requests whose URL matches this regular expression (case-insensitive)." }),
-              ),
-              resourceType: Type.Optional(
-                Type.String({ description: 'Only for action=network: comma-separated resource types to keep, e.g. "xhr,fetch".' }),
-              ),
-              includeStatic: Type.Optional(
-                Type.Boolean({
-                  description:
-                    "Only for action=network: include noisy resource types (image/font/stylesheet/script/media/other). Default false.",
-                }),
-              ),
-              tokenHeader: Type.Optional(
-                Type.String({
-                  description: 'Only for action=network: header name to extract as the token (default "token"; use "authorization" for Bearer).',
-                }),
-              ),
-              header: Type.Optional(
-                Type.String({
-                  description: 'Only for action=network: return only requests carrying this header (e.g. "token", "authorization").',
-                }),
-              ),
-              limit: Type.Optional(
-                Type.Number({ minimum: 1, maximum: 100, description: "Only for action=network: how many recent requests to return (default 20)." }),
-              ),
-              includeHeaders: Type.Optional(
-                Type.Boolean({ description: "Only for action=network: include request headers (default true)." }),
-              ),
-              // get_cookie 会话探活
-              probe: Type.Optional(
-                Type.Boolean({
-                  description:
-                    "Only for action=get_cookie: whether to make a side-effect-free GET probe to the site to judge whether the session has expired (default true). Returns valid=yes/no/unknown.",
-                }),
-              ),
-              // 拖拽
-              fromUid: Type.Optional(Type.String()),
-              toUid: Type.Optional(Type.String()),
-              fromX: Type.Optional(Type.Number()),
-              fromY: Type.Optional(Type.Number()),
-              toX: Type.Optional(Type.Number()),
-              toY: Type.Optional(Type.Number()),
-              steps: Type.Optional(Type.Number({ minimum: 4, maximum: 60 })),
-              // 上传
-              paths: Type.Optional(Type.Array(Type.String(), { description: "Array of absolute local paths for upload." })),
-              // 后台策略
-              background: Type.Optional(Type.Boolean()),
-              foreground: Type.Optional(Type.Boolean()),
-            },
-            { additionalProperties: true },
-          ),
-          execute: async (_id, params, signal): Promise<AgentToolResult<unknown>> => {
-            const { action, windowAction, ...rest } = params as Record<string, unknown> & {
-              action: string;
-              windowAction?: string;
-            };
-            const cfg: BrowserConfig = readBrowserConfigSync();
-
-            switch (action) {
-              case "status":
-                return doStatus(cfg);
-              case "tabs":
-                return asText(await send("tab.list", rest, signal, cfg));
-              case "snapshot":
-                return doSnapshot(rest, signal, cfg);
-              case "screenshot":
-                return doScreenshot(rest, signal, cfg);
-              case "navigate":
-                return doNavigate(rest, signal, cfg);
-              case "get_cookie": {
-                const url = typeof rest.url === "string" ? rest.url : undefined;
-                if (!url) throw new Error("get_cookie 需要 url 参数（要导出的业务站点 URL，受白名单约束）。");
-                return asText(await send("tab.get_cookie", { url, probe: rest.probe === false ? false : true }, signal, cfg));
-              }
-              case "click":
-                return doClick(rest, signal, cfg);
-              case "type":
-                return asText(await send("page.type", rest, signal, cfg));
-              case "fill":
-                return asText(await send("page.fill", rest, signal, cfg));
-              case "press_key": {
-                const payload = {
-                  key: rest.key,
-                  modifiers: {
-                    ctrlKey: rest.ctrlKey,
-                    altKey: rest.altKey,
-                    shiftKey: rest.shiftKey,
-                    metaKey: rest.metaKey,
-                  },
-                  targetId: rest.targetId,
-                };
-                return asText(await send("page.key", payload, signal, cfg));
-              }
-              case "hover":
-                return asText(await send("page.hover", rest, signal, cfg));
-              case "scroll":
-                return asText(await send("page.scroll", rest, signal, cfg));
-              case "evaluate":
-                return asText(await send("page.evaluate", rest, signal, cfg));
-              case "network":
-                return asText(await send("page.network", rest, signal, cfg));
-              case "drag":
-                return asText(await send("page.drag", rest, signal, cfg));
-              case "upload":
-                return asText(await send("page.upload", rest, signal, cfg));
-              case "window":
-                return doWindow(windowAction, rest, signal, cfg);
-              default:
-                throw new Error(
-                  `未知 action: ${action}。可选：status / tabs / snapshot / screenshot / navigate / click / type / ` +
-                    "fill / press_key / hover / scroll / evaluate / network / drag / upload / window。",
-                );
-            }
+        buildBrowserToolDef({
+          unattended,
+          deferred,
+          onLoopStall: (count) => {
+            loopNotice = count;
           },
         }),
       );
     },
   };
+}
+
+
+/** 进程级执行互斥锁：托管 Chrome 是单例（父会话 / 子代理 / 定时任务共用），
+ *  并发调用会互踩 tab。所有 browser 动作（无论来自哪个会话）在此排队，
+ *  单个动作完成即释放——观察/操作都是短事务，串行化开销可忽略。 */
+let browserLockChain: Promise<void> = Promise.resolve();
+async function withBrowserExecLock<T>(signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
+  if (signal?.aborted) throw new Error("已取消（browser 动作未开始执行）。");
+  const prev = browserLockChain;
+  let release!: () => void;
+  browserLockChain = new Promise<void>((resolve) => (release = resolve));
+  await prev;
+  try {
+    if (signal?.aborted) throw new Error("已取消（等待浏览器锁期间）。");
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+export interface BrowserToolDefOptions {
+  /** 无人值守授权口径（定时任务会话 true；子代理桥接暂一律 false，见 runner 注释）。 */
+  unattended?: boolean;
+  /** deferred 曝光（仅父会话 inline 挂载使用）。 */
+  deferred?: boolean;
+  /** 快照死循环触达 STOP 阈值时回调（父会话用它补发可见说明）。 */
+  onLoopStall?: (count: number) => void;
+}
+
+/**
+ * 裸工具定义（ToolDefinition）——两条消费路径共用同一套门禁/审计/自动弹窗登录：
+ *  1. createBrowserTool 的 factory：父会话 inline 挂载（附 agent_end/context 会话钩子）；
+ *  2. browserToolDefs()：子代理 customTools 桥接（无会话钩子；execute 走全局锁）。
+ */
+export function buildBrowserToolDef(options: BrowserToolDefOptions = {}): ToolDefinition {
+  const unattended = options.unattended === true;
+  const deferred = options.deferred === true;
+  let stalledSnapshots = 0;
+    /**
+   * send() 的「检查 + 派发」主体。审计由外层 send() 包办（成功/失败各记一条）。
+   *
+   * 检查顺序（前一道不通过就不会走到后一道）：
+   *  1. 授权总闸（auth.ts）—— 能不能用浏览器；
+   *  2. 动作级门禁（browser-guard.ts）—— 这个动作允不允许（默认拒绝）；
+   *  3. 域名围栏（policy.ts）—— 白/黑名单；
+   *  4. 后台策略 —— 是否允许激活标签页。
+   */
+  const sendChecked = async (
+    action: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    cfg: BrowserConfig,
+  ): Promise<unknown> => {
+    assertBrowserAuthorized(unattended, cfg, { readOnly: READ_ONLY_ACTIONS.has(action) }); // 授权闸门（未授权/无人值守越界即抛）
+    // 动作级门禁：upload / evaluate / 组合键默认拒绝（详见 browser-guard.ts）。
+    assertActionGuarded(action, params, cfg);
+    // 后台策略：
+    //  - 窗口可见时 → 强制前台：用户在场（扫码/登录），必须让他看见页面。
+    //  - 无头时 → 走常规静默策略。
+    // 注意用**运行时**模式（effectiveHeadless）而非配置：自动弹窗/手动 show 后
+    // 实例已是可见窗口，此时不该再按"配置=无头"把它算成后台。
+    const forceForeground = !effectiveHeadless(cfg);
+    const background = forceForeground
+      ? false
+      : effectiveBackground(params as { background?: boolean; foreground?: boolean }, cfg.background);
+    assertActionAllowed(action, background);
+    // 域名围栏（前置）：能拿到 URL 的动作先查。
+    if (typeof params.url === "string") assertUrlAllowed(params.url, cfg);
+    // 按需启动/切换托管 Chrome，并连接 CDP（playwright-core 直连）。
+    await ensureBrowserReady(cfg);
+    const cdp = getManagedCdp(cfg);
+    if (!cdp.connected) {
+      const ok = await connectManagedCdp(cfg);
+      if (!ok) {
+        throw new Error(
+          `托管 Chrome 的 CDP 未连接（${cdp.url}）。请调 browser({action:"status"}) 查看状态，` +
+            `并确认 managed.executablePath 指向有效的 Chrome、且 Chrome 已成功启动（查看主进程日志）。`,
+        );
+      }
+    }
+    const result = await cdp.send(action, {
+      ...params,
+      background,
+      foreground: !background,
+    });
+    rememberFromResult(result); // 供 browser window show 自动恢复页面
+    // 非快照动作会改变页面（或至少代表换了策略）→ 清零停滞计数；
+    // 只有连续 snapshot 才允许累积，避免把「边操作边观察」误判成死循环。
+    if (action !== "page.snapshot") stalledSnapshots = 0;
+    return result;
+  };
+
+  /**
+   * 统一的「门禁 + 后台策略 + 连接自检 + 审计」出口，所有 action 都走这里。
+   * 无论成功还是被拒，都往审计日志写一条（**拦截事件往往比成功事件更值得看**）。
+   */
+  const send = async (
+    action: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+    cfgOverride?: BrowserConfig,
+  ): Promise<unknown> => {
+    const cfg = cfgOverride ?? readBrowserConfigSync();
+    const url = typeof params.url === "string" ? params.url : undefined;
+    try {
+      const result = await sendChecked(action, params, signal, cfg);
+      appendBrowserAudit({
+        unattended,
+        action,
+        ok: true,
+        ...(url ? { url } : {}),
+        detail: summarizeParams(params),
+      });
+      return result;
+    } catch (error) {
+      appendBrowserAudit({
+        unattended,
+        action,
+        ok: false,
+        ...(url ? { url } : {}),
+        error: (error as Error).message,
+        detail: summarizeParams(params),
+      });
+      throw error;
+    }
+  };
+
+  // ---- 各 action 的格式化助手（内核 send 不变，这里只处理返回呈现）----
+
+  const doStatus = async (cfg: BrowserConfig): Promise<AgentToolResult<unknown>> => {
+    const cdp = getManagedCdp(cfg);
+    let browserInfo: unknown = null;
+    if (cdp.connected) {
+      browserInfo = await cdp
+        .send("tab.version", {})
+        .catch((error) => ({ error: String((error as Error).message) }));
+    }
+    const info = {
+      enabled: cfg.enabled,
+      managed: cfg.managed,
+      managedChrome: managedChromeInfo(),
+      background: cfg.background,
+      allowUnattended: cfg.allowUnattended,
+      allowUnattendedRead: cfg.allowUnattendedRead,
+      allowedDomains: cfg.allowedDomains,
+      blockedDomains: cfg.blockedDomains,
+      guard: guardSummary(cfg),
+      auditFile: browserAuditFile(),
+      authorization: authSummary(cfg),
+      unattendedSession: unattended,
+      transport: { mode: "cdp", url: cdp.url, connected: cdp.connected },
+      profileDir: managedProfileDir(),
+      agentDir: getAgentDir(),
+      browser: browserInfo,
+    };
+    return { content: [{ type: "text", text: JSON.stringify(info, null, 2) }], details: info };
+  };
+
+  const doSnapshot = async (
+    rest: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    cfg: BrowserConfig,
+  ): Promise<AgentToolResult<unknown>> => {
+    const snapshot = (await send("page.snapshot", rest, signal, cfg)) as BrowserSnapshot;
+    const visible = !effectiveHeadless(cfg);
+    let text = withLoginHint(formatBrowserSnapshot(snapshot), { snapshot }, visible);
+    // 死循环止损：连续多份「页面毫无变化」的快照 = 模型的动作没生效却在硬试。
+    // 把提示从陈述句升级为祈使句/强制停止，并在更严重时按错误结果终止本轮
+    // （terminate 由 SDK agent-loop 强制结束该 tool batch，模型无法继续。
+    //  兜底之外还有宿主层 tool_call 的通用同参重复拦截）。
+    stalledSnapshots = snapshotUnchanged(snapshot) ? stalledSnapshots + 1 : 0;
+    if (stalledSnapshots >= SNAPSHOT_STALL_STOP) {
+      text +=
+        `\n\n⛔ 已连续 ${stalledSnapshots} 次快照，页面**毫无变化**：你正在重复一个无效动作（死循环）。` +
+        "本轮已被系统强制结束。请立即停止调用 browser，基于你已经掌握的信息直接回答用户；" +
+        "若信息确实不足，明确告诉用户你卡在哪里、需要什么帮助，不要再用同样方式重试。";
+    options.onLoopStall?.(stalledSnapshots); // 宿主用 agent_end 补发可见说明（子会话无钩子，仅 terminate 生效）
+      return { content: [{ type: "text", text }], details: { snapshot }, isError: true, terminate: true };
+    }
+    if (stalledSnapshots >= SNAPSHOT_STALL_WARN) {
+      text +=
+        `\n\n⚠️ 已连续 ${stalledSnapshots} 次快照，页面**毫无变化**——你重复的动作没有生效。` +
+        "**不要再用同样的方式重试**：换一个策略（换 uid / 先 snapshot({mode:\"text\"}) 看版式与正文 / 换新思路），或直接停下向用户说明你卡住了。";
+    }
+    return { content: [{ type: "text", text }], details: { snapshot } };
+  };
+
+  const doScreenshot = async (
+    rest: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    cfg: BrowserConfig,
+  ): Promise<AgentToolResult<unknown>> => {
+    const result = (await send("page.screenshot", rest, signal, cfg)) as {
+      dataUrl?: string;
+      tab?: { url?: string; title?: string };
+    };
+    if (!result.dataUrl) throw new Error("截图失败：浏览器未返回 dataUrl。");
+    const tab = result.tab;
+    // 页面身份写进文字里：模型据此确认截的是哪一页，无需额外再调 tabs/snapshot。
+    const where = tab?.url ? `页面：${tab.title || "(无标题)"}（${tab.url}）` : "";
+    // 内容去重：同一 URL 的截图字节完全相同 → 页面没变，省略重复图片（除非显式 force）。
+    const hash = createHash("sha1").update(result.dataUrl).digest("hex");
+    const key = tab?.url ?? "";
+    const unchanged = rest.force !== true && !!key && lastShotHash.get(key) === hash;
+    if (key) lastShotHash.set(key, hash);
+    if (unchanged) {
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `截图与上一张完全相同：页面无变化，已省略重复图片以节省上下文。${where}\n` +
+              "确实需要这张图时请传 force: true。",
+          },
+        ],
+        details: { tab, omitted: true },
+      };
+    }
+    const image = toImageContent(result.dataUrl);
+    const content: ContentBlock[] = [
+      { type: "text", text: `已捕获当前业务系统截图（见附图）。${where}` },
+      image,
+    ];
+    return { content, details: { tab } };
+  };
+
+  const doClick = async (
+    rest: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    cfg: BrowserConfig,
+  ): Promise<AgentToolResult<unknown>> => {
+    const result = await send("page.click", rest, signal, cfg);
+    if (rest.includeSnapshot) {
+      const snapshot = (await send(
+        "page.snapshot",
+        { targetId: rest.targetId },
+        signal,
+        cfg,
+      )) as BrowserSnapshot;
+      return {
+        content: [
+          { type: "text", text: `${JSON.stringify(result)}\n\n${formatBrowserSnapshot(snapshot)}` },
+        ],
+        details: { result, snapshot },
+      };
+    }
+    return asText(result);
+  };
+
+  const doNavigate = async (
+    rest: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    cfg: BrowserConfig,
+  ): Promise<AgentToolResult<unknown>> => {
+    let navigated = (await send("page.navigate", rest, signal, cfg)) as {
+      tab?: { url?: string; title?: string };
+    };
+    // 主流程：撞到登录页 + 需要人工介入（验证码/扫码/短信）+ 当前无头 → **自动弹出可见窗口**。
+    // 纯用户名密码登录页不自动弹窗：让模型自己 snapshot → fill → submit，不需要用户介入。
+    const needsLogin = looksLikeLogin({ url: navigated?.tab?.url, title: navigated?.tab?.title });
+    const captchaLogin = isCaptchaLoginPage({ url: navigated?.tab?.url, title: navigated?.tab?.title });
+    let autoShown = false;
+    if (needsLogin && captchaLogin && effectiveHeadless(cfg)) {
+      try {
+        // 切换可见性会重启 Chrome → 旧 CDP 连接失效，重启后重连（connectManagedCdp 会重试）。
+        await ensureManagedChrome(false, cfg);
+        await connectManagedCdp(cfg);
+        // 切换会重启浏览器、页面回到空白 → 重新打开同一 URL（此时 send 会因
+        // 运行时已是可见窗口而自动前台化，标签被激活，用户能看到二维码）。
+        navigated = (await send("page.navigate", rest, signal, cfg)) as typeof navigated;
+        autoShown = true;
+      } catch {
+        // 弹窗失败（如上次运行遗留的托管窗口占用句柄）：不影响本次结果，
+        // 下面的 LOGIN_HINT 会引导模型调 browser window，那里有明确报错。
+      }
+    }
+    const payload = JSON.stringify(navigated);
+    const text = autoShown
+      ? `${payload}\n\n⚠️ 已**自动弹出托管浏览器窗口**（橙色「Pi 自动化」），因为检测到这是需要人工介入的登录页（验证码/扫码/短信）。` +
+        `请告知用户在该窗口完成登录；用户确认登录完成后，调 ` +
+        `browser({action:"window", windowAction:"hide"}) 切回后台，再 browser({action:"navigate"}) 继续干活。`
+      : withLoginHint(
+          payload,
+          { url: navigated?.tab?.url, title: navigated?.tab?.title },
+          !effectiveHeadless(cfg),
+        );
+    return { content: [{ type: "text", text }], details: { result: navigated } };
+  };
+
+  const doWindow = async (
+    windowAction: string | undefined,
+    rest: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    cfg: BrowserConfig,
+  ): Promise<AgentToolResult<unknown>> => {
+    const cdp = getManagedCdp(cfg);
+    if (!windowAction || windowAction === "status") {
+      const info = {
+        managed: cfg.managed,
+        managedChrome: managedChromeInfo(),
+        transport: { mode: "cdp", url: cdp.url, connected: cdp.connected },
+      };
+      return { content: [{ type: "text", text: JSON.stringify(info, null, 2) }], details: info };
+    }
+    assertBrowserAuthorized(unattended, cfg);
+    const headless = windowAction === "hide";
+    // 切换可见性必然重启 Chrome → 旧 CDP 连接失效，重启后重连（connectManagedCdp 会重试）。
+    await ensureManagedChrome(headless, cfg);
+    await connectManagedCdp(cfg);
+    let navigated: unknown = null;
+    // 切换模式会重启浏览器 → 页面丢失。show 未显式给 url 时自动恢复「最近访问的页面」，
+    // 否则用户看到的只是一张空白页（体验上就变成了"弹出个新标签页"）。
+    const targetUrl =
+      typeof rest.url === "string" ? rest.url : windowAction === "show" ? lastVisitedUrl() : undefined;
+    if (targetUrl) {
+      assertUrlAllowed(targetUrl, cfg);
+      navigated = await cdp
+        // foreground:true —— show 的目的是让用户看见（扫码/登录），必须激活标签。
+        .send("page.navigate", { url: targetUrl, foreground: true, background: false })
+        .catch((error) => ({ error: String((error as Error).message) }));
+      // 这条路径直连 CDP（不走 send()），故自行补一条审计：window show 触发的导航
+      // 也是一次真实的页面跳转，不该在审计里缺席。
+      const navError = (navigated as { error?: string } | null)?.error;
+      appendBrowserAudit({
+        unattended,
+        action: "page.navigate",
+        ok: !navError,
+        url: targetUrl,
+        ...(navError ? { error: String(navError) } : {}),
+        detail: { via: "window " + windowAction },
+      });
+    }
+    const info = {
+      action: windowAction,
+      headless,
+      managedChrome: managedChromeInfo(),
+      transport: { mode: "cdp", url: cdp.url, connected: cdp.connected },
+      navigated,
+      note: headless
+        ? "已切回无头后台（完全不可见）。"
+        : `已打开可见窗口${targetUrl ? `并打开页面：${targetUrl}` : "（无历史页面可恢复，请再 browser({action:\"navigate\"})）"}，` +
+          "请让用户完成登录；完成后调 browser({action:\"window\", windowAction:\"hide\"}) 切回后台。",
+    };
+    return { content: [{ type: "text", text: JSON.stringify(info, null, 2) }], details: info };
+  };
+
+  // ---- 单一工具注册 ----
+  return defineTool({
+      name: "browser",
+      label: "浏览器控制",
+      // 试点：deferred = 注册但不声明给模型（不进 tools 数组），tool_search 命中才装载。
+      exposure: deferred ? "deferred" : "direct",
+      description:
+        "Control the browser to operate business systems (single entry point; the action field selects the operation). " +
+        "Observe: snapshot (structure + element uid; add delta:true for a diff against the last snapshot; mode:\"text\" also returns the whole page text — the safe way to read tables/lists instead of evaluate) / screenshot (image) / tabs (tab list) / status (connection diagnostics). " +
+        "Interact: navigate (open URL) / click / type (append) / fill (clear then write; accepts a fields array for batch) / press_key / hover / scroll. " +
+        "click/type/fill/press_key/navigate return post-action signals: navigated (URL changed) / newRequests (new requests fired) / effective (whether the action really took effect); " +
+        "fill/type also return valueChanged (whether the control's value/checked/selectedIndex actually changed), and batch fill returns fieldsChanged. " +
+        "effective=false means the action produced no visible effect — do not blindly retry. Add waitFor:{url|selector,timeout} to wait for an outcome before returning. " +
+        "Advanced: evaluate (run JS) / network (list the page's recent requests with headers) / drag / upload (upload a file) / get_cookie (export cookies for a given site, including HttpOnly). " +
+        "Window: window show pops a visible window so the user can complete a CAPTCHA/QR login themselves; window hide returns to the background afterwards. " +
+        "The browser is launched by this app itself (separate profile, hidden by default, login state persists across sessions) — **no browser extension is required**.",
+      promptSnippet:
+        "Control the browser to operate the business system via one tool: snapshot/screenshot to see, navigate/click/type/fill to act, window to show/hide for login, status to diagnose. Pick the action, not a separate tool name.",
+      promptGuidelines: [
+        'Before operating a business system, first call browser({action:"snapshot"}) to observe the page and get element uids, or browser({action:"tabs"}) to find the target tab id; always locate elements with uid / targetId afterwards.',
+        'When the user gives you a URL to work on, first call browser({action:"navigate", url}) to open it, then snapshot to see the content.',
+        'Click/type with uid from the latest snapshot; after any structure change (navigation/dialog/submit) old uids go stale — snapshot again for fresh ones, do not blindly retry.',
+        'fill/type report valueChanged: true means the value really was written, so the action succeeded even if other effective fields are false — do not retry.',
+        'On the error "N non-blank tabs exist": first call browser({action:"tabs"}) to see the list, then pass targetId in the action to pick the target tab; do not assume it lands on the tab you want.',
+        'browser({action:"type"}) **appends** input; when a field already has a value, use browser({action:"fill"}) instead (clear then write); fill\'s submit:true should only be used when you really want to submit the form, to avoid accidentally submitting business documents.',
+        'Observation priority: default to snapshot to understand the page and verify an action\'s effect; reserve screenshot for things only an image can convey — pictures/charts/layout, or a login QR code — and **do not screenshot a page that has not changed** (every image stays in the context permanently).',
+        'For an element you cannot click, first browser({action:"press_key", key:"Tab"}) to move focus then Enter to trigger it — this often bypasses overlay layers.',
+        'For menus that only appear on hover: first browser({action:"hover"}) then snapshot to get the new uids.',
+        'If snapshot + click can do it, do not detour through browser({action:"evaluate"}) to run JS (that action is denied by the guard by default).',
+        'For API automation (HTTP calls that need the login state), use browser({action:"get_cookie", url:"<business site URL>"}) to get the full Cookie string (including HttpOnly); only the specified site is exported per call, bound by the allowlist. The return includes valid=yes/no/unknown session probing: valid=no (401/403 or redirect to login) means the login state has expired — **do not blindly retry**; immediately browser({action:"window", windowAction:"show"}) to pop the window and ask the user to log in again via QR/captcha, then hide to switch back; when valid=unknown, do the real work first and take the API\'s 401 as the source of truth. A full Cookie is equivalent to account session credentials: use it only for automation within the authorized scope, and never leak it to third parties or write it to public files.',
+        'When you hit a login page: the system only auto-pops the window for **captcha/QR/SMS login**; a pure username/password login page will not auto-pop, leaving you to snapshot → fill → submit yourself. Three cases: ① the account and password from the user are already in the conversation history → first snapshot to locate the form fields (the password box showing value=[masked] is **normal secure masking**, not an empty box or an anomaly; after filling the system keeps masking it and will not echo the password, **and do not repeat the password in the conversation**), then fill with browser({action:"fill", uid:<password box uid>, text:<password>}); after submitting, snapshot again to see whether login succeeded (URL changed / login box gone / business page elements appeared). ② If a captcha/QR/SMS/password-error prompt appears → immediately browser({action:"window", windowAction:"show"}) to pop the window and let the user take over. ③ If you do not yet have credentials → prompt the user for account/password, then go to ①. Do not call window again when the auto-pop notice appears; after the user finishes logging in, browser({action:"window", windowAction:"hide"}) to switch back to the background.',
+        'Three high-risk actions are denied by the guard by default: upload (upload a local file) / evaluate (run arbitrary JS) / press_key with ctrl·meta·alt combos. When denied, the error message explains why and points to which item to enable in the guard section of browser-config.json — **leave that decision to the user; do not find your own way around it** (e.g. using evaluate instead of upload).',
+        'If a token is NOT in cookie/localStorage (memory-only, sent as a request header such as "token:"), use browser({action:"network", header:"token"}) to read it from the page\'s own recent requests. Trigger one page request first if nothing is captured (e.g. click a refresh control). Never reload/navigate that page to fetch it — a memory-only token dies on refresh. network returns full URLs, method, status, and a top-level "tokens" array with the raw header value; static/telemetry noise is filtered out by default. Narrow it with urlRegex / urlIncludes / method / resourceType ("xhr,fetch") / limit (1-100); status 401/403 means the token expired. It is read-only and needs no guard switch.',
+        'When other browser calls error or misbehave, first browser({action:"status"}) to check the connection and config.',
+      ],
+      parameters: Type.Object(
+        {
+          // 核心操作选择
+          action: Type.Union(
+            [
+              Type.Literal("status"),
+              Type.Literal("tabs"),
+              Type.Literal("snapshot"),
+              Type.Literal("screenshot"),
+              Type.Literal("navigate"),
+              Type.Literal("get_cookie"),
+              Type.Literal("click"),
+              Type.Literal("type"),
+              Type.Literal("fill"),
+              Type.Literal("press_key"),
+              Type.Literal("hover"),
+              Type.Literal("scroll"),
+              Type.Literal("evaluate"),
+              Type.Literal("network"),
+              Type.Literal("drag"),
+              Type.Literal("upload"),
+              Type.Literal("window"),
+            ],
+            { description: "Operation type." },
+          ),
+          // 窗口
+          windowAction: Type.Optional(
+            Type.Union([Type.Literal("show"), Type.Literal("hide"), Type.Literal("status")], {
+              description: "Only for action=window: show=visible window (for login), hide=switch back to headless, status=view state.",
+            }),
+          ),
+          // 导航 / 目标选择
+          url: Type.Optional(Type.String({ description: "Target URL for action=navigate / window(show), or the business site URL to export for action=get_cookie (bound by the allowlist)." })),
+          targetId: Type.Optional(Type.String({ description: "Target tab id (from tabs / snapshot)." })),
+          // 元素定位
+          uid: Type.Optional(Type.String({ description: "Element uid (from snapshot). Used by click/type/fill/hover/drag." })),
+          selector: Type.Optional(Type.String({ description: "CSS selector (when there is no uid)." })),
+          // 文本输入
+          text: Type.Optional(Type.String({ maxLength: 4000, description: "Input text for type / fill." })),
+          fields: Type.Optional(
+            Type.Array(
+              Type.Object({
+                uid: Type.Optional(Type.String()),
+                selector: Type.Optional(Type.String()),
+                text: Type.String(),
+              }),
+              {
+                description:
+                  "Only for action=fill: batch-fill multiple fields to write the whole form in one call (e.g. login). Each item is {uid|selector, text}; with submit:true it also submits.",
+              },
+            ),
+          ),
+          perCharacter: Type.Optional(Type.Boolean({ description: "Type character by character (slower but closer to a human)." })),
+          pressEnter: Type.Optional(Type.Boolean({ description: "Press Enter after type." })),
+          submit: Type.Optional(Type.Boolean({ description: "Submit the enclosing form after fill." })),
+          includeSnapshot: Type.Optional(Type.Boolean({ description: "Attach a fresh snapshot after click." })),
+          waitFor: Type.Optional(
+            Type.Object(
+              {
+                url: Type.Optional(Type.String({ description: "URL regex; waiting ends as soon as it matches." })),
+                selector: Type.Optional(Type.String({ description: "CSS selector; waiting ends as soon as it appears." })),
+                timeout: Type.Optional(Type.Number({ description: "Max wait in milliseconds (default 5000)." })),
+              },
+              {
+                description:
+                  'Optional: after the action, wait until the condition holds before returning (applies to click/type/fill/press_key/navigate), collapsing "act → wait for result" into one call. e.g. {url:"/home"}.',
+              },
+            ),
+          ),
+          // 按键
+          key: Type.Optional(Type.String({ description: "Key name for press_key, e.g. Enter/Tab/Escape/ArrowDown/a." })),
+          ctrlKey: Type.Optional(Type.Boolean()),
+          altKey: Type.Optional(Type.Boolean()),
+          shiftKey: Type.Optional(Type.Boolean()),
+          metaKey: Type.Optional(Type.Boolean()),
+          // 滚动
+          deltaX: Type.Optional(Type.Number()),
+          deltaY: Type.Optional(Type.Number()),
+          // 快照选项
+          mode: Type.Optional(
+            Type.Union(
+              [
+                Type.Literal("auto"),
+                Type.Literal("interactive"),
+                Type.Literal("forms"),
+                Type.Literal("text"),
+              ],
+              {
+                description:
+                  'Snapshot mode. "text" additionally returns the whole page body text (## 页面全文), which is the safe way to read tables/lists/long content instead of evaluate. Default auto.',
+              },
+            ),
+          ),
+          maxElements: Type.Optional(Type.Number({ minimum: 1, maximum: 400 })),
+          containingText: Type.Optional(Type.String({ description: "Return only elements whose label text contains this string." })),
+          roleFilter: Type.Optional(Type.String({ description: "Return only elements with this role/tag name, e.g. button." })),
+          delta: Type.Optional(
+            Type.Boolean({
+              description:
+                "Only for action=snapshot: return a structured diff against the last snapshot (element added/removed/changed / form value changed / text changed / focus / navigation); " +
+                "when the page did not substantively change, output a condensed form (omit the element list to save context). Suited to polling scenarios like \"act once and see if anything reacts\". Default false.",
+            }),
+          ),
+          excludeOccluded: Type.Optional(
+            Type.Boolean({
+              description:
+                "Only for action=snapshot: omit nodes whose center is covered by an overlay (occluded-by-*), reporting only an occludedSkipped count in the result. " +
+                "Use it to filter out hidden forms/duplicate controls masked by an overlay. Default false (keep them and mark [occluded-by-…]).",
+            }),
+          ),
+          // 截图选项
+          format: Type.Optional(Type.Union([Type.Literal("png"), Type.Literal("jpeg")])),
+          quality: Type.Optional(Type.Number({ minimum: 0, maximum: 100, description: "JPEG quality 0-100." })),
+          force: Type.Optional(
+            Type.Boolean({
+              description:
+                "Only for action=screenshot: force-return the image even if it is byte-identical to the previous screenshot of the same page. By default an identical screenshot is skipped (text only) to save context. Default false.",
+            }),
+          ),
+          // 求值
+          expression: Type.Optional(Type.String({ maxLength: 4000, description: "JS expression for evaluate." })),
+          // 网络请求抓取（取内存态 token 等）
+          urlIncludes: Type.Optional(
+            Type.String({ description: "Only for action=network: return only requests whose URL contains this substring." }),
+          ),
+          urlRegex: Type.Optional(
+            Type.String({ description: "Only for action=network: return only requests whose URL matches this regular expression (case-insensitive)." }),
+          ),
+          resourceType: Type.Optional(
+            Type.String({ description: 'Only for action=network: comma-separated resource types to keep, e.g. "xhr,fetch".' }),
+          ),
+          includeStatic: Type.Optional(
+            Type.Boolean({
+              description:
+                "Only for action=network: include noisy resource types (image/font/stylesheet/script/media/other). Default false.",
+            }),
+          ),
+          tokenHeader: Type.Optional(
+            Type.String({
+              description: 'Only for action=network: header name to extract as the token (default "token"; use "authorization" for Bearer).',
+            }),
+          ),
+          header: Type.Optional(
+            Type.String({
+              description: 'Only for action=network: return only requests carrying this header (e.g. "token", "authorization").',
+            }),
+          ),
+          limit: Type.Optional(
+            Type.Number({ minimum: 1, maximum: 100, description: "Only for action=network: how many recent requests to return (default 20)." }),
+          ),
+          includeHeaders: Type.Optional(
+            Type.Boolean({ description: "Only for action=network: include request headers (default true)." }),
+          ),
+          // get_cookie 会话探活
+          probe: Type.Optional(
+            Type.Boolean({
+              description:
+                "Only for action=get_cookie: whether to make a side-effect-free GET probe to the site to judge whether the session has expired (default true). Returns valid=yes/no/unknown.",
+            }),
+          ),
+          // 拖拽
+          fromUid: Type.Optional(Type.String()),
+          toUid: Type.Optional(Type.String()),
+          fromX: Type.Optional(Type.Number()),
+          fromY: Type.Optional(Type.Number()),
+          toX: Type.Optional(Type.Number()),
+          toY: Type.Optional(Type.Number()),
+          steps: Type.Optional(Type.Number({ minimum: 4, maximum: 60 })),
+          // 上传
+          paths: Type.Optional(Type.Array(Type.String(), { description: "Array of absolute local paths for upload." })),
+          // 后台策略
+          background: Type.Optional(Type.Boolean()),
+          foreground: Type.Optional(Type.Boolean()),
+        },
+        { additionalProperties: true },
+      ),
+  execute: (_id, params, signal): Promise<AgentToolResult<unknown>> =>
+    withBrowserExecLock(signal, async (): Promise<AgentToolResult<unknown>> => {
+        const { action, windowAction, ...rest } = params as Record<string, unknown> & {
+          action: string;
+          windowAction?: string;
+        };
+        const cfg: BrowserConfig = readBrowserConfigSync();
+
+        switch (action) {
+          case "status":
+            return doStatus(cfg);
+          case "tabs":
+            return asText(await send("tab.list", rest, signal, cfg));
+          case "snapshot":
+            return doSnapshot(rest, signal, cfg);
+          case "screenshot":
+            return doScreenshot(rest, signal, cfg);
+          case "navigate":
+            return doNavigate(rest, signal, cfg);
+          case "get_cookie": {
+            const url = typeof rest.url === "string" ? rest.url : undefined;
+            if (!url) throw new Error("get_cookie 需要 url 参数（要导出的业务站点 URL，受白名单约束）。");
+            return asText(await send("tab.get_cookie", { url, probe: rest.probe === false ? false : true }, signal, cfg));
+          }
+          case "click":
+            return doClick(rest, signal, cfg);
+          case "type":
+            return asText(await send("page.type", rest, signal, cfg));
+          case "fill":
+            return asText(await send("page.fill", rest, signal, cfg));
+          case "press_key": {
+            const payload = {
+              key: rest.key,
+              modifiers: {
+                ctrlKey: rest.ctrlKey,
+                altKey: rest.altKey,
+                shiftKey: rest.shiftKey,
+                metaKey: rest.metaKey,
+              },
+              targetId: rest.targetId,
+            };
+            return asText(await send("page.key", payload, signal, cfg));
+          }
+          case "hover":
+            return asText(await send("page.hover", rest, signal, cfg));
+          case "scroll":
+            return asText(await send("page.scroll", rest, signal, cfg));
+          case "evaluate":
+            return asText(await send("page.evaluate", rest, signal, cfg));
+          case "network":
+            return asText(await send("page.network", rest, signal, cfg));
+          case "drag":
+            return asText(await send("page.drag", rest, signal, cfg));
+          case "upload":
+            return asText(await send("page.upload", rest, signal, cfg));
+          case "window":
+            return doWindow(windowAction, rest, signal, cfg);
+          default:
+            throw new Error(
+              `未知 action: ${action}。可选：status / tabs / snapshot / screenshot / navigate / click / type / ` +
+                "fill / press_key / hover / scroll / evaluate / network / drag / upload / window。",
+            );
+        }
+      }),
+  });
+}
+
+/** 子代理桥接入口：总开关开启时返回 browser 裸定义（runner 按角色白名单过滤）。 */
+export function browserToolDefs(options: BrowserToolDefOptions = {}): ToolDefinition[] {
+  if (!readBrowserConfigSync().enabled) return [];
+  return [buildBrowserToolDef(options)];
 }
 
 /** IM 会话：常驻 direct（IM 无 tool_search 交互语境，保持原行为）。 */

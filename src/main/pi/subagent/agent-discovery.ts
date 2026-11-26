@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -75,9 +76,9 @@ const BUILTIN_AGENTS: SubagentDef[] = [
   },
   {
     name: "worker",
-    description: "精确实现：按明确要求做最小化代码改动并简要汇报（全量工具）",
+    description: "精确实现：按明确要求做最小化代码改动并简要汇报（全量内置工具，无联网/浏览器）",
     aliases: ["implementer"],
-    tools: null,
+    tools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
     excludeTools: [],
     async: false,
     scope: "builtin",
@@ -86,10 +87,111 @@ const BUILTIN_AGENTS: SubagentDef[] = [
       "你是精确实现者。只做任务明确要求的改动：最小化、聚焦、遵循项目现有惯例（有 AGENTS.md 先读）。\n" +
       "完成后简要总结改了什么、为什么。不要扩大范围，不要顺手重构。",
   },
+  {
+    name: "tester",
+    description: "全面测试：跑测试套件、接口核验、真实浏览器 UI 实测与数据佐证，产出带复现步骤的缺陷报告（不改代码）",
+    aliases: ["qa", "测试"],
+    tools: ["read", "bash", "grep", "find", "ls", "browser"],
+    excludeTools: [],
+    async: false,
+    scope: "builtin",
+    sourcePath: "<builtin>",
+    body:
+      "你是全面测试工程师（QA），负责验收真实系统行为，绝不修改任何文件（只跑测试、只报告；不新增测试用例文件，缺覆盖时在报告里指出）。\n" +
+      "测试是分层的，按任务性质选择工作面，浏览器只是其中一层：\n" +
+      "1. 先读需求/验收标准与相关代码（grep/read 定位），列出分层测试计划：代码级 / 接口级 / UI 级 / 数据与日志，每层覆盖正常流 + 边界 + 异常路径。\n" +
+      "2. 代码级：用 bash 跑项目现有测试套件（npm test / pytest / go test 等），汇总通过率与失败用例的报错原文；没有现成用例的模块如实报告覆盖缺口。\n" +
+      "3. 接口级：用 bash（curl）直接请求 API，核对状态码、响应体结构与字段契约；需要登录态时用 browser({action:\"get_cookie\"}) 取 Cookie（受白名单约束）。\n" +
+      "4. UI 级：用 browser 实测页面——先 snapshot 观察再 navigate/click/fill 操作，操作后重新 snapshot 核验，不要凭记忆断言。\n" +
+      "5. 登录处理：遇到需要登录的页面，务必用 browser({action:\"window\", windowAction:\"show\"}) 把浏览器窗口弹出到桌面，验证码/扫码/短信登录由用户在该窗口手动完成；成功后用 browser({action:\"window\", windowAction:\"hide\"}) 收回后台。切换可见性会重启浏览器、页面丢失，show 后需重新 navigate；撞到验证码/扫码页时系统也可能自动弹窗。不要死磕登录，登录态保留在 profile 里供后续复用。\n" +
+      "6. 数据与日志佐证：用 bash 查数据库（如有 CLI）和应用日志，把缺陷从「现象」钉到「数据/错误堆栈」。\n" +
+      "7. 发现缺陷：给出精确复现步骤（写清是哪一层的哪个动作）、实际 vs 期望、涉及的路由/接口/代码位置（file:line，用 grep/read 定位）；UI 问题必要时截图。\n" +
+      "报告结构：测试结论（通过/有缺陷/阻塞）→ 分层已验证项清单（逐条带证据）→ 缺陷清单（按严重程度排序，每条含复现步骤）→ 覆盖缺口与遗留风险。",
+  },
 ];
 
-function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: string } {
-  const m = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
+/** 播种 sentinel：记录内置角色模板版本 + 每个文件的内容哈希。
+ *  改 BUILTIN_AGENTS 模板时必须递增 BUILTIN_AGENTS_VERSION，升级逻辑见
+ *  ensureBuiltinAgentsMaterialized。 */
+const BUILTIN_AGENTS_SENTINEL = ".builtin-agents-written";
+/** 改 BUILTIN_AGENTS 的任何模板内容时递增此版本号，已播种机器会自动升级
+ *  （只覆盖用户未改过的文件，见 ensureBuiltinAgentsMaterialized）。 */
+const BUILTIN_AGENTS_VERSION = 3;
+
+interface StoredSeedState {
+  version: number;
+  /** name → 上次播种写入内容的 sha1（用于区分「我们写的」和「用户改过的」）。 */
+  hashes: Record<string, string>;
+}
+
+function fileHash(s: string): string {
+  return createHash("sha1").update(s).digest("hex");
+}
+
+/** 把内置角色序列化成带 frontmatter 的角色文件（与 parseFrontmatter 的解析规则互逆：
+ *  逗号单行 list、无 model/thinking → 运行时继承父会话）。 */
+function serializeAgentDef(def: SubagentDef): string {
+  const lines = ["---", `name: ${def.name}`, `description: ${def.description}`];
+  if (def.aliases.length > 0) lines.push(`aliases: ${def.aliases.join(", ")}`);
+  if (def.tools) lines.push(`tools: ${def.tools.join(", ")}`);
+  lines.push("---", "", def.body, "");
+  return lines.join("\n");
+}
+
+/**
+ * 首次安装播种 + 版本升级：把内置角色写成 `~/.pi/agent/agents/<name>.md`，
+ * 让用户在文件里看见并编辑它们（此前只活在代码里，用户不可见）。
+ *
+ * 规则：
+ *  - sentinel 记录 {version, hashes}；version 相同 → 直接返回（幂等）；
+ *  - version 升级（模板改了）→ 只覆盖「哈希与上次播种一致」的文件——
+ *    即我们写的且用户没动过的；用户改过的文件永远尊重不覆盖；
+ *  - 目标文件不存在 → 补写（含旧 sentinel 损坏 / 用户删文件后的升级重建）；
+ *  - 播种失败静默放弃：BUILTIN_AGENTS 兜底仍在（scope:builtin，角色照常可用，
+ *    优先级低于 user/project，播种成功的文件会以 user scope 覆盖它们）。
+ *
+ * 在 subagent 扩展工厂挂载时调用——每次会话挂载都会进来，由 sentinel
+ * 版本比对保证幂等，稳态开销是一次 readFileSync。
+ */
+export function ensureBuiltinAgentsMaterialized(): void {
+  try {
+    const dir = path.join(getAgentDir(), "agents");
+    const sentinel = path.join(dir, BUILTIN_AGENTS_SENTINEL);
+    let prev: StoredSeedState | null = null;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(sentinel, "utf-8")) as StoredSeedState;
+      if (parsed && typeof parsed.version === "number" && parsed.hashes) prev = parsed;
+    } catch {
+      // 无 sentinel / 旧版纯时间戳格式 → 视为无状态（存在但内容未知的文件不覆盖）
+    }
+    if (prev && prev.version === BUILTIN_AGENTS_VERSION) return;
+
+    fs.mkdirSync(dir, { recursive: true });
+    const hashes: Record<string, string> = {};
+    for (const def of BUILTIN_AGENTS) {
+      const file = path.join(dir, `${def.name}.md`);
+      const next = serializeAgentDef(def);
+      let needWrite = !fs.existsSync(file);
+      if (!needWrite) {
+        const current = fs.readFileSync(file, "utf-8");
+        const prevHash = prev?.hashes[def.name];
+        // 哈希与上次播种一致 = 我们写的且用户没动过 → 升级覆盖
+        needWrite = prevHash !== undefined && fileHash(current) === prevHash && current !== next;
+      }
+      if (needWrite) fs.writeFileSync(file, next, "utf-8");
+      hashes[def.name] = fileHash(next);
+    }
+    fs.writeFileSync(
+      sentinel,
+      JSON.stringify({ version: BUILTIN_AGENTS_VERSION, hashes } satisfies StoredSeedState, null, 2),
+      "utf-8",
+    );
+  } catch {
+    // 播种是尽力而为：磁盘/权限问题不应阻塞扩展加载。
+  }
+}
+
+function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: string } {  const m = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
   if (!m) return { data: {}, body: raw.trim() };
 
   const data: Record<string, unknown> = {};

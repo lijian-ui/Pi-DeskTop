@@ -7,14 +7,6 @@ import { useSessionStore } from "../store/session-store";
 import styles from "./TodoPanel.module.css";
 
 /**
- * 布局约束（Trae 式）：Todo 面板在场时调高窗口 minWidth，让窗口本身拒绝
- * 拖到「装不下所有区域」的宽度——侧栏 260 + 聊天区 600 + Todo 栏 320 = 1180。
- * 面板关闭/会话无清单时恢复基线 900。CSS 里各区域的 min-width 与此对齐。
- */
-const BASE_WINDOW_MIN_WIDTH = 900;
-const WINDOW_MIN_WIDTH_WITH_TODO = 1180;
-
-/**
  * Right-side Todo checklist panel (read-only projection of the model's todo
  * tool state). Rendered only while the focused session has a live checklist
  * AND the panel is open. Closing it hides the column entirely — reopening is
@@ -50,15 +42,7 @@ export default function TodoPanel() {
   );
   const pct = live.length === 0 ? 0 : Math.round((done.length / live.length) * 100);
 
-  // 面板在场（打开且有清单）→ 调高窗口最小宽；不在场 → 恢复基线。
-  const panelActive = open && live.length > 0;
-  useEffect(() => {
-    if (!panelActive) return;
-    void window.piDesk.setWindowMinWidth(WINDOW_MIN_WIDTH_WITH_TODO);
-    return () => {
-      void window.piDesk.setWindowMinWidth(BASE_WINDOW_MIN_WIDTH);
-    };
-  }, [panelActive]);
+  // 窗口最小宽由 ChatPanel 统一管理（Todo / 子代理任一在场抬到 1180）。
 
   // No live checklist on the focused session → nothing to show. Hidden while
   // the user closes the panel as well — reopening goes through the Todo
@@ -68,7 +52,7 @@ export default function TodoPanel() {
   const rows = showCompleted ? live : active;
 
   return (
-    <div className={styles.panel} data-todo-panel="">
+    <div className={styles.panel} data-rail-panel="todo">
       <div className={styles.header}>
         <span className={styles.headerIcon}>
           <ListChecks size={15} />

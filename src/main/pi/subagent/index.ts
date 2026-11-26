@@ -1,7 +1,7 @@
 import type { WebContents } from "electron";
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { runSubagent, SubagentParams, SubagentEvent } from "./runner";
-import { listAgents } from "./agent-discovery";
+import { listAgents, ensureBuiltinAgentsMaterialized } from "./agent-discovery";
 import { readSubagentConfigSync } from "./subagent-config";
 
 /**
@@ -24,6 +24,10 @@ export function createSubagentExtension(
   getWebContents: () => WebContents | null,
   getModelRuntime: () => unknown
 ): InlineExtension {
+  // 首次安装播种内置角色文件到 ~/.pi/agent/agents/（sentinel 幂等）。
+  // 放在总开关早退之前：开关关闭也要完成一次性播种，用户开启即见。
+  ensureBuiltinAgentsMaterialized();
+
   // 总开关（设置 → 可用工具 → 扩展工具）：关 → 不注册工具、不追加委托提示。
   if (!readSubagentConfigSync().enabled) return () => {};
   // Resolve the live webContents at SEND time, not at extension-creation time.

@@ -326,6 +326,15 @@ function RunCard({
   const steps = r.steps ?? [];
   const hasSteps = steps.length > 0;
   const el = elapsedOf(r, now);
+  // 指标 chips：Token 合计与费用只在 stats 存在时出现（done / 部分失败）。
+  const s = r.stats;
+  const tokens =
+    s && [s.input, s.output, s.cacheRead, s.cacheWrite].some((n) => typeof n === "number")
+      ? (s.input ?? 0) + (s.output ?? 0) + (s.cacheRead ?? 0) + (s.cacheWrite ?? 0)
+      : null;
+  const cost = typeof s?.cost === "number" ? s.cost : null;
+  // 上游依赖的角色名（DAG 边 → 依赖 chips）。
+  const depNames = (r.dependsOn ?? []).map((d) => byId.get(d)?.agent ?? d);
   const boxRef = useRef<HTMLDivElement | null>(null);
   // 贴底跟随：仅当用户本来贴着底（或刚展开）时，新 step 到达才滚到底部。
   const stickRef = useRef(true);
@@ -347,54 +356,84 @@ function RunCard({
       data-dim={dim ? "1" : undefined}
       title={r.task ?? r.agent}
     >
-      <div
-        className={styles.cardRow1}
-        onClick={() => hasSteps && onToggle()}
-        role={hasSteps ? "button" : undefined}
-        aria-expanded={hasSteps ? open : undefined}
-      >
-        <span
-          className={styles.avatar}
-          style={{ background: AVATAR_COLORS[stableHash(r.agent) % AVATAR_COLORS.length] }}
+      <span className={styles.rail} aria-hidden />
+      <div className={styles.cardBody}>
+        <div
+          className={styles.row1}
+          onClick={() => hasSteps && onToggle()}
+          role={hasSteps ? "button" : undefined}
+          aria-expanded={hasSteps ? open : undefined}
         >
-          {r.agent.slice(0, 1).toUpperCase()}
-        </span>
-        <span className={styles.name}>{r.agent}</span>
-        {r.model && (
-          <span className={styles.modelChip} title={r.model}>
-            {shortModel(r.model)}
+          <span
+            className={styles.avatar}
+            style={{ background: AVATAR_COLORS[stableHash(r.agent) % AVATAR_COLORS.length] }}
+          >
+            {r.agent.slice(0, 1).toUpperCase()}
           </span>
-        )}
-        <span className={styles.pill} data-s={r.status}>
-          {r.status === "running" && <span className={styles.pillDot} />}
-          {STATUS_LABEL[r.status]}
-        </span>
-        <span className={styles.cardRight}>
-          <span className={styles.stepsCount}>{steps.length} 步</span>
-          <span className={styles.elapsed}>{el === null ? "--:--" : fmtClock(el)}</span>
-          {hasSteps && (
-            <span className={styles.toggle}>
-              <ChevronRight size={11} />
+          <span className={styles.name}>{r.agent}</span>
+          {r.model && (
+            <span className={styles.modelChip} title={r.model}>
+              {shortModel(r.model)}
             </span>
           )}
-        </span>
-      </div>
-      <div className={styles.cardRow2}>
-        <StatusLine r={r} byId={byId} />
-      </div>
-      {hasSteps && (
-        <div className={styles.steps} ref={boxRef} onScroll={onScroll}>
-          <ol className={styles.stepList}>
-            {steps.map((s, i) => (
-              <StepRow
-                key={i}
-                step={s}
-                latest={i === steps.length - 1 && r.status === "running"}
-              />
-            ))}
-          </ol>
+          <span className={styles.pill} data-s={r.status}>
+            {r.status === "running" && <span className={styles.pillDot} />}
+            {STATUS_LABEL[r.status]}
+          </span>
+          <span className={styles.spacer} />
+          <span className={styles.metric}>
+            <b>{steps.length}</b> 步
+          </span>
+          <span className={styles.metric}>
+            <b>{el === null ? "--:--" : fmtClock(el)}</b>
+          </span>
         </div>
-      )}
+        {r.task && <div className={styles.task}>{r.task}</div>}
+        {/* 一句话状态：done 由指标 chips 承载、pending 由依赖区承载，其余外露 */}
+        {(r.status === "running" || r.status === "error" || r.status === "skipped") && (
+          <div className={styles.statusRow}>
+            <StatusLine r={r} byId={byId} />
+          </div>
+        )}
+        {(tokens !== null || cost !== null || depNames.length > 0 || r.status === "pending") && (
+          <div className={styles.metrics}>
+            {tokens !== null && (
+              <span className={styles.metric}>
+                <b>{fmtTokens(tokens)}</b> tok
+              </span>
+            )}
+            {cost !== null && (
+              <span className={styles.metric}>
+                <b>{fmtCost(cost)}</b>
+              </span>
+            )}
+            {depNames.length > 0 && (
+              <span className={styles.metricDep} title={`依赖：${depNames.join("、")}`}>
+                依赖 {depNames.join("、")}
+              </span>
+            )}
+            {r.status === "pending" && <StatusLine r={r} byId={byId} />}
+          </div>
+        )}
+        {hasSteps && (
+          <>
+            <button className={styles.expandBtn} onClick={() => onToggle()}>
+              {open ? "▴ 收起步骤" : `▸ 查看步骤（${steps.length}）`}
+            </button>
+            <div className={styles.steps} ref={boxRef} onScroll={onScroll}>
+              <ol className={styles.stepList}>
+                {steps.map((s, i) => (
+                  <StepRow
+                    key={i}
+                    step={s}
+                    latest={i === steps.length - 1 && r.status === "running"}
+                  />
+                ))}
+              </ol>
+            </div>
+          </>
+        )}
+      </div>
     </article>
   );
 }
@@ -512,6 +551,25 @@ export default function SubagentProgress() {
     });
   const togglePin = (id: string) => setPinned((p) => (p === id ? null : id));
 
+  // 所有 run 都到终态（done/error/skipped）→ 5 秒后自动收起面板。
+  // 缓冲让用户能看一眼最终汇总；期间派发新 run（visible 变化且含未终态）
+  // 则取消。手动 X 仍然随时可用，dismissed 墓碑语义不变。
+  // ⚠️ 必须在 `if (visible.length === 0) return null` 之前：hook 不能出现在
+  // 条件提前返回之后——空载首屏 30 个 hook、run 到达后 31 个，React 直接崩树
+  // （实测：一调用 subagent 工具就白屏）。
+  const allTerminal =
+    visible.length > 0 &&
+    visible.every((r) => r.status !== "running" && r.status !== "pending");
+  useEffect(() => {
+    if (!allTerminal) return;
+    const t = setTimeout(() => {
+      useSubagentStore
+        .getState()
+        .dismissRuns(visible.map((r) => r.runId));
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [allTerminal, visible]);
+
   if (visible.length === 0) return null;
 
   const activeList = visible.filter((r) => r.status !== "done");
@@ -535,7 +593,7 @@ export default function SubagentProgress() {
   };
 
   return (
-    <div className={styles.panel}>
+    <div className={styles.panel} data-rail-panel="subagent">
       <div className={styles.header}>
         <span className={styles.headerIcon}>
           <GitBranch size={13} />

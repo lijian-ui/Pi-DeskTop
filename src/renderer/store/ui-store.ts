@@ -185,7 +185,13 @@ export const useUIStore = create<UIState>((set, get) => ({
   toggleTerminal: () => set((state) => ({ terminalOpen: !state.terminalOpen })),
   setTerminalOpen: (open) => set({ terminalOpen: open }),
   setTerminalWidth: (w) => set({ terminalWidth: w }),
-  setTodoPanelOpen: (open) => set({ todoPanelOpen: open }),
+  // Todo 面板与产物预览面板物理上共用聊天右侧空间，同时打开会互相挤压——
+  // 互斥：打开一个自动关闭另一个（关闭自己不动对方）。
+  setTodoPanelOpen: (open) =>
+    set((state) => ({
+      todoPanelOpen: open,
+      previewFilePath: open ? null : state.previewFilePath,
+    })),
 
   openSearch: () => set({ searchOpen: true }),
   closeSearch: () =>
@@ -219,7 +225,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   openFileManager: (cwd) => set({ fileManagerCwd: cwd }),
   closeFileManager: () => set({ fileManagerCwd: null }),
-  openFilePreview: (path) => set({ previewFilePath: path }),
+  openFilePreview: (path) => set({ previewFilePath: path, todoPanelOpen: false }),
   closeFilePreview: () => set({ previewFilePath: null }),
   setPreviewWidth: (w) => set({ previewWidth: w }),
 }));
