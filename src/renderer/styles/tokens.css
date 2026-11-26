@@ -243,21 +243,16 @@
 .hljs-symbol { color: var(--code-number); }
 
 /* ════════════════════════════════════════════════════════════════
-   无障碍：用户开启「减弱动效」时，关闭所有装饰性动画 / 过渡
-   （微光扫光、spinner 旋转、chevron 位移等），仅保留静态呈现。
-   对齐 UI 铁律「反对动画」的底线——默认仍保留 DSH 式微光，
-   仅对明确要求减少运动的患者关闭。
+   减弱动效全局开关（已摘除）。
+   ════════════════════════════════════════════════════════════════
+   这里曾有一段 @media (prefers-reduced-motion: reduce) 全局杀动画/过渡
+   （animation-duration: 0.001ms !important）的无障碍开关。实测误伤：
+   Windows 服务器 / RDP 环境的系统默认就是「客户区动画关闭」，Electron
+   (Chromium) 会如实上报 reduce → 装饰性动效（subagent 运行点呼吸、DAG
+   呼吸、spinner 等）在桌面端全部失效，而同一份语义在 Pi-Work 浏览器端
+   正常 —— 表现为"移植后反而有了动效"。该状态是系统默认而非用户的显式
+   无障碍选择，故摘除；确有减弱动效诉求时再按组件级单独处理。
    ════════════════════════════════════════════════════════════════ */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-    scroll-behavior: auto !important;
-  }
-}
 
 /* Functions / titles / sections */
 .hljs-built_in,

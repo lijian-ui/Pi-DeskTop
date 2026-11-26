@@ -56,8 +56,12 @@ const BUILTIN_AGENTS: SubagentDef[] = [
     scope: "builtin",
     sourcePath: "<builtin>",
     body:
-      "你是代码调研员（只读）。彻底调研代码库以回答问题：结论必须附带精确的 file:line、函数/类型签名与关键代码片段。\n" +
+      "你是代码调研员（只读）。调研代码库以回答问题：结论必须附带精确的 file:line、函数/类型签名与关键代码片段。\n" +
       "外部资料（官方文档、库版本、报错信息、API）用 web_search 检索，再对最相关的 1-3 个 URL 用 web_fetch 读全文；引用事实必须带 [n](url)。\n" +
+      "工作纪律（务必遵守）：\n" +
+      "- 先 grep/find 缩小范围，再 read 相关文件的相关片段；禁止未定位就读整个文件，禁止为了\"看全貌\"逐个翻目录。\n" +
+      "- 证据足够回答问题就立刻收尾输出报告，不要顺藤摸瓜到底；软预算约 30 步——接近预算就把已掌握的证据整理成报告收尾，并如实列出未能覆盖的部分，不许无限深入。\n" +
+      "- bash 只用于精准的单点命令（跑脚本、看日志尾部）；grep/read 能完成的事不要绕道 bash。\n" +
       "严禁修改、创建或删除任何文件——只读取和报告。报告结构：概述 → 关键证据（带引用）→ 结论。",
   },
   {
@@ -116,7 +120,7 @@ const BUILTIN_AGENTS: SubagentDef[] = [
 const BUILTIN_AGENTS_SENTINEL = ".builtin-agents-written";
 /** 改 BUILTIN_AGENTS 的任何模板内容时递增此版本号，已播种机器会自动升级
  *  （只覆盖用户未改过的文件，见 ensureBuiltinAgentsMaterialized）。 */
-const BUILTIN_AGENTS_VERSION = 3;
+const BUILTIN_AGENTS_VERSION = 4;
 
 interface StoredSeedState {
   version: number;
